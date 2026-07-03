@@ -1,6 +1,24 @@
 # LumenDeck
 
-LumenDeck is a local-first, node-native generative image studio shell. It includes Recipe View, Graph View, Model Shelf, LoRA Rack, Gallery, and TurboForge performance planning.
+LumenDeck is a local-first, node-native generative image studio shell — a spiritual successor to
+Disco Diffusion. It includes Recipe View, Graph View, Model Shelf, LoRA Rack, Gallery, and TurboForge
+performance planning.
+
+**Two synchronized editors, one workflow object.** The **Recipe View** (beginner-friendly cards) and
+the **Graph View** (a real, editable SVG node graph — drag nodes, wire typed ports, click a wire to
+disconnect, keyboard-move/delete) operate on the same underlying workflow, so an edit in either shows
+up in the other immediately. Every capsule is edited through a shared, accessible **Inspector**.
+
+**Nine Capsules:** Prompt, Model, LoRA Rack, Control, Sampler, Canvas, Queue, Export, Manifest.
+
+**Graph Health** runs before every render and flags missing/uninstalled models, broken links,
+incompatible sockets, bad dimensions (non-multiple-of-8, too small/large), LoRA family conflicts, and
+likely VRAM over-budget. Render is blocked with a reason while any error is present.
+
+The design spec and implementation plan live in
+[`docs/superpowers/`](docs/superpowers/). Brand: Midnight `#071426`, Ion Cyan `#34D6F4`,
+Voltage Violet `#7C3AED`, Mango Fuse `#FF8A3D`, Signal Mint `#45E6A6`, Paper `#FBFCFE`,
+Ink `#101828`, Slate `#475467` — dark-only, WCAG-AA contrast, visible focus, reduced-motion aware.
 
 ## Run Locally
 
@@ -47,6 +65,26 @@ LumenDeck can connect directly to a local ComfyUI server.
 The ComfyUI path checks `/system_stats`, submits a workflow to `/prompt`, polls `/history/{prompt_id}`, and fetches the output via `/view`.
 
 If ComfyUI is offline, blocked by CORS, or rejects the sample workflow, LumenDeck shows a plain-English error. If `Fallback to mock` is enabled, the app renders with Mock instead and records the fallback in the manifest warning data.
+
+### Diffusers Bridge (FastAPI)
+
+A tiny local FastAPI backend that gives LumenDeck a real HTTP generation path plus a local model
+scanner, with **no GPU or heavy dependencies** required. Its default generator is a pure-standard-
+library procedural renderer that produces deterministic, reproducible PNGs from a seed — the reference
+implementation of the `BackendAdapter` contract.
+
+```bash
+cd bridge
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 8787
+```
+
+In LumenDeck's Backend panel choose **Diffusers bridge**, set the URL to `http://127.0.0.1:8787`, and
+**Test connection**. Point it at your models with the `LUMENDECK_MODEL_DIR` environment variable to
+replace the demo catalog with a real scan (file hashing + family inference). To wire in real diffusion,
+implement the documented `A1111Adapter` stub in `bridge/adapters.py`. Full details:
+[bridge/README.md](bridge/README.md).
 
 ### Workflow Templates
 
