@@ -36,6 +36,7 @@ function bridgePlugin(): PluginOption {
       child = spawn(python, ['server.py', '--port', String(BRIDGE_PORT)], {
         cwd: 'bridge',
         stdio: ['pipe', 'inherit', 'inherit'],
+        env: { ...process.env, LUMENDECK_PARENT_WATCH: '1' },
       });
       child.on('error', (err) =>
         console.warn(`[bridge] could not start (${err.message}). Install Python, or run "python bridge/server.py" manually.`),
@@ -51,9 +52,24 @@ function bridgePlugin(): PluginOption {
   };
 }
 
+const bridgeProxy = {
+  target: `http://127.0.0.1:${BRIDGE_PORT}`,
+  changeOrigin: true,
+};
+
 export default defineConfig({
   plugins: [react(), bridgePlugin()],
-  server: { port: Number(process.env.PORT) || 5178 },
+  server: {
+    port: Number(process.env.PORT) || 5178,
+    // Same-origin API: the browser calls /health etc. on the dev server, which
+    // forwards to the bridge. Avoids all cross-origin / private-network blocks.
+    proxy: {
+      '/health': bridgeProxy,
+      '/models': bridgeProxy,
+      '/generate': bridgeProxy,
+      '/diffusers': bridgeProxy,
+    },
+  },
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],

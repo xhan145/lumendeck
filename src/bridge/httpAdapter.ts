@@ -3,6 +3,23 @@ import type { BackendAdapter, RenderJob, RenderResult } from './adapter';
 
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8787';
 
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
+
+/**
+ * Resolve the base URL for bridge calls.
+ * - Web (dev server or bridge-served): same-origin ('') — the Vite proxy or the
+ *   bridge's own static server routes /health etc. to the bridge. No cross-origin.
+ * - Tauri desktop: the loopback address, since the UI is loaded from tauri://.
+ * - A custom, non-default URL is always honored (remote bridge).
+ */
+function resolveBase(url: string): string {
+  const trimmed = (url || '').trim().replace(/\/+$/, '');
+  if (trimmed && trimmed !== DEFAULT_BRIDGE_URL) return trimmed;
+  return isTauri() ? DEFAULT_BRIDGE_URL : '';
+}
+
 export interface BridgeModelStatus {
   modelId: string;
   dependenciesReady: boolean;
@@ -32,7 +49,7 @@ export class HttpAdapter implements BackendAdapter {
   }
 
   setBaseUrl(url: string): void {
-    this.base = url.trim().replace(/\/+$/, '') || DEFAULT_BRIDGE_URL;
+    this.base = resolveBase(url);
   }
 
   /** Which bridge renderer to request: 'procedural' | 'diffusers' | 'auto'. */

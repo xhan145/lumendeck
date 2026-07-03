@@ -47,6 +47,23 @@ npm test
 npm run build
 ```
 
+## Quickest start — real images (Windows)
+
+Double-click **`run.bat`**. It builds the app once, then starts the bridge which serves
+the UI *and* the render API on one origin at **http://127.0.0.1:8787** (opens automatically).
+Because everything is same-origin, the browser never hits a cross-origin/"failed to fetch"
+error. If Python has the diffusion deps, renders are real:
+
+```bash
+python -m pip install torch diffusers transformers accelerate
+```
+
+Without them the app still runs on the built-in procedural renderer, and the Backend panel
+shows a one-click way to enable real diffusion.
+
+**Developing?** `npm run dev` autostarts the bridge too (via a Vite plugin) and proxies the
+API same-origin, so real rendering works in dev without extra terminals.
+
 ## Desktop app (Windows MSI)
 
 LumenDeck ships as a native Windows desktop app via [Tauri](https://tauri.app): a small WebView2

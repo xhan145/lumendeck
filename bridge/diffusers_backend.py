@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import base64
 import importlib.metadata
+import importlib.util
 import io
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,22 +26,29 @@ def model_id() -> str:
 
 
 def _module_info(module_name: str, package_name: str | None = None) -> dict[str, Any]:
+    # Detect availability WITHOUT importing the module (torch import is ~10s), so
+    # /health stays fast. The heavy import happens only on an actual render.
     package_name = package_name or module_name
     try:
-        __import__(module_name)
-        try:
-            version = importlib.metadata.version(package_name)
-        except importlib.metadata.PackageNotFoundError:
-            version = None
-        return {"installed": True, "version": version}
+        spec = importlib.util.find_spec(module_name)
     except Exception as exc:
         return {"installed": False, "error": str(exc)}
+    if spec is None:
+        return {"installed": False}
+    try:
+        version = importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        version = None
+    return {"installed": True, "version": version}
 
 
 def _torch_device() -> tuple[str, bool]:
+    # Only report the device if torch is already loaded (after a render); never
+    # import it here, to keep status checks instant.
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return "unknown", False
     try:
-        import torch
-
         cuda = bool(torch.cuda.is_available())
         return ("cuda" if cuda else "cpu"), cuda
     except Exception:

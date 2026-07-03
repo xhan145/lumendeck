@@ -12,6 +12,7 @@ Exposes the same contract as the old FastAPI bridge:
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import sys
 import threading
@@ -19,6 +20,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
 from scanner import get_shelf
+
+# Built web app (from `npm run build`). When present, the bridge serves the whole
+# UI on the same origin as the API, so the browser never makes a cross-origin call.
+DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
+API_PREFIXES = ("/health", "/models", "/generate", "/diffusers")
 
 try:
     import diffusers_backend
@@ -147,6 +153,9 @@ def build_response(method: str, path: str, body: bytes):
             try:
                 return 200, headers, json.dumps(diffusers_backend.generate(job)).encode()
             except Exception as exc:  # fall back to procedural on any inference error
+                import traceback
+                print(f"[diffusers] render failed, falling back to procedural: {exc}", flush=True)
+                traceback.print_exc()
                 if mode == "diffusers":
                     return 503, headers, json.dumps({"error": f"diffusers failed: {exc}"}).encode()
         if mode == "diffusers" and not _diffusers_available():
@@ -170,7 +179,33 @@ class Handler(BaseHTTPRequestHandler):
         self._send(*build_response("OPTIONS", self.path, b""))
 
     def do_GET(self):  # noqa: N802
-        self._send(*build_response("GET", self.path, b""))
+        status, headers, body = build_response("GET", self.path, b"")
+        if status == 404 and self._serve_static():
+            return
+        self._send(status, headers, body)
+
+    def _serve_static(self) -> bool:
+        """Serve the built SPA from dist/. Returns True if it handled the request."""
+        if not os.path.isdir(DIST_DIR):
+            return False
+        path = self.path.split("?", 1)[0]
+        if any(path.startswith(p) for p in API_PREFIXES):
+            return False
+        rel = path.lstrip("/") or "index.html"
+        target = os.path.abspath(os.path.join(DIST_DIR, rel))
+        # Block path traversal; fall back to index.html for SPA client routes.
+        if not target.startswith(DIST_DIR) or not os.path.isfile(target):
+            target = os.path.join(DIST_DIR, "index.html")
+            if not os.path.isfile(target):
+                return False
+        try:
+            with open(target, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            return False
+        ctype = mimetypes.guess_type(target)[0] or "application/octet-stream"
+        self._send(200, {"Content-Type": ctype}, data)
+        return True
 
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", 0))
@@ -213,9 +248,11 @@ def main(argv=None) -> None:
     port = int(os.environ.get("PORT", "8787"))
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
-    # Only arm the stdin watchdog when stdin is a pipe (i.e. launched by Tauri),
-    # never for an interactive terminal.
-    if not sys.stdin.isatty():
+    # Opt-in stdin watchdog: only the managed launchers (Tauri sidecar, Vite dev
+    # plugin) set LUMENDECK_PARENT_WATCH and keep stdin open, so the bridge exits
+    # with them. Standalone runs (run.bat, manual) never enable it and stay up
+    # until the window/terminal is closed.
+    if os.environ.get("LUMENDECK_PARENT_WATCH") == "1" and not sys.stdin.isatty():
         threading.Thread(target=_watch_parent_via_stdin, daemon=True).start()
     run(port)
 

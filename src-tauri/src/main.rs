@@ -11,7 +11,11 @@ fn main() {
             // Auto-start the bundled render bridge sidecar on port 8787.
             let handle = app.handle().clone();
             if let Ok(cmd) = handle.shell().sidecar("lumendeck-bridge") {
-                if let Ok((mut rx, child)) = cmd.args(["--port", "8787"]).spawn() {
+                if let Ok((mut rx, child)) = cmd
+                    .args(["--port", "8787"])
+                    .env("LUMENDECK_PARENT_WATCH", "1")
+                    .spawn()
+                {
                     // Keep the child (and its stdin pipe) alive for the app's whole
                     // lifetime. If we dropped it, the stdin pipe would close and the
                     // sidecar's watchdog would exit immediately. On app exit/crash the
