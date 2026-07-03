@@ -20,6 +20,8 @@ import {
   updateNodeParam,
 } from '../core/workflow';
 import { DEMO_SHELF } from '../data/demoShelf';
+import { TEMPLATES } from '../data/templates';
+import type { LumenFile } from '../core/lumenFile';
 import { TURBO_BACKENDS } from '../turboForge/backends';
 import { loadBenchmarks, measuredSpeedupPercent, saveBenchmark } from '../turboForge/benchmarks';
 import { turboCompileCache } from '../turboForge/cache';
@@ -103,6 +105,8 @@ interface StudioState {
   enqueueRender(): Promise<void>;
   removeGalleryItem(id: string): void;
   restoreSnapshot(item: GalleryItem): void;
+  loadWorkflowFile(file: LumenFile): void;
+  applyTemplate(id: string): void;
 }
 
 export const mockAdapter = new MockAdapter();
@@ -440,6 +444,20 @@ export const useStudio = create<StudioState>((set, get) => {
     restoreSnapshot: (item) => {
       commit({ ...item.manifest.graph });
       set({ view: 'graph', selectedNodeId: null });
+    },
+
+    loadWorkflowFile: (file) => {
+      commit(file.workflow);
+      if (file.rackPresets?.length) set({ rackPresets: file.rackPresets });
+      set({ selectedNodeId: null, view: 'recipe' });
+    },
+
+    applyTemplate: (id) => {
+      const template = TEMPLATES.find((t) => t.id === id);
+      if (template) {
+        commit(template.build());
+        set({ selectedNodeId: null, view: 'recipe' });
+      }
     },
   };
 });

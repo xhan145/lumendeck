@@ -478,3 +478,17 @@
   .tab { white-space: nowrap; }
   .turbo-metrics { grid-template-columns: 1fr; }
 }
+
+/* ===== Recipe actions (save/open/templates) ===== */
+.recipe-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-2); }
+.recipe-actions-error {
+  flex-basis: 100%;
+  display: flex; align-items: center; gap: 6px;
+  color: var(--ld-danger); font-size: 13px; margin: 4px 0 0;
+}
+.template-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.template-card {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+}
+.template-card h3 { font-size: 14px; margin-bottom: 2px; }

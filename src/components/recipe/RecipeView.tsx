@@ -5,6 +5,7 @@ import { findNode } from '../../core/workflow';
 import { useStudio } from '../../state/store';
 import { CapsuleIcon, Icon } from '../icons';
 import { CapsuleParams } from '../inspector/CapsuleParams';
+import { RecipeActions } from './RecipeActions';
 
 /** Beginner-friendly ordering of the workflow as a top-to-bottom recipe. */
 const RECIPE_ORDER: CapsuleKind[] = ['prompt', 'model', 'loraRack', 'control', 'canvas', 'sampler', 'export'];
@@ -17,6 +18,7 @@ export function RecipeView() {
   return (
     <main className="recipe" aria-label="Recipe View">
       <div className="recipe-inner">
+        <RecipeActions />
         <p className="recipe-intro">
           Fill in the capsules top to bottom, then press Render. Every field here edits the same workflow
           you can rewire in Graph View.
