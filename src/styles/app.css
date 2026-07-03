@@ -443,6 +443,24 @@
   font-size: 13px;
   font-weight: 600;
 }
+.backend-panel {
+  display: grid;
+  gap: var(--sp-3);
+}
+.backend-health {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: var(--rad-1);
+  border: 1px solid currentColor;
+  background: rgba(7, 20, 38, 0.45);
+  font-size: 12px;
+}
+.backend-health strong {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
 
 @media (max-width: 560px) {
   .topbar {

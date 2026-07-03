@@ -95,6 +95,15 @@ export const Icon = {
       p,
     ),
   bolt: (p?: IconProps) => svg(<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />, p),
+  plug: (p?: IconProps) =>
+    svg(
+      <>
+        <path d="M8 3v5M16 3v5M7 8h10v4a5 5 0 0 1-10 0V8z" />
+        <path d="M12 17v4" />
+      </>,
+      p,
+    ),
+  pulse: (p?: IconProps) => svg(<path d="M3 12h4l2-6 4 12 2-6h6" />, p),
 };
 
 const CAPSULE_PATHS: Record<CapsuleKind, React.ReactNode> = {

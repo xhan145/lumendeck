@@ -1,4 +1,5 @@
 import type { RackPreset, Workflow } from '../core/types';
+import type { BackendSettings } from '../turboForge/backends/backendSettings';
 import type { GalleryItem } from './store';
 
 const KEY = 'lumendeck.v1';
@@ -7,6 +8,7 @@ export interface PersistedState {
   workflow: Workflow;
   rackPresets: RackPreset[];
   gallery: GalleryItem[];
+  backendSettings: BackendSettings;
 }
 
 export function loadPersisted(): Partial<PersistedState> {

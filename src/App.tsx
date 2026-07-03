@@ -4,6 +4,8 @@ import { findAsset } from './core/shelf';
 import type { CapsuleKind } from './core/types';
 import { findNode } from './core/workflow';
 import { useStudio, type ViewId } from './state/store';
+import type { TurboForgeManifestData } from './turboForge/types';
+import { BackendSettingsPanel } from './components/BackendSettingsPanel';
 import { CapsuleIcon, Icon } from './components/icons';
 import { TurboForgePanel } from './components/TurboForgePanel';
 import './styles/base.css';
@@ -15,7 +17,21 @@ function navLabel(view: ViewId): string {
 
 function Field({ nodeId, paramId, label, value }: { nodeId: string; paramId: string; label: string; value: unknown }) {
   const updateParam = useStudio((state) => state.updateParam);
+  const def = useStudio((state) => {
+    const node = state.workflow.nodes.find((item) => item.id === nodeId);
+    return node ? CAPSULES[node.kind].params.find((param) => param.id === paramId) : undefined;
+  });
   const asText = String(value ?? '');
+  if (def?.options) {
+    return (
+      <label className="field">
+        <span className="field-label">{label}</span>
+        <select value={asText} onChange={(event) => updateParam(nodeId, paramId, event.target.value)}>
+          {def.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </label>
+    );
+  }
   if (typeof value === 'boolean') {
     return (
       <label className="field-inline">
@@ -160,6 +176,12 @@ function GalleryView() {
               <div className="meta">
                 <span className="p">{item.manifest.prompt || 'Untitled render'}</span>
                 <span className="s"><span>{item.manifest.seed}</span><span>{new Date(item.createdAt).toLocaleTimeString()}</span></span>
+                {((item.manifest as typeof item.manifest & { turboForge?: TurboForgeManifestData }).turboForge) ? (
+                  <span className="s">
+                    <span>{(item.manifest as typeof item.manifest & { turboForge: TurboForgeManifestData }).turboForge.backendId}</span>
+                    <span>{(item.manifest as typeof item.manifest & { turboForge: TurboForgeManifestData }).turboForge.preset}</span>
+                  </span>
+                ) : null}
                 <div className="drawer-actions">
                   <button className="btn" type="button" onClick={() => restoreSnapshot(item)}>{Icon.restore()} Restore</button>
                   <button className="btn danger" type="button" onClick={() => removeGalleryItem(item.id)}>{Icon.trash()} Remove</button>
@@ -230,6 +252,25 @@ function LoraRackPanel() {
   );
 }
 
+function QuickModelPanel() {
+  const { shelf, workflow, updateParam } = useStudio();
+  const modelNode = findNode(workflow, 'model');
+  const checkpoints = shelf.filter((asset) => asset.assetType === 'checkpoint' && asset.installed);
+  if (!modelNode) return null;
+  return (
+    <section className="rail-section">
+      <h3>Model</h3>
+      <label className="field">
+        <span className="field-label">Checkpoint</span>
+        <select value={String(modelNode.params.assetId ?? '')} onChange={(event) => updateParam(modelNode.id, 'assetId', event.target.value)}>
+          <option value="">Choose a checkpoint...</option>
+          {checkpoints.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+        </select>
+      </label>
+    </section>
+  );
+}
+
 function SideRail() {
   const { health, queue, enqueueRender } = useStudio();
   const errors = health.filter((issue) => issue.severity === 'error');
@@ -240,6 +281,8 @@ function SideRail() {
           {Icon.play()} Render
         </button>
       </section>
+      <QuickModelPanel />
+      <BackendSettingsPanel />
       <TurboForgePanel />
       <LoraRackPanel />
       <section className="rail-section">

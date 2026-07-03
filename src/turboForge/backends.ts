@@ -6,6 +6,7 @@ import type {
   RenderPlan,
   TurboTask,
 } from './types';
+import { DEFAULT_COMFY_URL } from '../bridge/comfyAdapter';
 
 export interface BackendHealth {
   status: 'healthy' | 'unavailable' | 'degraded';
@@ -74,12 +75,73 @@ abstract class PlaceholderBackend implements TurboBackendAdapter {
 
   async cancel(): Promise<void> {}
 
-  async benchmark(): Promise<BenchmarkResult> {
+  async benchmark(_plan: RenderPlan): Promise<BenchmarkResult> {
     throw new Error(`${this.displayName} is not connected.`);
   }
 
   exportManifest(): Record<string, unknown> {
     return { id: this.id, displayName: this.displayName, status: 'slot-only' };
+  }
+}
+
+class ComfyTurboBackend extends PlaceholderBackend {
+  constructor() {
+    super('comfyui-api', 'ComfyUI API backend');
+  }
+
+  async healthCheck(): Promise<BackendHealth> {
+    const started = performance.now();
+    try {
+      const res = await fetch(`${DEFAULT_COMFY_URL}/system_stats`, { signal: AbortSignal.timeout(3000) });
+      const elapsed = Math.round(performance.now() - started);
+      if (!res.ok) return { status: 'degraded', message: `ComfyUI responded with HTTP ${res.status} after ${elapsed} ms.` };
+      return { status: 'healthy', message: `ComfyUI is reachable at ${DEFAULT_COMFY_URL} (${elapsed} ms).` };
+    } catch {
+      return {
+        status: 'unavailable',
+        message: `ComfyUI is not reachable at ${DEFAULT_COMFY_URL}. Use Backend Settings if your server runs elsewhere.`,
+      };
+    }
+  }
+
+  async benchmark(plan: RenderPlan): Promise<BenchmarkResult> {
+    const started = performance.now();
+    const health = await this.healthCheck();
+    const healthMs = performance.now() - started;
+    if (health.status !== 'healthy') {
+      throw new Error(health.message);
+    }
+    return {
+      id: `bench_${plan.id}`,
+      createdAt: new Date().toISOString(),
+      presetId: plan.selectedPreset,
+      backendId: this.id,
+      backendName: this.displayName,
+      hardware: { backendName: this.displayName },
+      runtime: {
+        backendName: this.displayName,
+        precisionMode: plan.optimizationFlags.precision,
+        modelId: plan.selectedModel,
+        modelHash: null,
+        loraStack: plan.selectedLoras,
+        resolution: plan.resolution,
+        steps: plan.steps,
+        frameCount: plan.frameCount,
+        fps: plan.fps,
+        seed: plan.seed,
+        batchSize: plan.batchSize,
+        dateTime: new Date().toISOString(),
+      },
+      timings: {
+        healthCheckMs: healthMs,
+        totalRenderMs: healthMs,
+      },
+      optimizedMs: healthMs,
+    };
+  }
+
+  exportManifest(): Record<string, unknown> {
+    return { id: this.id, displayName: this.displayName, defaultUrl: DEFAULT_COMFY_URL };
   }
 }
 
@@ -157,11 +219,7 @@ export const TURBO_BACKENDS: Record<BackendId, TurboBackendAdapter> = {
       super('diffusers', 'Diffusers backend');
     }
   })(),
-  'comfyui-api': new (class extends PlaceholderBackend {
-    constructor() {
-      super('comfyui-api', 'ComfyUI API backend');
-    }
-  })(),
+  'comfyui-api': new ComfyTurboBackend(),
   tensorrt: new (class extends PlaceholderBackend {
     constructor() {
       super('tensorrt', 'TensorRT backend');

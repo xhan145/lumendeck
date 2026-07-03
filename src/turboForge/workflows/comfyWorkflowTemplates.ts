@@ -1,0 +1,80 @@
+import type { RenderJob } from '../../bridge/adapter';
+
+export interface ComfyWorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+  workflow: Record<string, unknown>;
+}
+
+export const BASIC_TXT2IMG_TEMPLATE: ComfyWorkflowTemplate = {
+  id: 'basic-sdxl-txt2img',
+  name: 'Basic SDXL text-to-image',
+  description: 'A minimal ComfyUI text-to-image graph. Edit checkpoint names to match your ComfyUI model folder.',
+  workflow: {
+    '3': {
+      class_type: 'KSampler',
+      inputs: {
+        seed: '{{seed}}',
+        steps: '{{steps}}',
+        cfg: '{{cfg}}',
+        sampler_name: 'euler',
+        scheduler: 'normal',
+        denoise: 1,
+        model: ['4', 0],
+        positive: ['6', 0],
+        negative: ['7', 0],
+        latent_image: ['5', 0],
+      },
+    },
+    '4': {
+      class_type: 'CheckpointLoaderSimple',
+      inputs: {
+        ckpt_name: '{{checkpointName}}',
+      },
+    },
+    '5': {
+      class_type: 'EmptyLatentImage',
+      inputs: {
+        width: '{{width}}',
+        height: '{{height}}',
+        batch_size: 1,
+      },
+    },
+    '6': {
+      class_type: 'CLIPTextEncode',
+      inputs: {
+        text: '{{prompt}}',
+        clip: ['4', 1],
+      },
+    },
+    '7': {
+      class_type: 'CLIPTextEncode',
+      inputs: {
+        text: '{{negativePrompt}}',
+        clip: ['4', 1],
+      },
+    },
+    '8': {
+      class_type: 'VAEDecode',
+      inputs: {
+        samples: ['3', 0],
+        vae: ['4', 2],
+      },
+    },
+    '9': {
+      class_type: 'SaveImage',
+      inputs: {
+        filename_prefix: 'LumenDeck',
+        images: ['8', 0],
+      },
+    },
+  },
+};
+
+export const COMFY_WORKFLOW_TEMPLATES = [BASIC_TXT2IMG_TEMPLATE];
+
+export function checkpointNameFromJob(job: RenderJob): string {
+  if (!job.modelId) return 'model.safetensors';
+  return job.modelId.endsWith('.safetensors') ? job.modelId : `${job.modelId}.safetensors`;
+}

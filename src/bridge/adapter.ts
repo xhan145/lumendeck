@@ -1,4 +1,5 @@
 import type { LoraSlot, Workflow } from '../core/types';
+import type { PipelineTimings } from '../turboForge/types';
 import { findNode } from '../core/workflow';
 
 export interface RenderJob {
@@ -18,6 +19,7 @@ export interface RenderResult {
   dataUrl: string;
   /** actual seed used (resolved when job seed is -1) */
   seed: number;
+  backendTimings?: PipelineTimings;
 }
 
 /**

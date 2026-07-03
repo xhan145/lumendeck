@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { buildRenderJob, type BackendAdapter } from '../bridge/adapter';
+import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
 import { checkHealth, type HealthIssue } from '../core/health';
@@ -27,6 +28,13 @@ import { collectBrowserHardwareInfo, TurboProfiler } from '../turboForge/profile
 import { createRenderPlan } from '../turboForge/renderPlanner';
 import type { BenchmarkResult, BackendId, RenderPlan, TurboForgeManifestData, TurboPresetId } from '../turboForge/types';
 import { withTurboForgeManifest } from '../turboForge/manifest';
+import {
+  DEFAULT_BACKEND_SETTINGS,
+  sanitizeBackendSettings,
+  settingsBackendToTurboBackend,
+  type BackendSettings,
+  type RenderBackendId,
+} from '../turboForge/backends/backendSettings';
 import { loadPersisted, savePersisted } from './persistence';
 import { APP_VERSION } from './storeConstants';
 
@@ -57,8 +65,9 @@ interface StudioState {
   rackPresets: RackPreset[];
   gallery: GalleryItem[];
   queue: QueueJob[];
-  adapterId: 'mock' | 'bridge';
+  adapterId: RenderBackendId;
   bridgeOnline: boolean;
+  backendSettings: BackendSettings;
   turboPresetId: TurboPresetId;
   turboBackendId: BackendId;
   turboBenchmarks: BenchmarkResult[];
@@ -82,7 +91,9 @@ interface StudioState {
   applyRackPreset(id: string): void;
   deleteRackPreset(id: string): void;
 
-  setAdapter(id: 'mock' | 'bridge'): void;
+  setAdapter(id: RenderBackendId): void;
+  updateBackendSettings(settings: Partial<BackendSettings>): void;
+  testSelectedBackend(): Promise<void>;
   setTurboPreset(id: TurboPresetId): void;
   createTurboPlan(): RenderPlan;
   runTurboBenchmark(): Promise<void>;
@@ -96,13 +107,20 @@ interface StudioState {
 
 export const mockAdapter = new MockAdapter();
 export const httpAdapter = new HttpAdapter();
+export const comfyAdapter = new ComfyAdapter();
 
-function activeAdapter(id: 'mock' | 'bridge'): BackendAdapter {
-  return id === 'bridge' ? httpAdapter : mockAdapter;
+function activeAdapter(settings: BackendSettings): BackendAdapter {
+  if (settings.selectedBackend === 'bridge') return httpAdapter;
+  if (settings.selectedBackend === 'comfyui') {
+    comfyAdapter.setBaseUrl(settings.comfyUrl);
+    return comfyAdapter;
+  }
+  return mockAdapter;
 }
 
 const persisted = loadPersisted();
 const initialWorkflow = persisted.workflow ?? createDefaultWorkflow();
+const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 
 export const useStudio = create<StudioState>((set, get) => {
   const commit = (wf: Workflow) =>
@@ -118,10 +136,11 @@ export const useStudio = create<StudioState>((set, get) => {
     rackPresets: persisted.rackPresets ?? [],
     gallery: persisted.gallery ?? [],
     queue: [],
-    adapterId: 'mock',
+    adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
+    backendSettings: initialBackendSettings,
     turboPresetId: 'fast',
-    turboBackendId: 'mock',
+    turboBackendId: settingsBackendToTurboBackend(initialBackendSettings.selectedBackend),
     turboBenchmarks: loadBenchmarks(),
     turboLastPlan: null,
     turboLastBenchmark: null,
@@ -164,7 +183,60 @@ export const useStudio = create<StudioState>((set, get) => {
     deleteRackPreset: (id) =>
       set({ rackPresets: get().rackPresets.filter((p) => p.id !== id) }),
 
-    setAdapter: (adapterId) => set({ adapterId }),
+    setAdapter: (adapterId) => {
+      const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: adapterId });
+      set({
+        adapterId,
+        backendSettings,
+        turboBackendId: settingsBackendToTurboBackend(adapterId),
+        turboLastPlan: null,
+      });
+    },
+    updateBackendSettings: (settings) => {
+      const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, ...settings });
+      if (backendSettings.selectedBackend === 'comfyui') comfyAdapter.setBaseUrl(backendSettings.comfyUrl);
+      set({
+        backendSettings,
+        adapterId: backendSettings.selectedBackend,
+        turboBackendId: settingsBackendToTurboBackend(backendSettings.selectedBackend),
+        turboLastPlan: null,
+      });
+    },
+
+    testSelectedBackend: async () => {
+      const state = get();
+      const startedAt = performance.now();
+      let ok = false;
+      let status: 'healthy' | 'unavailable' | 'degraded' = 'unavailable';
+      let message = '';
+      if (state.backendSettings.selectedBackend === 'mock') {
+        ok = true;
+        status = 'healthy';
+        message = 'Mock backend is ready. It validates the app flow without a GPU.';
+      } else if (state.backendSettings.selectedBackend === 'comfyui') {
+        comfyAdapter.setBaseUrl(state.backendSettings.comfyUrl);
+        const health = await comfyAdapter.health();
+        ok = health.ok;
+        status = health.status;
+        message = health.message;
+      } else {
+        ok = await httpAdapter.ping();
+        status = ok ? 'healthy' : 'unavailable';
+        message = ok ? 'Local Diffusers bridge is reachable.' : 'Local Diffusers bridge is offline at the configured bridge URL.';
+      }
+      const backendSettings = sanitizeBackendSettings({
+        ...state.backendSettings,
+        lastHealth: {
+          backend: state.backendSettings.selectedBackend,
+          ok,
+          status,
+          message,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          checkedAt: new Date().toISOString(),
+        },
+      });
+      set({ backendSettings, bridgeOnline: ok });
+    },
     setTurboPreset: (turboPresetId) => set({ turboPresetId }),
 
     createTurboPlan: () => {
@@ -218,7 +290,7 @@ export const useStudio = create<StudioState>((set, get) => {
     },
 
     enqueueRender: async () => {
-      const { workflow, shelf, adapterId } = get();
+      const { workflow, shelf, backendSettings } = get();
       const errors = get().health.filter((i) => i.severity === 'error');
       if (errors.length > 0) return; // UI blocks this path; guard anyway.
 
@@ -237,9 +309,23 @@ export const useStudio = create<StudioState>((set, get) => {
       try {
         const profiler = new TurboProfiler();
         profiler.mark('total-start');
-        const adapter = activeAdapter(adapterId);
+        const adapter = activeAdapter(backendSettings);
         profiler.mark('sampling-start');
-        const result = await adapter.generate(job, (progress) => patch({ progress }));
+        profiler.mark('backend-start');
+        let result;
+        let usedFallback = false;
+        try {
+          result = await adapter.generate(job, (progress) => patch({ progress }));
+        } catch (error) {
+          if (!backendSettings.fallbackToMock || backendSettings.selectedBackend === 'mock') throw error;
+          usedFallback = true;
+          patch({ error: `${error instanceof Error ? error.message : String(error)} Falling back to mock backend.` });
+          result = await mockAdapter.generate(job, (progress) => patch({ progress }));
+        }
+        profiler.measure('backendRequestMs', 'backend-start');
+        for (const [key, value] of Object.entries(result.backendTimings ?? {})) {
+          profiler.set(key as keyof NonNullable<typeof result.backendTimings>, Number(value));
+        }
         profiler.measure('samplingMs', 'sampling-start');
         profiler.set('modelLoadMs', 0);
         profiler.set('loraLoadMs', plan.selectedLoras.length * 5);
@@ -258,10 +344,10 @@ export const useStudio = create<StudioState>((set, get) => {
           createdAt: baseManifest.createdAt,
           presetId: plan.selectedPreset,
           backendId: plan.selectedBackend,
-          backendName: TURBO_BACKENDS[plan.selectedBackend].displayName,
-          hardware: collectBrowserHardwareInfo(TURBO_BACKENDS[plan.selectedBackend].displayName),
+          backendName: usedFallback ? 'Mock backend fallback' : TURBO_BACKENDS[plan.selectedBackend].displayName,
+          hardware: collectBrowserHardwareInfo(usedFallback ? 'Mock backend fallback' : TURBO_BACKENDS[plan.selectedBackend].displayName),
           runtime: {
-            backendName: TURBO_BACKENDS[plan.selectedBackend].displayName,
+            backendName: usedFallback ? 'Mock backend fallback' : TURBO_BACKENDS[plan.selectedBackend].displayName,
             precisionMode: plan.optimizationFlags.precision,
             modelId: plan.selectedModel,
             modelHash: modelCapability?.fileHash ?? null,
@@ -286,14 +372,24 @@ export const useStudio = create<StudioState>((set, get) => {
         const turboForge: TurboForgeManifestData = {
           preset: plan.selectedPreset,
           backendId: plan.selectedBackend,
-          backendHealthStatus: 'healthy',
+          backendHealthStatus: usedFallback ? 'degraded' : 'healthy',
           optimizationFlags: plan.optimizationFlags,
           compileCacheStatus: plan.compileCacheStatus,
           modelCapability,
           loraStack: plan.selectedLoras,
           renderPlan: plan,
           benchmark: enrichedBenchmark,
-          warnings: plan.warnings,
+          warnings: usedFallback
+            ? [
+                ...plan.warnings,
+                {
+                  code: 'backend-fallback',
+                  severity: 'warning',
+                  message: 'The selected backend failed, so LumenDeck used the mock backend fallback.',
+                  recommendedFix: 'Start ComfyUI, check the backend URL, or switch to Mock.',
+                },
+              ]
+            : plan.warnings,
           hardwareInfo: enrichedBenchmark.hardware,
           graphSnapshot: workflow,
           appVersion: APP_VERSION,
@@ -334,6 +430,7 @@ useStudio.subscribe((state) => {
       workflow: state.workflow,
       rackPresets: state.rackPresets,
       gallery: state.gallery.slice(0, 24),
+      backendSettings: state.backendSettings,
     });
   }, 300);
 });

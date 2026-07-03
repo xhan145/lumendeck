@@ -19,6 +19,8 @@ export function TurboForgePanel() {
     workflow,
     shelf,
     turboPresetId,
+    turboBackendId,
+    backendSettings,
     turboBenchmarks,
     turboLastPlan,
     turboLastBenchmark,
@@ -29,8 +31,8 @@ export function TurboForgePanel() {
   } = useStudio();
   const [health, setHealth] = useState<BackendHealth>({ status: 'degraded', message: 'Checking backend...' });
   const plan = useMemo(
-    () => turboLastPlan ?? createRenderPlan(workflow, shelf, { presetId: turboPresetId, backendId: 'mock', history: turboBenchmarks }),
-    [shelf, turboBenchmarks, turboLastPlan, turboPresetId, workflow],
+    () => turboLastPlan ?? createRenderPlan(workflow, shelf, { presetId: turboPresetId, backendId: turboBackendId, history: turboBenchmarks }),
+    [shelf, turboBackendId, turboBenchmarks, turboLastPlan, turboPresetId, workflow],
   );
   const latest = turboLastBenchmark ?? turboBenchmarks[0];
   const modelOk = plan.selectedModel && plan.warnings.every((warning) => warning.code !== 'missing-model' && warning.code !== 'model-not-installed');
@@ -39,13 +41,22 @@ export function TurboForgePanel() {
 
   useEffect(() => {
     let cancelled = false;
+    if (backendSettings.lastHealth && backendSettings.lastHealth.backend === backendSettings.selectedBackend) {
+      setHealth({
+        status: backendSettings.lastHealth.status,
+        message: backendSettings.lastHealth.message,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     TURBO_BACKENDS[plan.selectedBackend].healthCheck().then((result) => {
       if (!cancelled) setHealth(result);
     });
     return () => {
       cancelled = true;
     };
-  }, [plan.selectedBackend]);
+  }, [backendSettings.lastHealth, backendSettings.selectedBackend, plan.selectedBackend]);
 
   return (
     <section className="rail-section turbo-panel" aria-labelledby="turboforge-title">
@@ -83,6 +94,7 @@ export function TurboForgePanel() {
         <div><dt>Measured speedup</dt><dd>{latest?.measuredSpeedupPercent === undefined ? 'Needs baseline' : `${latest.measuredSpeedupPercent.toFixed(1)}%`}</dd></div>
         <div><dt>VRAM estimate</dt><dd>{plan.estimatedVramGB.toFixed(1)} GB</dd></div>
         <div><dt>Backend health</dt><dd className={`status-${health.status}`}>{health.status}</dd></div>
+        <div><dt>Selected backend</dt><dd>{backendSettings.selectedBackend}</dd></div>
         <div><dt>Model compatibility</dt><dd>{modelOk ? 'Ready' : 'Needs attention'}</dd></div>
         <div><dt>LoRA overhead</dt><dd>{msLabel(loraOverhead)}</dd></div>
         <div><dt>Cache status</dt><dd>{plan.cacheStatus}</dd></div>
@@ -118,6 +130,7 @@ export function TurboForgePanel() {
           <dt>Batch size</dt><dd>{plan.batchSize}</dd>
           <dt>Video chunk size</dt><dd>{plan.frameCount ? '24 frames' : 'Image render'}</dd>
           <dt>Encoder</dt><dd>{plan.optimizationFlags.encoderPreset}</dd>
+          <dt>ComfyUI URL</dt><dd>{backendSettings.comfyUrl}</dd>
         </dl>
       </details>
     </section>

@@ -88,6 +88,10 @@ export type PipelineTimingKey =
   | 'frameInterpolationMs'
   | 'videoEncodingMs'
   | 'saveExportMs'
+  | 'healthCheckMs'
+  | 'backendRequestMs'
+  | 'renderQueueMs'
+  | 'outputFetchMs'
   | 'totalRenderMs';
 
 export type PipelineTimings = Partial<Record<PipelineTimingKey, number>>;
