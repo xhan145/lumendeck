@@ -121,6 +121,9 @@ export const comfyAdapter = new ComfyAdapter();
 // Set once the user explicitly picks a backend this session, so the auto-detect
 // in probeBridge never overrides a deliberate choice.
 let userPinnedBackend = false;
+// Set once the user explicitly picks a checkpoint this session, so auto-select
+// never overrides a deliberate choice.
+let userPinnedModel = false;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -131,15 +134,24 @@ function pickCheckpoint(shelf: ModelAsset[]): string {
   return (real ?? installed[0])?.id ?? '';
 }
 
-/** Point the Model capsule at a real checkpoint when it has none (or an invalid one). */
-function applyAutoCheckpoint(wf: Workflow, shelf: ModelAsset[]): Workflow {
+function isRealAsset(a: ModelAsset | undefined): boolean {
+  return !!a && (a.tags?.includes('real') === true || a.tags?.includes('diffusers') === true);
+}
+
+/**
+ * Point the Model capsule at a real checkpoint. Fills an empty/invalid selection
+ * always; with `upgrade`, also swaps an auto-picked placeholder for a real model
+ * (used on bridge refresh, gated by whether the user pinned a choice this session).
+ */
+function applyAutoCheckpoint(wf: Workflow, shelf: ModelAsset[], opts?: { upgrade?: boolean }): Workflow {
   const model = findNode(wf, 'model');
   if (!model) return wf;
   const current = String(model.params.assetId ?? '');
-  const valid = current && shelf.some((a) => a.id === current && a.assetType === 'checkpoint' && a.installed);
-  if (valid) return wf;
+  const currentAsset = shelf.find((a) => a.id === current && a.assetType === 'checkpoint' && a.installed);
+  // Keep a valid current selection unless we're allowed to upgrade a non-real one.
+  if (currentAsset && !(opts?.upgrade && !isRealAsset(currentAsset))) return wf;
   const pick = pickCheckpoint(shelf);
-  return pick ? updateNodeParam(wf, model.id, 'assetId', pick) : wf;
+  return pick && pick !== current ? updateNodeParam(wf, model.id, 'assetId', pick) : wf;
 }
 
 function activeAdapter(settings: BackendSettings): BackendAdapter {
@@ -188,8 +200,14 @@ export const useStudio = create<StudioState>((set, get) => {
     setView: (view) => set({ view }),
     selectNode: (selectedNodeId) => set({ selectedNodeId }),
     setWorkflow: (wf) => commit(wf),
-    updateParam: (nodeId, paramId, value) =>
-      commit(updateNodeParam(get().workflow, nodeId, paramId, value)),
+    updateParam: (nodeId, paramId, value) => {
+      // A deliberate checkpoint pick disables real-model auto-upgrade this session.
+      if (paramId === 'assetId') {
+        const node = get().workflow.nodes.find((n) => n.id === nodeId);
+        if (node?.kind === 'model') userPinnedModel = true;
+      }
+      commit(updateNodeParam(get().workflow, nodeId, paramId, value));
+    },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
@@ -340,7 +358,7 @@ export const useStudio = create<StudioState>((set, get) => {
       try {
         const shelf = await httpAdapter.listModels();
         if (Array.isArray(shelf) && shelf.length > 0) {
-          const workflow = applyAutoCheckpoint(get().workflow, shelf);
+          const workflow = applyAutoCheckpoint(get().workflow, shelf, { upgrade: !userPinnedModel });
           set({ shelf, shelfSource: 'bridge', workflow, health: checkHealth(workflow, shelf) });
         }
       } catch (err) {
