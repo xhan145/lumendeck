@@ -197,8 +197,15 @@ def _watch_parent_via_stdin() -> None:
 
 
 def run(port: int) -> None:
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        # Most commonly: the port is already taken by another bridge instance.
+        print(f"LumenDeck bridge could not bind port {port}: {exc}. "
+              f"Another bridge is probably already running — reusing it.", flush=True)
+        return
     print(f"LumenDeck bridge on http://127.0.0.1:{port}", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    server.serve_forever()
 
 
 def main(argv=None) -> None:
