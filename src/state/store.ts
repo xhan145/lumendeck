@@ -78,6 +78,8 @@ interface StudioState {
   turboBenchmarks: BenchmarkResult[];
   turboLastPlan: RenderPlan | null;
   turboLastBenchmark: BenchmarkResult | null;
+  turboBusy: boolean;
+  turboError: string | null;
 
   setView(view: ViewId): void;
   selectNode(id: string | null): void;
@@ -174,7 +176,7 @@ const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings
 
 export const useStudio = create<StudioState>((set, get) => {
   const commit = (wf: Workflow) =>
-    set({ workflow: wf, health: checkHealth(wf, get().shelf) });
+    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null });
 
   return {
     workflow: initialWorkflow,
@@ -197,6 +199,8 @@ export const useStudio = create<StudioState>((set, get) => {
     turboBenchmarks: loadBenchmarks(),
     turboLastPlan: null,
     turboLastBenchmark: null,
+    turboBusy: false,
+    turboError: null,
 
     setView: (view) => set({ view }),
     selectNode: (selectedNodeId) => set({ selectedNodeId }),
@@ -299,7 +303,7 @@ export const useStudio = create<StudioState>((set, get) => {
       set({ backendSettings, bridgeOnline: ok });
       if (ok && state.backendSettings.selectedBackend === 'bridge') void get().refreshBridgeModelStatus();
     },
-    setTurboPreset: (turboPresetId) => set({ turboPresetId }),
+    setTurboPreset: (turboPresetId) => set({ turboPresetId, turboLastPlan: null, turboError: null }),
 
     createTurboPlan: () => {
       const state = get();
@@ -313,17 +317,56 @@ export const useStudio = create<StudioState>((set, get) => {
     },
 
     runTurboBenchmark: async () => {
-      const plan = get().createTurboPlan();
-      const backend = TURBO_BACKENDS[plan.selectedBackend];
-      const benchmark = await backend.benchmark(plan);
-      const baseline = get().turboBenchmarks.find((b) => b.runtime.modelId === benchmark.runtime.modelId && b.presetId === 'safe');
-      const enriched: BenchmarkResult = {
-        ...benchmark,
-        baselineMs: baseline?.timings.totalRenderMs,
-        optimizedMs: benchmark.timings.totalRenderMs,
-        measuredSpeedupPercent: measuredSpeedupPercent(baseline?.timings.totalRenderMs, benchmark.timings.totalRenderMs),
-      };
-      set({ turboBenchmarks: saveBenchmark(enriched), turboLastBenchmark: enriched });
+      set({ turboBusy: true, turboError: null });
+      try {
+        const state = get();
+        const plan = get().createTurboPlan();
+        const adapter = activeAdapter(state.backendSettings);
+        const job = buildRenderJob(state.workflow);
+        const startedAt = performance.now();
+        const result = await adapter.generate(job);
+        const elapsedMs = performance.now() - startedAt;
+        const timings = {
+          ...result.backendTimings,
+          totalRenderMs: result.backendTimings?.totalRenderMs ?? result.backendTimings?.backendRequestMs ?? elapsedMs,
+        };
+        const matrix = buildCapabilityMatrix(get().shelf);
+        const modelCapability = findCapability(matrix, plan.selectedModel);
+        const benchmark: BenchmarkResult = {
+          id: `bench_${plan.id}`,
+          createdAt: new Date().toISOString(),
+          presetId: plan.selectedPreset,
+          backendId: plan.selectedBackend,
+          backendName: adapter.label,
+          hardware: collectBrowserHardwareInfo(adapter.label),
+          runtime: {
+            backendName: adapter.label,
+            precisionMode: plan.optimizationFlags.precision,
+            modelId: plan.selectedModel,
+            modelHash: modelCapability?.fileHash ?? null,
+            loraStack: plan.selectedLoras,
+            resolution: plan.resolution,
+            steps: plan.steps,
+            frameCount: plan.frameCount,
+            fps: plan.fps,
+            seed: result.seed,
+            batchSize: plan.batchSize,
+            dateTime: new Date().toISOString(),
+          },
+          timings,
+          optimizedMs: timings.totalRenderMs,
+        };
+        const baseline = get().turboBenchmarks.find((b) => b.runtime.modelId === benchmark.runtime.modelId && b.presetId === 'safe');
+        const enriched: BenchmarkResult = {
+          ...benchmark,
+          baselineMs: baseline?.timings.totalRenderMs,
+          optimizedMs: benchmark.timings.totalRenderMs,
+          measuredSpeedupPercent: measuredSpeedupPercent(baseline?.timings.totalRenderMs, benchmark.timings.totalRenderMs),
+        };
+        set({ turboBenchmarks: saveBenchmark(enriched), turboLastBenchmark: enriched, turboBusy: false, turboError: null });
+      } catch (err) {
+        set({ turboBusy: false, turboError: err instanceof Error ? err.message : String(err) });
+      }
     },
 
     clearTurboCache: () => {

@@ -21,9 +21,13 @@ export function TurboForgePanel() {
     turboPresetId,
     turboBackendId,
     backendSettings,
+    bridgeOnline,
+    bridgeModelStatus,
     turboBenchmarks,
     turboLastPlan,
     turboLastBenchmark,
+    turboBusy,
+    turboError,
     setTurboPreset,
     createTurboPlan,
     runTurboBenchmark,
@@ -41,6 +45,26 @@ export function TurboForgePanel() {
 
   useEffect(() => {
     let cancelled = false;
+    if (backendSettings.selectedBackend === 'bridge') {
+      if (!bridgeOnline) {
+        setHealth({ status: 'unavailable', message: 'Local Diffusers bridge is offline.' });
+      } else if (bridgeModelStatus?.dependenciesReady) {
+        setHealth({
+          status: 'healthy',
+          message: bridgeModelStatus.loaded
+            ? 'Real Diffusers model is loaded and ready for TurboForge benchmarking.'
+            : 'Real Diffusers runtime is ready; the benchmark can load the model.',
+        });
+      } else {
+        setHealth({
+          status: 'degraded',
+          message: bridgeModelStatus?.message ?? 'Install the real Diffusers runtime before benchmarking the bridge.',
+        });
+      }
+      return () => {
+        cancelled = true;
+      };
+    }
     if (backendSettings.lastHealth && backendSettings.lastHealth.backend === backendSettings.selectedBackend) {
       setHealth({
         status: backendSettings.lastHealth.status,
@@ -56,7 +80,7 @@ export function TurboForgePanel() {
     return () => {
       cancelled = true;
     };
-  }, [backendSettings.lastHealth, backendSettings.selectedBackend, plan.selectedBackend]);
+  }, [backendSettings.lastHealth, backendSettings.selectedBackend, bridgeModelStatus, bridgeOnline, plan.selectedBackend]);
 
   return (
     <section className="rail-section turbo-panel" aria-labelledby="turboforge-title">
@@ -77,8 +101,8 @@ export function TurboForgePanel() {
       </label>
 
       <div className="turbo-actions">
-        <button className="btn primary" type="button" onClick={() => void runTurboBenchmark()}>
-          {Icon.bolt()} Benchmark
+        <button className="btn primary" type="button" onClick={() => void runTurboBenchmark()} disabled={turboBusy}>
+          {Icon.bolt()} {turboBusy ? 'Benchmarking...' : 'Benchmark'}
         </button>
         <button className="btn" type="button" onClick={() => createTurboPlan()}>
           Plan
@@ -103,12 +127,25 @@ export function TurboForgePanel() {
 
       {plan.warnings.length > 0 ? (
         <div className="turbo-warnings" role="status" aria-live="polite">
+          {turboError ? (
+            <div className="health-item error">
+              {Icon.error()}
+              <span>{turboError}</span>
+            </div>
+          ) : null}
           {plan.warnings.map((warning) => (
             <div key={`${warning.code}-${warning.message}`} className={`health-item ${warning.severity}`}>
               {warning.severity === 'error' ? Icon.error() : Icon.warning()}
               <span>{warning.message}</span>
             </div>
           ))}
+        </div>
+      ) : turboError ? (
+        <div className="turbo-warnings" role="status" aria-live="polite">
+          <div className="health-item error">
+            {Icon.error()}
+            <span>{turboError}</span>
+          </div>
         </div>
       ) : (
         <div className="health-empty">{Icon.ok()} Plan looks ready.</div>

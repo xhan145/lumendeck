@@ -5,7 +5,7 @@ import { buildManifest } from '../src/core/manifest';
 import { createDefaultWorkflow, findNode, updateNodeParam } from '../src/core/workflow';
 import { DEMO_SHELF } from '../src/data/demoShelf';
 import { loadPersisted, savePersisted } from '../src/state/persistence';
-import { useStudio } from '../src/state/store';
+import { httpAdapter, useStudio } from '../src/state/store';
 import { sanitizeBackendSettings, settingsBackendToTurboBackend } from '../src/turboForge/backends/backendSettings';
 import { withTurboForgeManifest } from '../src/turboForge/manifest';
 import { buildCapabilityMatrix } from '../src/turboForge/modelMatrix';
@@ -128,5 +128,49 @@ describe('store backend selection and manifests', () => {
     });
     expect(enriched.turboForge.backendId).toBe('comfyui-api');
     expect(enriched.turboForge.renderPlan.selectedBackend).toBe('comfyui-api');
+  });
+
+  it('invalidates stale TurboForge plans when the preset changes', () => {
+    useStudio.getState().resetWorkflow();
+    useStudio.getState().setTurboPreset('fast');
+    const fastPlan = useStudio.getState().createTurboPlan();
+
+    useStudio.getState().setTurboPreset('draft');
+
+    expect(useStudio.getState().turboLastPlan).toBeNull();
+    const draftPlan = useStudio.getState().createTurboPlan();
+    expect(draftPlan.id).not.toBe(fastPlan.id);
+    expect(draftPlan.selectedPreset).toBe('draft');
+  });
+
+  it('benchmarks the real bridge adapter instead of the placeholder Diffusers slot', async () => {
+    const generate = vi.spyOn(httpAdapter, 'generate').mockResolvedValue({
+      dataUrl: 'data:image/png;base64,abc',
+      seed: 77,
+      backendTimings: { totalRenderMs: 123, backendRequestMs: 123 },
+    });
+    useStudio.setState({
+      adapterId: 'bridge',
+      turboBackendId: 'diffusers',
+      turboBenchmarks: [],
+      turboLastBenchmark: null,
+      turboLastPlan: null,
+      turboBusy: false,
+      turboError: null,
+      backendSettings: sanitizeBackendSettings({
+        selectedBackend: 'bridge',
+        bridgeUrl: 'http://bridge.local',
+        bridgeRenderer: 'diffusers',
+        fallbackToMock: false,
+      }),
+    });
+
+    await useStudio.getState().runTurboBenchmark();
+
+    const state = useStudio.getState();
+    expect(generate).toHaveBeenCalled();
+    expect(state.turboError).toBeNull();
+    expect(state.turboLastBenchmark?.backendId).toBe('diffusers');
+    expect(state.turboLastBenchmark?.timings.totalRenderMs).toBe(123);
   });
 });
