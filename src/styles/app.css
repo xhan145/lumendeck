@@ -461,6 +461,47 @@
   letter-spacing: 0.06em;
   font-size: 11px;
 }
+.backend-model-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-1);
+  background: rgba(7, 20, 38, 0.45);
+}
+.backend-model-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+.backend-model-head > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.backend-model-meta {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--ld-text-dim);
+}
+.backend-install-command {
+  display: block;
+  padding: 7px 8px;
+  border-radius: var(--rad-1);
+  border: 1px solid var(--ld-border);
+  background: rgba(3, 9, 18, 0.5);
+  color: var(--ld-cyan);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.backend-model-error {
+  color: var(--ld-danger);
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 
 @media (max-width: 560px) {
   .topbar {
@@ -478,3 +519,17 @@
   .tab { white-space: nowrap; }
   .turbo-metrics { grid-template-columns: 1fr; }
 }
+
+/* ===== Recipe actions (save/open/templates) ===== */
+.recipe-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-2); }
+.recipe-actions-error {
+  flex-basis: 100%;
+  display: flex; align-items: center; gap: 6px;
+  color: var(--ld-danger); font-size: 13px; margin: 4px 0 0;
+}
+.template-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.template-card {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+}
+.template-card h3 { font-size: 14px; margin-bottom: 2px; }

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { buildRenderJob, type BackendAdapter } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
-import { HttpAdapter } from '../bridge/httpAdapter';
+import { HttpAdapter, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
 import { checkHealth, type HealthIssue } from '../core/health';
 import { buildManifest, type ExportManifest } from '../core/manifest';
@@ -20,6 +20,8 @@ import {
   updateNodeParam,
 } from '../core/workflow';
 import { DEMO_SHELF } from '../data/demoShelf';
+import { TEMPLATES } from '../data/templates';
+import type { LumenFile } from '../core/lumenFile';
 import { TURBO_BACKENDS } from '../turboForge/backends';
 import { loadBenchmarks, measuredSpeedupPercent, saveBenchmark } from '../turboForge/benchmarks';
 import { turboCompileCache } from '../turboForge/cache';
@@ -67,6 +69,9 @@ interface StudioState {
   queue: QueueJob[];
   adapterId: RenderBackendId;
   bridgeOnline: boolean;
+  bridgeModelStatus: BridgeModelStatus | null;
+  bridgeModelBusy: boolean;
+  bridgeModelError: string | null;
   backendSettings: BackendSettings;
   turboPresetId: TurboPresetId;
   turboBackendId: BackendId;
@@ -100,17 +105,61 @@ interface StudioState {
   clearTurboCache(): void;
   probeBridge(): Promise<void>;
   refreshShelfFromBridge(): Promise<void>;
+  refreshBridgeModelStatus(): Promise<void>;
+  downloadBridgeModel(): Promise<void>;
   enqueueRender(): Promise<void>;
   removeGalleryItem(id: string): void;
   restoreSnapshot(item: GalleryItem): void;
+  loadWorkflowFile(file: LumenFile): void;
+  applyTemplate(id: string): void;
 }
 
 export const mockAdapter = new MockAdapter();
 export const httpAdapter = new HttpAdapter();
 export const comfyAdapter = new ComfyAdapter();
 
+// Set once the user explicitly picks a backend this session, so the auto-detect
+// in probeBridge never overrides a deliberate choice.
+let userPinnedBackend = false;
+// Set once the user explicitly picks a checkpoint this session, so auto-select
+// never overrides a deliberate choice.
+let userPinnedModel = false;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Prefer a real (diffusers) installed checkpoint, else the first installed one. */
+function pickCheckpoint(shelf: ModelAsset[]): string {
+  const installed = shelf.filter((a) => a.assetType === 'checkpoint' && a.installed);
+  const real = installed.find((a) => a.tags?.includes('real') || a.tags?.includes('diffusers'));
+  return (real ?? installed[0])?.id ?? '';
+}
+
+function isRealAsset(a: ModelAsset | undefined): boolean {
+  return !!a && (a.tags?.includes('real') === true || a.tags?.includes('diffusers') === true);
+}
+
+/**
+ * Point the Model capsule at a real checkpoint. Fills an empty/invalid selection
+ * always; with `upgrade`, also swaps an auto-picked placeholder for a real model
+ * (used on bridge refresh, gated by whether the user pinned a choice this session).
+ */
+function applyAutoCheckpoint(wf: Workflow, shelf: ModelAsset[], opts?: { upgrade?: boolean }): Workflow {
+  const model = findNode(wf, 'model');
+  if (!model) return wf;
+  const current = String(model.params.assetId ?? '');
+  const currentAsset = shelf.find((a) => a.id === current && a.assetType === 'checkpoint' && a.installed);
+  // Keep a valid current selection unless we're allowed to upgrade a non-real one.
+  if (currentAsset && !(opts?.upgrade && !isRealAsset(currentAsset))) return wf;
+  const pick = pickCheckpoint(shelf);
+  return pick && pick !== current ? updateNodeParam(wf, model.id, 'assetId', pick) : wf;
+}
+
 function activeAdapter(settings: BackendSettings): BackendAdapter {
-  if (settings.selectedBackend === 'bridge') return httpAdapter;
+  if (settings.selectedBackend === 'bridge') {
+    httpAdapter.setBaseUrl(settings.bridgeUrl);
+    httpAdapter.setRenderer(settings.bridgeRenderer);
+    return httpAdapter;
+  }
   if (settings.selectedBackend === 'comfyui') {
     comfyAdapter.setBaseUrl(settings.comfyUrl);
     return comfyAdapter;
@@ -119,7 +168,7 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
 }
 
 const persisted = loadPersisted();
-const initialWorkflow = persisted.workflow ?? createDefaultWorkflow();
+const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 
 export const useStudio = create<StudioState>((set, get) => {
@@ -138,6 +187,9 @@ export const useStudio = create<StudioState>((set, get) => {
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
+    bridgeModelStatus: null,
+    bridgeModelBusy: false,
+    bridgeModelError: null,
     backendSettings: initialBackendSettings,
     turboPresetId: 'fast',
     turboBackendId: settingsBackendToTurboBackend(initialBackendSettings.selectedBackend),
@@ -148,8 +200,14 @@ export const useStudio = create<StudioState>((set, get) => {
     setView: (view) => set({ view }),
     selectNode: (selectedNodeId) => set({ selectedNodeId }),
     setWorkflow: (wf) => commit(wf),
-    updateParam: (nodeId, paramId, value) =>
-      commit(updateNodeParam(get().workflow, nodeId, paramId, value)),
+    updateParam: (nodeId, paramId, value) => {
+      // A deliberate checkpoint pick disables real-model auto-upgrade this session.
+      if (paramId === 'assetId') {
+        const node = get().workflow.nodes.find((n) => n.id === nodeId);
+        if (node?.kind === 'model') userPinnedModel = true;
+      }
+      commit(updateNodeParam(get().workflow, nodeId, paramId, value));
+    },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
@@ -184,6 +242,7 @@ export const useStudio = create<StudioState>((set, get) => {
       set({ rackPresets: get().rackPresets.filter((p) => p.id !== id) }),
 
     setAdapter: (adapterId) => {
+      userPinnedBackend = true;
       const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: adapterId });
       set({
         adapterId,
@@ -220,6 +279,7 @@ export const useStudio = create<StudioState>((set, get) => {
         status = health.status;
         message = health.message;
       } else {
+        httpAdapter.setBaseUrl(state.backendSettings.bridgeUrl);
         ok = await httpAdapter.ping();
         status = ok ? 'healthy' : 'unavailable';
         message = ok ? 'Local Diffusers bridge is reachable.' : 'Local Diffusers bridge is offline at the configured bridge URL.';
@@ -236,6 +296,7 @@ export const useStudio = create<StudioState>((set, get) => {
         },
       });
       set({ backendSettings, bridgeOnline: ok });
+      if (ok && state.backendSettings.selectedBackend === 'bridge') void get().refreshBridgeModelStatus();
     },
     setTurboPreset: (turboPresetId) => set({ turboPresetId }),
 
@@ -270,10 +331,25 @@ export const useStudio = create<StudioState>((set, get) => {
     },
 
     probeBridge: async () => {
-      const online = await httpAdapter.ping();
+      // The bundled sidecar takes ~1s to boot; retry with backoff before giving up.
+      httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+      let online = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        online = await httpAdapter.ping();
+        if (online) break;
+        await sleep(800);
+      }
       set({ bridgeOnline: online });
       if (online && get().shelfSource === 'demo') {
         await get().refreshShelfFromBridge();
+      }
+      if (online) {
+        await get().refreshBridgeModelStatus();
+      }
+      // Auto-select the local bridge on first boot when the user hasn't chosen a backend.
+      if (online && !userPinnedBackend && get().adapterId === 'mock') {
+        const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge' });
+        set({ adapterId: 'bridge', backendSettings, turboBackendId: settingsBackendToTurboBackend('bridge') });
       }
       if (!online && get().adapterId === 'bridge') set({ adapterId: 'mock' });
     },
@@ -282,10 +358,47 @@ export const useStudio = create<StudioState>((set, get) => {
       try {
         const shelf = await httpAdapter.listModels();
         if (Array.isArray(shelf) && shelf.length > 0) {
-          set({ shelf, shelfSource: 'bridge', health: checkHealth(get().workflow, shelf) });
+          const workflow = applyAutoCheckpoint(get().workflow, shelf, { upgrade: !userPinnedModel });
+          set({ shelf, shelfSource: 'bridge', workflow, health: checkHealth(workflow, shelf) });
         }
       } catch (err) {
         console.warn('LumenDeck: bridge shelf refresh failed', err);
+      }
+    },
+
+    refreshBridgeModelStatus: async () => {
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelStatus = await httpAdapter.diffusersStatus();
+        set({ bridgeModelStatus, bridgeModelError: null });
+      } catch (err) {
+        set({
+          bridgeModelError: err instanceof Error ? err.message : String(err),
+          bridgeModelStatus: null,
+        });
+      }
+    },
+
+    downloadBridgeModel: async () => {
+      set({ bridgeModelBusy: true, bridgeModelError: null });
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelStatus = await httpAdapter.downloadDiffusersModel();
+        set({
+          bridgeModelStatus,
+          bridgeModelBusy: false,
+          bridgeModelError: null,
+          backendSettings: sanitizeBackendSettings({ ...get().backendSettings, bridgeRenderer: 'diffusers' }),
+          adapterId: 'bridge',
+          turboBackendId: settingsBackendToTurboBackend('bridge'),
+        });
+      } catch (err) {
+        const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        set({
+          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelBusy: false,
+          bridgeModelError: err instanceof Error ? err.message : String(err),
+        });
       }
     },
 
@@ -417,6 +530,20 @@ export const useStudio = create<StudioState>((set, get) => {
     restoreSnapshot: (item) => {
       commit({ ...item.manifest.graph });
       set({ view: 'graph', selectedNodeId: null });
+    },
+
+    loadWorkflowFile: (file) => {
+      commit(file.workflow);
+      if (file.rackPresets?.length) set({ rackPresets: file.rackPresets });
+      set({ selectedNodeId: null, view: 'recipe' });
+    },
+
+    applyTemplate: (id) => {
+      const template = TEMPLATES.find((t) => t.id === id);
+      if (template) {
+        commit(template.build());
+        set({ selectedNodeId: null, view: 'recipe' });
+      }
     },
   };
 });

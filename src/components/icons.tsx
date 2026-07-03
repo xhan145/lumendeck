@@ -104,6 +104,17 @@ export const Icon = {
       p,
     ),
   pulse: (p?: IconProps) => svg(<path d="M3 12h4l2-6 4 12 2-6h6" />, p),
+  folder: (p?: IconProps) => svg(<path d="M3 6h6l2 2h10v11H3z" />, p),
+  grid: (p?: IconProps) =>
+    svg(
+      <>
+        <rect x="4" y="4" width="7" height="7" rx="1.5" />
+        <rect x="13" y="4" width="7" height="7" rx="1.5" />
+        <rect x="4" y="13" width="7" height="7" rx="1.5" />
+        <rect x="13" y="13" width="7" height="7" rx="1.5" />
+      </>,
+      p,
+    ),
 };
 
 const CAPSULE_PATHS: Record<CapsuleKind, React.ReactNode> = {
