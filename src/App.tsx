@@ -1,25 +1,27 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useStudio, type ViewId } from './state/store';
+import { APP_VERSION } from './state/storeConstants';
 import { BackendSettingsPanel } from './components/BackendSettingsPanel';
 import { TurboForgePanel } from './components/TurboForgePanel';
 import { Gallery } from './components/gallery/Gallery';
 import { GraphView } from './components/graph/GraphView';
 import { HealthPanel } from './components/health/HealthPanel';
-import { Icon } from './components/icons';
+import { BrandMark, Icon } from './components/icons';
 import { Inspector } from './components/inspector/Inspector';
 import { LoraRack } from './components/rack/LoraRack';
 import { ModelShelf } from './components/shelf/ModelShelf';
+import { NavRail } from './components/shell/NavRail';
 import { QueuePanel } from './components/queue/QueuePanel';
 import { RecipeView } from './components/recipe/RecipeView';
 import './styles/base.css';
 import './styles/app.css';
 
-const TABS: { id: ViewId; label: string }[] = [
-  { id: 'recipe', label: 'Recipe View' },
-  { id: 'graph', label: 'Graph View' },
-  { id: 'shelf', label: 'Model Shelf' },
-  { id: 'gallery', label: 'Gallery' },
-];
+const VIEW_TITLES: Record<ViewId, string> = {
+  recipe: 'Recipe',
+  graph: 'Graph',
+  shelf: 'Model Shelf',
+  gallery: 'Gallery',
+};
 
 function HealthChip() {
   const health = useStudio((s) => s.health);
@@ -65,9 +67,15 @@ function RenderButton() {
   );
 }
 
-function SideRail() {
+function SideRail({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <aside className="side-rail" aria-label="Studio controls">
+    <aside className={`side-rail ${open ? 'open' : ''}`} aria-label="Studio controls">
+      <div className="side-rail-head">
+        <h3>Controls</h3>
+        <button className="btn icon rail-close" type="button" aria-label="Close controls" onClick={onClose}>
+          {Icon.close({ size: 16 })}
+        </button>
+      </div>
       <RenderButton />
       <div className="rail-scroll scroll">
         <section className="rail-section">
@@ -88,6 +96,7 @@ export function App() {
   const view = useStudio((s) => s.view);
   const setView = useStudio((s) => s.setView);
   const probeBridge = useStudio((s) => s.probeBridge);
+  const [railOpen, setRailOpen] = useState(false);
 
   // Probe the local bridge once on load so the shelf/status reflect reality.
   useEffect(() => { void probeBridge(); }, [probeBridge]);
@@ -96,30 +105,29 @@ export function App() {
     <div className="shell">
       <header className="topbar">
         <div className="brand">
-          {Icon.logo({ size: 22 })}
+          <BrandMark size={26} />
           <span className="lumen">Lumen</span><span className="deck">Deck</span>
-          <span className="ver">v0.1.0</span>
+          <span className="ver">v{APP_VERSION}</span>
         </div>
-        <nav className="tabs" aria-label="Primary views">
-          {TABS.map((t) => (
-            <button key={t.id} className="tab" type="button" aria-current={view === t.id} onClick={() => setView(t.id)}>
-              {t.label}
-            </button>
-          ))}
-        </nav>
+        <span className="view-title">{VIEW_TITLES[view]}</span>
         <div className="topbar-right">
           <BridgeStatus />
           <HealthChip />
+          <button className="btn icon controls-toggle" type="button" aria-label="Toggle controls" onClick={() => setRailOpen((v) => !v)}>
+            {Icon.gear({ size: 18 })}
+          </button>
         </div>
       </header>
       <div className="workspace">
+        <NavRail view={view} setView={(v) => { setView(v); setRailOpen(false); }} onSettings={() => setRailOpen((v) => !v)} />
         <div className="main-pane">
           {view === 'recipe' ? <RecipeView />
             : view === 'graph' ? <GraphView />
             : view === 'shelf' ? <ModelShelf />
             : <Gallery />}
         </div>
-        <SideRail />
+        {railOpen ? <div className="rail-scrim" onClick={() => setRailOpen(false)} /> : null}
+        <SideRail open={railOpen} onClose={() => setRailOpen(false)} />
       </div>
     </div>
   );

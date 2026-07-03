@@ -115,7 +115,54 @@ export const Icon = {
       </>,
       p,
     ),
+  home: (p?: IconProps) => svg(<path d="M4 11 12 4l8 7M6 10v10h12V10" />, p),
+  graph: (p?: IconProps) =>
+    svg(
+      <>
+        <circle cx="6" cy="6" r="2.4" />
+        <circle cx="18" cy="9" r="2.4" />
+        <circle cx="9" cy="18" r="2.4" />
+        <path d="M8 7l8 1.5M7.5 15.8 16.5 10.5" />
+      </>,
+      p,
+    ),
+  image: (p?: IconProps) =>
+    svg(
+      <>
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <circle cx="9" cy="9" r="1.6" />
+        <path d="m5 17 4-4 4 4 3-3 3 3" />
+      </>,
+      p,
+    ),
+  gear: (p?: IconProps) =>
+    svg(
+      <>
+        <circle cx="12" cy="12" r="3.2" />
+        <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
+      </>,
+      p,
+    ),
 };
+
+/** Glowing LumenDeck brand mark — two overlapping "deck" cards with a lit lens. */
+export function BrandMark({ size = 26 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true" className="brand-mark">
+      <defs>
+        <linearGradient id="ld-card" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="var(--md-primary-light)" />
+          <stop offset="1" stopColor="var(--md-primary)" />
+        </linearGradient>
+      </defs>
+      <rect x="6" y="9" width="14" height="18" rx="3.5" transform="rotate(-10 13 18)"
+        fill="var(--md-secondary)" opacity="0.9" />
+      <rect x="12" y="6" width="14" height="18" rx="3.5" transform="rotate(6 19 15)" fill="url(#ld-card)" />
+      <circle cx="19" cy="15" r="3.4" fill="var(--md-bg)" />
+      <circle cx="19" cy="15" r="1.9" fill="var(--md-success)" />
+    </svg>
+  );
+}
 
 const CAPSULE_PATHS: Record<CapsuleKind, React.ReactNode> = {
   prompt: <path d="M4 5h16v11H9l-5 4V5z" />,

@@ -76,11 +76,13 @@ input[type='range'] {
 .btn:active { transform: scale(0.98); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 .btn.primary {
-  background: linear-gradient(135deg, rgba(52, 214, 244, 0.18), rgba(124, 58, 237, 0.22));
-  border-color: rgba(52, 214, 244, 0.5);
+  background: var(--md-secondary);
+  border-color: transparent;
+  color: var(--md-on-secondary);
+  font-weight: 600;
 }
-.btn.primary:hover:not(:disabled) { box-shadow: var(--glow-accent); }
-.btn.danger { border-color: rgba(255, 107, 107, 0.5); color: var(--ld-danger); }
+.btn.primary:hover:not(:disabled) { background: #ff9a24; box-shadow: var(--glow-hero); }
+.btn.danger { border-color: rgba(255, 92, 92, 0.5); color: var(--ld-danger); }
 .btn.icon { padding: 7px; }
 
 .chip {
