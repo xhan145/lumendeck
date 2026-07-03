@@ -106,6 +106,7 @@ interface StudioState {
   probeBridge(): Promise<void>;
   refreshShelfFromBridge(): Promise<void>;
   refreshBridgeModelStatus(): Promise<void>;
+  installBridgeRuntime(): Promise<void>;
   downloadBridgeModel(): Promise<void>;
   enqueueRender(): Promise<void>;
   removeGalleryItem(id: string): void;
@@ -388,7 +389,30 @@ export const useStudio = create<StudioState>((set, get) => {
           bridgeModelStatus,
           bridgeModelBusy: false,
           bridgeModelError: null,
-          backendSettings: sanitizeBackendSettings({ ...get().backendSettings, bridgeRenderer: 'diffusers' }),
+          backendSettings: sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge', bridgeRenderer: 'diffusers' }),
+          adapterId: 'bridge',
+          turboBackendId: settingsBackendToTurboBackend('bridge'),
+        });
+      } catch (err) {
+        const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        set({
+          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelBusy: false,
+          bridgeModelError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+
+    installBridgeRuntime: async () => {
+      set({ bridgeModelBusy: true, bridgeModelError: null });
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelStatus = await httpAdapter.installDiffusersRuntime();
+        set({
+          bridgeModelStatus,
+          bridgeModelBusy: false,
+          bridgeModelError: null,
+          backendSettings: sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge', bridgeRenderer: 'diffusers' }),
           adapterId: 'bridge',
           turboBackendId: settingsBackendToTurboBackend('bridge'),
         });

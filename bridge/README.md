@@ -20,6 +20,7 @@ numpy, deterministic and reproducible from a seed, so it runs anywhere. An optio
 | GET    | `/health`             | `{ "status":"ok", "adapter":"procedural", "diffusers":bool, "model":... }` |
 | GET    | `/models`             | `ModelAsset[]` - local scan or demo catalog                              |
 | GET    | `/diffusers/status`   | Diffusers dependency, cache, device, and model readiness                  |
+| POST   | `/diffusers/install`  | Creates managed runtime, installs CPU PyTorch/Diffusers, downloads model  |
 | POST   | `/diffusers/download` | Downloads/loads the configured Diffusers model into the HF cache          |
 | POST   | `/generate`           | `{ image_base64, seed }` - body may set `renderer` (see below)            |
 
@@ -54,16 +55,27 @@ python bridge/build_sidecar.py
 
 ## Enable real diffusion (SD-Turbo)
 
-Install the optional packages on the bridge host:
+Use **Install runtime + model** in the app's Backend panel. The bridge will:
+
+1. Find a compatible Python 3.10-3.13 install (Python 3.12 recommended).
+2. Create an app-local venv at `%LOCALAPPDATA%\LumenDeck\diffusers-runtime`.
+3. Install CPU PyTorch, Diffusers, Transformers, Accelerate, Safetensors, and Kornia.
+4. Download/load `stabilityai/sd-turbo`.
+
+You can point the installer at a specific Python with `LUMENDECK_PYTHON`, or choose a different venv
+location with `LUMENDECK_DIFFUSERS_VENV`.
+
+Manual equivalent:
 
 ```bash
-python -m pip install torch diffusers transformers accelerate
+python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia
 ```
 
 With those present, `/health` reports `"diffusers": true`. The app's Backend panel can call:
 
 ```text
 GET  /diffusers/status
+POST /diffusers/install
 POST /diffusers/download
 ```
 

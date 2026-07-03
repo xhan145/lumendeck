@@ -4,6 +4,7 @@ Exposes the same contract as the old FastAPI bridge:
   GET  /health   -> {"status":"ok","adapter":"procedural","diffusers":bool}
   GET  /models   -> ModelAsset[]
   GET  /diffusers/status -> Diffusers dependency/model status
+  POST /diffusers/install -> install managed Diffusers runtime + model
   POST /diffusers/download -> download/load the configured Diffusers model
   POST /generate -> {"image_base64": "...", "seed": int}
 
@@ -139,6 +140,15 @@ def build_response(method: str, path: str, body: bytes):
             return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
         try:
             return 200, headers, json.dumps(diffusers_backend.download_model()).encode()
+        except Exception as exc:
+            return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
+
+    if method == "POST" and path == "/diffusers/install":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_DIFFUSERS_MODULE:
+            return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
+        try:
+            return 200, headers, json.dumps(diffusers_backend.install_runtime()).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
 
