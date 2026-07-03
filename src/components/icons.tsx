@@ -1,0 +1,149 @@
+import type React from 'react';
+import type { CapsuleKind } from '../core/types';
+
+interface IconProps {
+  size?: number;
+  className?: string;
+}
+
+function svg(path: React.ReactNode, { size = 16, className }: IconProps = {}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      {path}
+    </svg>
+  );
+}
+
+export const Icon = {
+  logo: (p?: IconProps) =>
+    svg(
+      <>
+        <rect x="3" y="5" width="13" height="16" rx="2" />
+        <rect x="8" y="3" width="13" height="16" rx="2" fill="rgba(52,214,244,0.15)" />
+        <circle cx="14.5" cy="11" r="3" />
+        <path d="M14.5 8v-1.5M14.5 15.5V14M11.5 11H10M19 11h-1.5" />
+      </>,
+      p,
+    ),
+  play: (p?: IconProps) => svg(<path d="M7 5v14l12-7z" fill="currentColor" stroke="none" />, p),
+  dice: (p?: IconProps) =>
+    svg(
+      <>
+        <rect x="4" y="4" width="16" height="16" rx="3" />
+        <circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none" />
+        <circle cx="15" cy="15" r="1.2" fill="currentColor" stroke="none" />
+        <circle cx="15" cy="9" r="1.2" fill="currentColor" stroke="none" />
+        <circle cx="9" cy="15" r="1.2" fill="currentColor" stroke="none" />
+      </>,
+      p,
+    ),
+  warning: (p?: IconProps) =>
+    svg(
+      <>
+        <path d="M12 3 2.5 20h19L12 3z" />
+        <path d="M12 10v4" />
+        <circle cx="12" cy="17" r="0.8" fill="currentColor" stroke="none" />
+      </>,
+      p,
+    ),
+  error: (p?: IconProps) =>
+    svg(
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M9 9l6 6M15 9l-6 6" />
+      </>,
+      p,
+    ),
+  ok: (p?: IconProps) =>
+    svg(
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="m8.5 12.5 2.5 2.5 5-6" />
+      </>,
+      p,
+    ),
+  plus: (p?: IconProps) => svg(<path d="M12 5v14M5 12h14" />, p),
+  trash: (p?: IconProps) =>
+    svg(
+      <>
+        <path d="M4 7h16M10 11v6M14 11v6" />
+        <path d="M6 7l1 13h10l1-13M9 7V4h6v3" />
+      </>,
+      p,
+    ),
+  download: (p?: IconProps) => svg(<path d="M12 4v11m0 0 4-4m-4 4-4-4M4 19h16" />, p),
+  close: (p?: IconProps) => svg(<path d="M6 6l12 12M18 6 6 18" />, p),
+  restore: (p?: IconProps) =>
+    svg(<path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />, p),
+  save: (p?: IconProps) =>
+    svg(
+      <>
+        <path d="M5 4h11l3 3v13H5z" />
+        <path d="M8 4v5h7V4M8 20v-6h8v6" />
+      </>,
+      p,
+    ),
+  bolt: (p?: IconProps) => svg(<path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />, p),
+};
+
+const CAPSULE_PATHS: Record<CapsuleKind, React.ReactNode> = {
+  prompt: <path d="M4 5h16v11H9l-5 4V5z" />,
+  model: (
+    <>
+      <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3z" />
+      <path d="M4 7.5 12 12l8-4.5M12 12v9" />
+    </>
+  ),
+  loraRack: (
+    <>
+      <path d="M4 6h16M4 12h16M4 18h16" />
+      <circle cx="9" cy="6" r="2" fill="var(--ld-bg)" />
+      <circle cx="15" cy="12" r="2" fill="var(--ld-bg)" />
+      <circle cx="7" cy="18" r="2" fill="var(--ld-bg)" />
+    </>
+  ),
+  control: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 4v4M12 16v4M4 12h4M16 12h4" />
+    </>
+  ),
+  sampler: <path d="M3 17c3 0 3-10 6-10s3 10 6 10 3-10 6-10" />,
+  canvas: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="m4 15 4-4 5 5 3-3 4 4" />
+      <circle cx="9.5" cy="8.5" r="1.4" />
+    </>
+  ),
+  queue: (
+    <>
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <path d="M16.5 13v7M13 16.5h7" />
+    </>
+  ),
+  export: <path d="M12 15V3m0 0 4 4m-4-4L8 7M4 13v6h16v-6" />,
+  manifest: (
+    <>
+      <path d="M6 3h9l4 4v14H6z" />
+      <path d="M15 3v4h4M9 12h7M9 16h7" />
+    </>
+  ),
+};
+
+export function CapsuleIcon({ kind, size = 16 }: { kind: CapsuleKind; size?: number }) {
+  return svg(CAPSULE_PATHS[kind], { size });
+}

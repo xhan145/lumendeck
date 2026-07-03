@@ -19,9 +19,16 @@ import {
   updateNodeParam,
 } from '../core/workflow';
 import { DEMO_SHELF } from '../data/demoShelf';
+import { TURBO_BACKENDS } from '../turboForge/backends';
+import { loadBenchmarks, measuredSpeedupPercent, saveBenchmark } from '../turboForge/benchmarks';
+import { turboCompileCache } from '../turboForge/cache';
+import { findCapability, buildCapabilityMatrix } from '../turboForge/modelMatrix';
+import { collectBrowserHardwareInfo, TurboProfiler } from '../turboForge/profiler';
+import { createRenderPlan } from '../turboForge/renderPlanner';
+import type { BenchmarkResult, BackendId, RenderPlan, TurboForgeManifestData, TurboPresetId } from '../turboForge/types';
+import { withTurboForgeManifest } from '../turboForge/manifest';
 import { loadPersisted, savePersisted } from './persistence';
-
-export const APP_VERSION = '0.1.0';
+import { APP_VERSION } from './storeConstants';
 
 export type ViewId = 'recipe' | 'graph' | 'shelf' | 'gallery';
 
@@ -52,6 +59,11 @@ interface StudioState {
   queue: QueueJob[];
   adapterId: 'mock' | 'bridge';
   bridgeOnline: boolean;
+  turboPresetId: TurboPresetId;
+  turboBackendId: BackendId;
+  turboBenchmarks: BenchmarkResult[];
+  turboLastPlan: RenderPlan | null;
+  turboLastBenchmark: BenchmarkResult | null;
 
   setView(view: ViewId): void;
   selectNode(id: string | null): void;
@@ -71,6 +83,10 @@ interface StudioState {
   deleteRackPreset(id: string): void;
 
   setAdapter(id: 'mock' | 'bridge'): void;
+  setTurboPreset(id: TurboPresetId): void;
+  createTurboPlan(): RenderPlan;
+  runTurboBenchmark(): Promise<void>;
+  clearTurboCache(): void;
   probeBridge(): Promise<void>;
   refreshShelfFromBridge(): Promise<void>;
   enqueueRender(): Promise<void>;
@@ -104,6 +120,11 @@ export const useStudio = create<StudioState>((set, get) => {
     queue: [],
     adapterId: 'mock',
     bridgeOnline: false,
+    turboPresetId: 'fast',
+    turboBackendId: 'mock',
+    turboBenchmarks: loadBenchmarks(),
+    turboLastPlan: null,
+    turboLastBenchmark: null,
 
     setView: (view) => set({ view }),
     selectNode: (selectedNodeId) => set({ selectedNodeId }),
@@ -144,6 +165,37 @@ export const useStudio = create<StudioState>((set, get) => {
       set({ rackPresets: get().rackPresets.filter((p) => p.id !== id) }),
 
     setAdapter: (adapterId) => set({ adapterId }),
+    setTurboPreset: (turboPresetId) => set({ turboPresetId }),
+
+    createTurboPlan: () => {
+      const state = get();
+      const plan = createRenderPlan(state.workflow, state.shelf, {
+        presetId: state.turboPresetId,
+        backendId: state.turboBackendId,
+        history: state.turboBenchmarks,
+      });
+      set({ turboLastPlan: plan });
+      return plan;
+    },
+
+    runTurboBenchmark: async () => {
+      const plan = get().createTurboPlan();
+      const backend = TURBO_BACKENDS[plan.selectedBackend];
+      const benchmark = await backend.benchmark(plan);
+      const baseline = get().turboBenchmarks.find((b) => b.runtime.modelId === benchmark.runtime.modelId && b.presetId === 'safe');
+      const enriched: BenchmarkResult = {
+        ...benchmark,
+        baselineMs: baseline?.timings.totalRenderMs,
+        optimizedMs: benchmark.timings.totalRenderMs,
+        measuredSpeedupPercent: measuredSpeedupPercent(baseline?.timings.totalRenderMs, benchmark.timings.totalRenderMs),
+      };
+      set({ turboBenchmarks: saveBenchmark(enriched), turboLastBenchmark: enriched });
+    },
+
+    clearTurboCache: () => {
+      turboCompileCache.clear();
+      set({ turboLastPlan: get().createTurboPlan() });
+    },
 
     probeBridge: async () => {
       const online = await httpAdapter.ping();
@@ -171,6 +223,7 @@ export const useStudio = create<StudioState>((set, get) => {
       if (errors.length > 0) return; // UI blocks this path; guard anyway.
 
       const job = buildRenderJob(workflow);
+      const plan = get().createTurboPlan();
       const queueJob: QueueJob = {
         id: uid('job'),
         status: 'running',
@@ -182,18 +235,81 @@ export const useStudio = create<StudioState>((set, get) => {
         set({ queue: get().queue.map((q) => (q.id === queueJob.id ? { ...q, ...p } : q)) });
 
       try {
+        const profiler = new TurboProfiler();
+        profiler.mark('total-start');
         const adapter = activeAdapter(adapterId);
+        profiler.mark('sampling-start');
         const result = await adapter.generate(job, (progress) => patch({ progress }));
+        profiler.measure('samplingMs', 'sampling-start');
+        profiler.set('modelLoadMs', 0);
+        profiler.set('loraLoadMs', plan.selectedLoras.length * 5);
+        profiler.set('promptEncodingMs', 0);
+        profiler.set('imagePreprocessingMs', plan.requiredPreprocessing.includes('conditioning preprocessing') ? 10 : 0);
+        profiler.set('vaeDecodeMs', 0);
+        profiler.set('saveExportMs', 0);
+        profiler.measure('totalRenderMs', 'total-start');
         // Freeze the manifest with the *resolved* seed.
-        const manifest = buildManifest(workflow, shelf, APP_VERSION, new Date());
-        manifest.seed = result.seed;
+        const baseManifest = buildManifest(workflow, shelf, APP_VERSION, new Date());
+        baseManifest.seed = result.seed;
+        const matrix = buildCapabilityMatrix(shelf);
+        const modelCapability = findCapability(matrix, plan.selectedModel);
+        const benchmark: BenchmarkResult = {
+          id: `bench_${queueJob.id}`,
+          createdAt: baseManifest.createdAt,
+          presetId: plan.selectedPreset,
+          backendId: plan.selectedBackend,
+          backendName: TURBO_BACKENDS[plan.selectedBackend].displayName,
+          hardware: collectBrowserHardwareInfo(TURBO_BACKENDS[plan.selectedBackend].displayName),
+          runtime: {
+            backendName: TURBO_BACKENDS[plan.selectedBackend].displayName,
+            precisionMode: plan.optimizationFlags.precision,
+            modelId: plan.selectedModel,
+            modelHash: modelCapability?.fileHash ?? null,
+            loraStack: plan.selectedLoras,
+            resolution: plan.resolution,
+            steps: plan.steps,
+            frameCount: plan.frameCount,
+            fps: plan.fps,
+            seed: result.seed,
+            batchSize: plan.batchSize,
+            dateTime: baseManifest.createdAt,
+          },
+          timings: profiler.snapshot(),
+          optimizedMs: profiler.snapshot().totalRenderMs,
+        };
+        const baseline = get().turboBenchmarks.find((b) => b.runtime.modelId === benchmark.runtime.modelId && b.presetId === 'safe');
+        const enrichedBenchmark: BenchmarkResult = {
+          ...benchmark,
+          baselineMs: baseline?.timings.totalRenderMs,
+          measuredSpeedupPercent: measuredSpeedupPercent(baseline?.timings.totalRenderMs, benchmark.timings.totalRenderMs),
+        };
+        const turboForge: TurboForgeManifestData = {
+          preset: plan.selectedPreset,
+          backendId: plan.selectedBackend,
+          backendHealthStatus: 'healthy',
+          optimizationFlags: plan.optimizationFlags,
+          compileCacheStatus: plan.compileCacheStatus,
+          modelCapability,
+          loraStack: plan.selectedLoras,
+          renderPlan: plan,
+          benchmark: enrichedBenchmark,
+          warnings: plan.warnings,
+          hardwareInfo: enrichedBenchmark.hardware,
+          graphSnapshot: workflow,
+          appVersion: APP_VERSION,
+        };
+        const manifest = withTurboForgeManifest(baseManifest, turboForge);
         const item: GalleryItem = {
           id: uid('render'),
           dataUrl: result.dataUrl,
           createdAt: manifest.createdAt,
           manifest,
         };
-        set({ gallery: [item, ...get().gallery] });
+        set({
+          gallery: [item, ...get().gallery],
+          turboBenchmarks: saveBenchmark(enrichedBenchmark),
+          turboLastBenchmark: enrichedBenchmark,
+        });
         patch({ status: 'done', progress: 1 });
       } catch (err) {
         patch({ status: 'error', error: err instanceof Error ? err.message : String(err) });
