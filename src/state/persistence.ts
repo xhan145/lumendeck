@@ -17,9 +17,15 @@ export function loadPersisted(): Partial<PersistedState> {
     const raw = localStorage.getItem(KEY);
     if (!raw) return {};
     const data = JSON.parse(raw) as Partial<PersistedState>;
-    if (data.workflow && data.workflow.schemaVersion !== 1) {
-      console.warn('LumenDeck: unknown workflow schema, starting fresh.');
-      return {};
+    // Drop a persisted workflow that is the wrong version OR structurally invalid,
+    // so stale/old saved state can never crash startup (blank page).
+    if (data.workflow) {
+      const wf = data.workflow as Partial<Workflow>;
+      const valid = wf.schemaVersion === 1 && Array.isArray(wf.nodes) && Array.isArray(wf.edges);
+      if (!valid) {
+        console.warn('LumenDeck: incompatible saved workflow, starting fresh.');
+        delete (data as Partial<PersistedState>).workflow;
+      }
     }
     return data;
   } catch (err) {
