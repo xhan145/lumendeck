@@ -36,6 +36,13 @@ def test_options_preflight_cors():
     assert status == 204 and "Access-Control-Allow-Origin" in headers
 
 
+def test_models_includes_real_diffusers_entry():
+    status, _headers, body = build_response("GET", "/models", b"")
+    assert status == 200
+    ids = [a["id"] for a in json.loads(body)]
+    assert "diffusers-real" in ids
+
+
 def test_diffusers_status_returns_model_status():
     status, _headers, body = build_response("GET", "/diffusers/status", b"")
     assert status == 200
@@ -101,6 +108,7 @@ if __name__ == "__main__":
     test_generate_returns_png_base64()
     test_unknown_route_404()
     test_options_preflight_cors()
+    test_models_includes_real_diffusers_entry()
     test_diffusers_status_returns_model_status()
     test_diffusers_download_uses_backend_without_real_weights()
     test_diffusers_download_failure_includes_status()

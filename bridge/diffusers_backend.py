@@ -56,10 +56,19 @@ def _cache_dir() -> str:
 def _model_cached() -> bool | None:
     try:
         from huggingface_hub import try_to_load_from_cache
-        from huggingface_hub.utils import _CACHED_NO_EXIST
+
+        # The "known to not exist" sentinel moved between huggingface_hub versions;
+        # import it defensively so cache detection never crashes to None.
+        sentinel = object()
+        for mod in ("huggingface_hub.constants", "huggingface_hub.utils", "huggingface_hub"):
+            try:
+                sentinel = __import__(mod, fromlist=["_CACHED_NO_EXIST"])._CACHED_NO_EXIST
+                break
+            except Exception:
+                continue
 
         cached = try_to_load_from_cache(_MODEL_ID, "model_index.json")
-        if cached is None or cached is _CACHED_NO_EXIST:
+        if cached is None or cached is sentinel:
             return False
         return True
     except Exception:

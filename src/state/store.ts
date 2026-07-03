@@ -124,6 +124,24 @@ let userPinnedBackend = false;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Prefer a real (diffusers) installed checkpoint, else the first installed one. */
+function pickCheckpoint(shelf: ModelAsset[]): string {
+  const installed = shelf.filter((a) => a.assetType === 'checkpoint' && a.installed);
+  const real = installed.find((a) => a.tags?.includes('real') || a.tags?.includes('diffusers'));
+  return (real ?? installed[0])?.id ?? '';
+}
+
+/** Point the Model capsule at a real checkpoint when it has none (or an invalid one). */
+function applyAutoCheckpoint(wf: Workflow, shelf: ModelAsset[]): Workflow {
+  const model = findNode(wf, 'model');
+  if (!model) return wf;
+  const current = String(model.params.assetId ?? '');
+  const valid = current && shelf.some((a) => a.id === current && a.assetType === 'checkpoint' && a.installed);
+  if (valid) return wf;
+  const pick = pickCheckpoint(shelf);
+  return pick ? updateNodeParam(wf, model.id, 'assetId', pick) : wf;
+}
+
 function activeAdapter(settings: BackendSettings): BackendAdapter {
   if (settings.selectedBackend === 'bridge') {
     httpAdapter.setBaseUrl(settings.bridgeUrl);
@@ -138,7 +156,7 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
 }
 
 const persisted = loadPersisted();
-const initialWorkflow = persisted.workflow ?? createDefaultWorkflow();
+const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 
 export const useStudio = create<StudioState>((set, get) => {
@@ -322,7 +340,8 @@ export const useStudio = create<StudioState>((set, get) => {
       try {
         const shelf = await httpAdapter.listModels();
         if (Array.isArray(shelf) && shelf.length > 0) {
-          set({ shelf, shelfSource: 'bridge', health: checkHealth(get().workflow, shelf) });
+          const workflow = applyAutoCheckpoint(get().workflow, shelf);
+          set({ shelf, shelfSource: 'bridge', workflow, health: checkHealth(workflow, shelf) });
         }
       } catch (err) {
         console.warn('LumenDeck: bridge shelf refresh failed', err);

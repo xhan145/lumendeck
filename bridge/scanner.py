@@ -95,10 +95,40 @@ def demo_catalog() -> list[dict]:
     ]
 
 
+def candidate_dirs() -> list[str]:
+    """Model folders to auto-scan, most specific first.
+
+    LUMENDECK_MODEL_DIR wins; otherwise probe common local installs (ComfyUI,
+    A1111/Forge, InvokeAI, Fooocus) so real checkpoints show up with no config.
+    """
+    home = os.path.expanduser("~")
+    dirs = [os.environ.get("LUMENDECK_MODEL_DIR", "").strip()]
+    for rel in (
+        ("ComfyUI", "models"),
+        ("comfyui", "models"),
+        ("stable-diffusion-webui", "models", "Stable-diffusion"),
+        ("stable-diffusion-webui-forge", "models", "Stable-diffusion"),
+        ("InvokeAI", "models"),
+        ("Fooocus", "models"),
+    ):
+        dirs.append(os.path.join(home, *rel))
+    dirs += [
+        r"C:\ComfyUI\models",
+        r"C:\stable-diffusion-webui\models\Stable-diffusion",
+    ]
+    return [d for d in dirs if d]
+
+
+def discover_model_dir() -> str | None:
+    """First candidate directory that exists and holds at least one model file."""
+    for d in candidate_dirs():
+        if os.path.isdir(d) and scan_models(d):
+            return d
+    return None
+
+
 def get_shelf() -> list[dict]:
-    root = os.environ.get("LUMENDECK_MODEL_DIR", "").strip()
-    if root and os.path.isdir(root):
-        scanned = scan_models(root)
-        if scanned:
-            return scanned
+    found = discover_model_dir()
+    if found:
+        return scan_models(found)
     return demo_catalog()

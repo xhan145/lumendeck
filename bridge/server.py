@@ -54,6 +54,44 @@ def _diffusers_status() -> dict:
     return diffusers_backend.model_status()
 
 
+def _diffusers_shelf_entry() -> dict:
+    """The real Diffusers model, surfaced as a selectable checkpoint on the shelf.
+
+    Marked installed only when it can actually render (deps present AND weights
+    cached), so the app auto-selects it only when real output will succeed.
+    """
+    status = _diffusers_status()
+    ready = bool(status.get("dependenciesReady"))
+    cached = status.get("modelCached")
+    # Usable when deps are present and the weights are not known-missing. If cache
+    # state is unknown (None), stay optimistic — the first render downloads on demand.
+    installed = ready and cached is not False
+    model_id = status.get("modelId", "stabilityai/sd-turbo")
+    return {
+        "id": "diffusers-real",
+        "assetType": "checkpoint",
+        "name": f"{model_id.split('/')[-1]} (real diffusion)",
+        "family": "SDXL",
+        "path": model_id,
+        "hash": "diffusers",
+        "sizeMB": 0,
+        "tags": ["real", "diffusers", "turbo"],
+        "compatibility": status.get("message", "Real Diffusers text-to-image model."),
+        "license": f"{model_id} — see model card",
+        "installed": installed,
+    }
+
+
+def _shelf_with_real() -> list:
+    """Local scan (or demo) plus the real Diffusers model; real model first when usable."""
+    shelf = list(get_shelf())
+    entry = _diffusers_shelf_entry()
+    if entry["installed"]:
+        return [entry, *shelf]
+    shelf.append(entry)
+    return shelf
+
+
 def _procedural(job: dict) -> dict:
     seed = int(job.get("seed", 0))
     if seed < 0:
@@ -83,7 +121,7 @@ def build_response(method: str, path: str, body: bytes):
 
     if method == "GET" and path == "/models":
         headers["Content-Type"] = "application/json"
-        return 200, headers, json.dumps(get_shelf()).encode()
+        return 200, headers, json.dumps(_shelf_with_real()).encode()
 
     if method == "GET" and path == "/diffusers/status":
         headers["Content-Type"] = "application/json"
