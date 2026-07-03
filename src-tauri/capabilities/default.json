@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Default capabilities for the LumenDeck main window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "name": "binaries/lumendeck-bridge", "sidecar": true, "args": ["--port", "8787"] }]
+    }
+  ]
 }

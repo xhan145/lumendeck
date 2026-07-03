@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": ["msi"],
+    "externalBin": ["binaries/lumendeck-bridge"],
     "publisher": "LumenDeck",
     "category": "GraphicsAndDesign",
     "shortDescription": "Local-first node-native generative image studio",

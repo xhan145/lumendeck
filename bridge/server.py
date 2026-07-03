@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
@@ -109,6 +110,22 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def _watch_parent_via_stdin() -> None:
+    """Exit when the parent process closes our stdin pipe.
+
+    Tauri spawns the sidecar with a piped stdin; when the desktop app exits (cleanly
+    or by crash), that pipe closes and stdin hits EOF. This guarantees the sidecar
+    dies with its parent even through PyInstaller's onefile bootstrap grandchild.
+    Harmless in manual runs: an interactive tty never sends EOF.
+    """
+    try:
+        while sys.stdin.readline():
+            pass
+    except Exception:
+        pass
+    os._exit(0)
+
+
 def run(port: int) -> None:
     print(f"LumenDeck bridge on http://127.0.0.1:{port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
@@ -119,6 +136,10 @@ def main(argv=None) -> None:
     port = int(os.environ.get("PORT", "8787"))
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
+    # Only arm the stdin watchdog when stdin is a pipe (i.e. launched by Tauri),
+    # never for an interactive terminal.
+    if not sys.stdin.isatty():
+        threading.Thread(target=_watch_parent_via_stdin, daemon=True).start()
     run(port)
 
 
