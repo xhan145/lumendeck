@@ -3,6 +3,8 @@
 Exposes the same contract as the old FastAPI bridge:
   GET  /health   -> {"status":"ok","adapter":"procedural","diffusers":bool}
   GET  /models   -> ModelAsset[]
+  GET  /diffusers/status -> Diffusers dependency/model status
+  POST /diffusers/download -> download/load the configured Diffusers model
   POST /generate -> {"image_base64": "...", "seed": int}
 
 `build_response` is a pure function so it can be unit-tested without binding a socket.
@@ -35,6 +37,23 @@ def _diffusers_available() -> bool:
     return _HAS_DIFFUSERS_MODULE and diffusers_backend.is_available()
 
 
+def _diffusers_status() -> dict:
+    if not _HAS_DIFFUSERS_MODULE:
+        return {
+            "modelId": "stabilityai/sd-turbo",
+            "dependenciesReady": False,
+            "loaded": False,
+            "modelCached": None,
+            "device": "unknown",
+            "cuda": False,
+            "cacheDir": "",
+            "installCommand": "python -m pip install torch diffusers transformers accelerate",
+            "message": "Diffusers bridge module is not available in this build.",
+            "dependencies": {"ready": False},
+        }
+    return diffusers_backend.model_status()
+
+
 def _procedural(job: dict) -> dict:
     seed = int(job.get("seed", 0))
     if seed < 0:
@@ -59,12 +78,25 @@ def build_response(method: str, path: str, body: bytes):
 
     if method == "GET" and path == "/health":
         headers["Content-Type"] = "application/json"
-        payload = {"status": "ok", "adapter": "procedural", "diffusers": _diffusers_available()}
+        payload = {"status": "ok", "adapter": "procedural", "diffusers": _diffusers_available(), "model": _diffusers_status()}
         return 200, headers, json.dumps(payload).encode()
 
     if method == "GET" and path == "/models":
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(get_shelf()).encode()
+
+    if method == "GET" and path == "/diffusers/status":
+        headers["Content-Type"] = "application/json"
+        return 200, headers, json.dumps(_diffusers_status()).encode()
+
+    if method == "POST" and path == "/diffusers/download":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_DIFFUSERS_MODULE:
+            return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
+        try:
+            return 200, headers, json.dumps(diffusers_backend.download_model()).encode()
+        except Exception as exc:
+            return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
 
     if method == "POST" and path == "/generate":
         headers["Content-Type"] = "application/json"

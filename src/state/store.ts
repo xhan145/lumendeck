@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { buildRenderJob, type BackendAdapter } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
-import { HttpAdapter } from '../bridge/httpAdapter';
+import { HttpAdapter, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
 import { checkHealth, type HealthIssue } from '../core/health';
 import { buildManifest, type ExportManifest } from '../core/manifest';
@@ -69,6 +69,9 @@ interface StudioState {
   queue: QueueJob[];
   adapterId: RenderBackendId;
   bridgeOnline: boolean;
+  bridgeModelStatus: BridgeModelStatus | null;
+  bridgeModelBusy: boolean;
+  bridgeModelError: string | null;
   backendSettings: BackendSettings;
   turboPresetId: TurboPresetId;
   turboBackendId: BackendId;
@@ -102,6 +105,8 @@ interface StudioState {
   clearTurboCache(): void;
   probeBridge(): Promise<void>;
   refreshShelfFromBridge(): Promise<void>;
+  refreshBridgeModelStatus(): Promise<void>;
+  downloadBridgeModel(): Promise<void>;
   enqueueRender(): Promise<void>;
   removeGalleryItem(id: string): void;
   restoreSnapshot(item: GalleryItem): void;
@@ -152,6 +157,9 @@ export const useStudio = create<StudioState>((set, get) => {
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
+    bridgeModelStatus: null,
+    bridgeModelBusy: false,
+    bridgeModelError: null,
     backendSettings: initialBackendSettings,
     turboPresetId: 'fast',
     turboBackendId: settingsBackendToTurboBackend(initialBackendSettings.selectedBackend),
@@ -235,6 +243,7 @@ export const useStudio = create<StudioState>((set, get) => {
         status = health.status;
         message = health.message;
       } else {
+        httpAdapter.setBaseUrl(state.backendSettings.bridgeUrl);
         ok = await httpAdapter.ping();
         status = ok ? 'healthy' : 'unavailable';
         message = ok ? 'Local Diffusers bridge is reachable.' : 'Local Diffusers bridge is offline at the configured bridge URL.';
@@ -251,6 +260,7 @@ export const useStudio = create<StudioState>((set, get) => {
         },
       });
       set({ backendSettings, bridgeOnline: ok });
+      if (ok && state.backendSettings.selectedBackend === 'bridge') void get().refreshBridgeModelStatus();
     },
     setTurboPreset: (turboPresetId) => set({ turboPresetId }),
 
@@ -297,6 +307,9 @@ export const useStudio = create<StudioState>((set, get) => {
       if (online && get().shelfSource === 'demo') {
         await get().refreshShelfFromBridge();
       }
+      if (online) {
+        await get().refreshBridgeModelStatus();
+      }
       // Auto-select the local bridge on first boot when the user hasn't chosen a backend.
       if (online && !userPinnedBackend && get().adapterId === 'mock') {
         const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge' });
@@ -313,6 +326,42 @@ export const useStudio = create<StudioState>((set, get) => {
         }
       } catch (err) {
         console.warn('LumenDeck: bridge shelf refresh failed', err);
+      }
+    },
+
+    refreshBridgeModelStatus: async () => {
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelStatus = await httpAdapter.diffusersStatus();
+        set({ bridgeModelStatus, bridgeModelError: null });
+      } catch (err) {
+        set({
+          bridgeModelError: err instanceof Error ? err.message : String(err),
+          bridgeModelStatus: null,
+        });
+      }
+    },
+
+    downloadBridgeModel: async () => {
+      set({ bridgeModelBusy: true, bridgeModelError: null });
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelStatus = await httpAdapter.downloadDiffusersModel();
+        set({
+          bridgeModelStatus,
+          bridgeModelBusy: false,
+          bridgeModelError: null,
+          backendSettings: sanitizeBackendSettings({ ...get().backendSettings, bridgeRenderer: 'diffusers' }),
+          adapterId: 'bridge',
+          turboBackendId: settingsBackendToTurboBackend('bridge'),
+        });
+      } catch (err) {
+        const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        set({
+          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelBusy: false,
+          bridgeModelError: err instanceof Error ? err.message : String(err),
+        });
       }
     },
 

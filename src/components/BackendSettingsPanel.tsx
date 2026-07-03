@@ -3,8 +3,27 @@ import { useStudio } from '../state/store';
 import { Icon } from './icons';
 
 export function BackendSettingsPanel() {
-  const { backendSettings, setAdapter, updateBackendSettings, testSelectedBackend } = useStudio();
+  const {
+    backendSettings,
+    bridgeModelStatus,
+    bridgeModelBusy,
+    bridgeModelError,
+    setAdapter,
+    updateBackendSettings,
+    testSelectedBackend,
+    refreshBridgeModelStatus,
+    downloadBridgeModel,
+  } = useStudio();
   const health = backendSettings.lastHealth;
+  const modelState = bridgeModelStatus
+    ? bridgeModelStatus.loaded
+      ? 'loaded'
+      : bridgeModelStatus.modelCached
+        ? 'downloaded'
+        : bridgeModelStatus.modelCached === false
+          ? 'not downloaded'
+          : 'unknown cache'
+    : 'unknown';
 
   return (
     <section className="rail-section backend-panel" aria-labelledby="backend-settings-title">
@@ -56,6 +75,35 @@ export function BackendSettingsPanel() {
             </select>
             <span className="field-help">Diffusers downloads a model on first use; procedural is instant and offline.</span>
           </label>
+          <div className="backend-model-panel">
+            <div className="backend-model-head">
+              <span>
+                <span className="field-label">Real photo model</span>
+                <span className="field-help">{bridgeModelStatus?.modelId ?? 'stabilityai/sd-turbo'}</span>
+              </span>
+              <span className={`chip status-${bridgeModelStatus?.dependenciesReady ? 'healthy' : 'degraded'}`}>
+                {modelState}
+              </span>
+            </div>
+            <div className="backend-model-meta">
+              <span>Deps: {bridgeModelStatus?.dependenciesReady ? 'ready' : 'missing'}</span>
+              <span>Device: {bridgeModelStatus?.device ?? 'unknown'}</span>
+              <span>Cache: {bridgeModelStatus?.cacheDir ?? 'unknown'}</span>
+            </div>
+            <p className="field-help">{bridgeModelStatus?.message ?? 'Check the bridge to see whether SD-Turbo can render real photos.'}</p>
+            {bridgeModelStatus && !bridgeModelStatus.dependenciesReady ? (
+              <code className="backend-install-command">{bridgeModelStatus.installCommand}</code>
+            ) : null}
+            {bridgeModelError ? <p className="backend-model-error">{bridgeModelError}</p> : null}
+            <div className="turbo-actions">
+              <button className="btn" type="button" onClick={() => void refreshBridgeModelStatus()} disabled={bridgeModelBusy}>
+                {Icon.pulse()} Check model
+              </button>
+              <button className="btn primary" type="button" onClick={() => void downloadBridgeModel()} disabled={bridgeModelBusy}>
+                {Icon.download()} {bridgeModelBusy ? 'Downloading...' : 'Download model'}
+              </button>
+            </div>
+          </div>
         </>
       ) : null}
 

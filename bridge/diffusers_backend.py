@@ -1,25 +1,113 @@
-"""Optional real text-to-image via diffusers + SD-Turbo.
+"""Optional real text-to-image via Diffusers + SD-Turbo.
 
 Lazily imported; the bridge works fully without it. Weights download to the Hugging
-Face cache on first use. Guidance is 0 and steps are low (SD-Turbo is a distilled,
-few-step model), so it is usable — if slow — on CPU.
+Face cache when ``download_model`` or ``generate`` first loads the pipeline. Guidance
+is 0 and steps are low (SD-Turbo is a distilled, few-step model), so it is usable,
+if slow, on CPU.
 """
 from __future__ import annotations
 
 import base64
+import importlib.metadata
 import io
+import os
+from pathlib import Path
+from typing import Any
 
-_MODEL_ID = "stabilityai/sd-turbo"
+_MODEL_ID = os.environ.get("LUMENDECK_DIFFUSERS_MODEL", "stabilityai/sd-turbo")
+_INSTALL_COMMAND = "python -m pip install torch diffusers transformers accelerate"
 _pipe = None
 
 
-def is_available() -> bool:
+def model_id() -> str:
+    return _MODEL_ID
+
+
+def _module_info(module_name: str, package_name: str | None = None) -> dict[str, Any]:
+    package_name = package_name or module_name
     try:
-        import torch  # noqa: F401
-        import diffusers  # noqa: F401
+        __import__(module_name)
+        try:
+            version = importlib.metadata.version(package_name)
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        return {"installed": True, "version": version}
+    except Exception as exc:
+        return {"installed": False, "error": str(exc)}
+
+
+def _torch_device() -> tuple[str, bool]:
+    try:
+        import torch
+
+        cuda = bool(torch.cuda.is_available())
+        return ("cuda" if cuda else "cpu"), cuda
+    except Exception:
+        return "unknown", False
+
+
+def _cache_dir() -> str:
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return str(Path(hf_home))
+    return str(Path.home() / ".cache" / "huggingface")
+
+
+def _model_cached() -> bool | None:
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        from huggingface_hub.utils import _CACHED_NO_EXIST
+
+        cached = try_to_load_from_cache(_MODEL_ID, "model_index.json")
+        if cached is None or cached is _CACHED_NO_EXIST:
+            return False
         return True
     except Exception:
-        return False
+        return None
+
+
+def dependency_status() -> dict[str, Any]:
+    torch_info = _module_info("torch")
+    diffusers_info = _module_info("diffusers")
+    device, cuda = _torch_device()
+    return {
+        "torch": torch_info,
+        "diffusers": diffusers_info,
+        "ready": bool(torch_info["installed"] and diffusers_info["installed"]),
+        "device": device,
+        "cuda": cuda,
+        "installCommand": _INSTALL_COMMAND,
+    }
+
+
+def model_status() -> dict[str, Any]:
+    dependencies = dependency_status()
+    cached = _model_cached() if dependencies["ready"] else None
+    loaded = _pipe is not None
+    if not dependencies["ready"]:
+        message = "Install torch and diffusers before downloading the real photo model."
+    elif loaded:
+        message = "SD-Turbo is loaded and ready for real photo renders."
+    elif cached:
+        message = "SD-Turbo is downloaded. The first real render will load it into memory."
+    else:
+        message = "SD-Turbo is not downloaded yet."
+    return {
+        "modelId": _MODEL_ID,
+        "dependenciesReady": bool(dependencies["ready"]),
+        "loaded": loaded,
+        "modelCached": cached,
+        "device": dependencies["device"],
+        "cuda": dependencies["cuda"],
+        "cacheDir": _cache_dir(),
+        "installCommand": _INSTALL_COMMAND,
+        "message": message,
+        "dependencies": dependencies,
+    }
+
+
+def is_available() -> bool:
+    return bool(dependency_status()["ready"])
 
 
 def _load():
@@ -36,9 +124,17 @@ def _load():
     return pipe
 
 
+def download_model() -> dict[str, Any]:
+    if not is_available():
+        raise RuntimeError(f"diffusers/torch not installed on the bridge. Run: {_INSTALL_COMMAND}")
+    _load()
+    status = model_status()
+    return {**status, "message": "SD-Turbo downloaded and loaded for real photo renders."}
+
+
 def generate(job: dict) -> dict:
     if not is_available():
-        raise RuntimeError("diffusers/torch not installed on the bridge")
+        raise RuntimeError(f"diffusers/torch not installed on the bridge. Run: {_INSTALL_COMMAND}")
     import torch
 
     seed = int(job.get("seed", 0))

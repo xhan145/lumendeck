@@ -3,16 +3,33 @@ import type { BackendAdapter, RenderJob, RenderResult } from './adapter';
 
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8787';
 
+export interface BridgeModelStatus {
+  modelId: string;
+  dependenciesReady: boolean;
+  loaded: boolean;
+  modelCached: boolean | null;
+  device: string;
+  cuda: boolean;
+  cacheDir: string;
+  installCommand: string;
+  message: string;
+  dependencies?: Record<string, unknown>;
+}
+
 /**
- * Client for the local Python FastAPI render bridge (see bridge/README.md).
- * The bridge serves /health, /models (local scanner) and /generate.
+ * Client for the local Python render bridge (see bridge/README.md).
+ * The bridge serves /health, /models (local scanner), /generate, and optional
+ * Diffusers model-management endpoints.
  */
 export class HttpAdapter implements BackendAdapter {
   id = 'bridge';
-  label = 'Local bridge (FastAPI)';
+  label = 'Local bridge';
   private renderer: string = 'auto';
+  private base = DEFAULT_BRIDGE_URL;
 
-  constructor(private base: string = DEFAULT_BRIDGE_URL) {}
+  constructor(base: string = DEFAULT_BRIDGE_URL) {
+    this.setBaseUrl(base);
+  }
 
   setBaseUrl(url: string): void {
     this.base = url.trim().replace(/\/+$/, '') || DEFAULT_BRIDGE_URL;
@@ -36,6 +53,22 @@ export class HttpAdapter implements BackendAdapter {
     const res = await fetch(`${this.base}/models`);
     if (!res.ok) throw new Error(`Bridge /models failed: ${res.status}`);
     return (await res.json()) as ModelAsset[];
+  }
+
+  async diffusersStatus(): Promise<BridgeModelStatus> {
+    const res = await fetch(`${this.base}/diffusers/status`);
+    if (!res.ok) throw new Error(`Bridge /diffusers/status failed: ${res.status}`);
+    return (await res.json()) as BridgeModelStatus;
+  }
+
+  async downloadDiffusersModel(): Promise<BridgeModelStatus> {
+    const res = await fetch(`${this.base}/diffusers/download`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string; status?: BridgeModelStatus } | null;
+      const message = data?.error ?? `Bridge /diffusers/download failed: ${res.status}`;
+      throw Object.assign(new Error(message), { status: data?.status });
+    }
+    return (await res.json()) as BridgeModelStatus;
   }
 
   async generate(job: RenderJob, onProgress?: (p: number) => void): Promise<RenderResult> {
