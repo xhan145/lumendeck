@@ -94,12 +94,12 @@ successor to Disco Diffusion.
 - Multi-workflow tabs and graph import/export from a manifest file.
 # Unreleased
 
-- Added bridge model-management endpoints: `GET /diffusers/status` and `POST /diffusers/download`.
-  The app can now check Diffusers readiness and ask the bridge to download/load SD-Turbo for real
-  photo rendering instead of waiting until the first render attempt.
+- Added bridge model-management endpoints: `GET /diffusers/status`, `POST /diffusers/install`, and
+  `POST /diffusers/download`. The app can now create an app-local Diffusers runtime, install CPU
+  PyTorch/Diffusers, and download/load SD-Turbo for real photo rendering instead of waiting until the
+  first render attempt.
 - Added Backend panel controls for real-photo model status, dependency diagnostics, cache/device
-  details, and one-click SD-Turbo download. Successful downloads switch the bridge renderer to
-  `diffusers`.
+  details, and one-click runtime/model install. Successful installs or downloads switch the bridge
+  renderer to `diffusers`.
 - Verification note: endpoint and UI wiring are covered by tests without downloading real weights.
-  Actual SD-Turbo inference still requires the optional `torch`/`diffusers` stack and model download
-  on the target machine.
+  Actual SD-Turbo inference still requires the managed install/model download on the target machine.

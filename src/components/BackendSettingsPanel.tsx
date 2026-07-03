@@ -12,6 +12,7 @@ export function BackendSettingsPanel() {
     updateBackendSettings,
     testSelectedBackend,
     refreshBridgeModelStatus,
+    installBridgeRuntime,
     downloadBridgeModel,
   } = useStudio();
   const health = backendSettings.lastHealth;
@@ -89,17 +90,25 @@ export function BackendSettingsPanel() {
               <span>Deps: {bridgeModelStatus?.dependenciesReady ? 'ready' : 'missing'}</span>
               <span>Device: {bridgeModelStatus?.device ?? 'unknown'}</span>
               <span>Cache: {bridgeModelStatus?.cacheDir ?? 'unknown'}</span>
+              <span>Runtime: {bridgeModelStatus?.managedRuntime?.path ?? 'not checked'}</span>
             </div>
             <p className="field-help">{bridgeModelStatus?.message ?? 'Check the bridge to see whether SD-Turbo can render real photos.'}</p>
             {bridgeModelStatus && !bridgeModelStatus.dependenciesReady ? (
-              <code className="backend-install-command">{bridgeModelStatus.installCommand}</code>
+              <code className="backend-install-command">
+                {bridgeModelStatus.installable === false
+                  ? 'Install Python 3.12, then retry Install runtime + model.'
+                  : `Managed install: ${bridgeModelStatus.installCommand}`}
+              </code>
             ) : null}
             {bridgeModelError ? <p className="backend-model-error">{bridgeModelError}</p> : null}
             <div className="turbo-actions">
               <button className="btn" type="button" onClick={() => void refreshBridgeModelStatus()} disabled={bridgeModelBusy}>
                 {Icon.pulse()} Check model
               </button>
-              <button className="btn primary" type="button" onClick={() => void downloadBridgeModel()} disabled={bridgeModelBusy}>
+              <button className="btn primary" type="button" onClick={() => void installBridgeRuntime()} disabled={bridgeModelBusy}>
+                {Icon.download()} {bridgeModelBusy ? 'Installing...' : 'Install runtime + model'}
+              </button>
+              <button className="btn" type="button" onClick={() => void downloadBridgeModel()} disabled={bridgeModelBusy || !bridgeModelStatus?.dependenciesReady}>
                 {Icon.download()} {bridgeModelBusy ? 'Downloading...' : 'Download model'}
               </button>
             </div>

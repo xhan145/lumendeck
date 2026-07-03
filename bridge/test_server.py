@@ -102,6 +102,31 @@ def test_diffusers_download_failure_includes_status():
         server.diffusers_backend = old_backend
 
 
+def test_diffusers_install_uses_backend_without_real_install():
+    old_has = server._HAS_DIFFUSERS_MODULE
+    old_backend = server.diffusers_backend
+
+    class FakeDiffusers:
+        @staticmethod
+        def model_status():
+            return {"modelId": "fake/photo", "dependenciesReady": False, "loaded": False}
+
+        @staticmethod
+        def install_runtime():
+            return {"modelId": "fake/photo", "dependenciesReady": True, "loaded": True}
+
+    try:
+        server._HAS_DIFFUSERS_MODULE = True
+        server.diffusers_backend = FakeDiffusers
+        status, _headers, body = build_response("POST", "/diffusers/install", b"")
+        data = json.loads(body)
+        assert status == 200
+        assert data["modelId"] == "fake/photo" and data["loaded"] is True
+    finally:
+        server._HAS_DIFFUSERS_MODULE = old_has
+        server.diffusers_backend = old_backend
+
+
 if __name__ == "__main__":
     test_health_reports_procedural_and_diffusers_flag()
     test_models_returns_list()
@@ -112,4 +137,5 @@ if __name__ == "__main__":
     test_diffusers_status_returns_model_status()
     test_diffusers_download_uses_backend_without_real_weights()
     test_diffusers_download_failure_includes_status()
+    test_diffusers_install_uses_backend_without_real_install()
     print("bridge server: all checks passed")

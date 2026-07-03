@@ -11,7 +11,15 @@ const READY_STATUS: BridgeModelStatus = {
   device: 'cpu',
   cuda: false,
   cacheDir: 'C:/Users/example/.cache/huggingface',
-  installCommand: 'python -m pip install torch diffusers transformers accelerate',
+  installCommand: 'python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia',
+  installable: true,
+  managedRuntime: {
+    path: 'C:/Users/example/AppData/Local/LumenDeck/diffusers-runtime',
+    python: 'C:/Users/example/AppData/Local/LumenDeck/diffusers-runtime/Scripts/python.exe',
+    exists: true,
+    loaded: true,
+    installer: { cmd: ['py', '-3.12'], version: '3.12.8' },
+  },
   message: 'ready',
 };
 
@@ -42,6 +50,17 @@ describe('bridge model management', () => {
     });
   });
 
+  it('installs the managed Diffusers runtime through the bridge', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(READY_STATUS), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new HttpAdapter('http://bridge.local');
+
+    const status = await adapter.installDiffusersRuntime();
+
+    expect(status.loaded).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('http://bridge.local/diffusers/install', { method: 'POST' });
+  });
+
   it('stores a successful model download and selects real Diffusers rendering', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(READY_STATUS), { status: 200 })));
     useStudio.setState({
@@ -63,6 +82,30 @@ describe('bridge model management', () => {
     expect(state.bridgeModelStatus?.loaded).toBe(true);
     expect(state.bridgeModelBusy).toBe(false);
     expect(state.bridgeModelError).toBeNull();
+    expect(state.backendSettings.bridgeRenderer).toBe('diffusers');
+  });
+
+  it('stores a successful runtime install and selects real Diffusers rendering', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(READY_STATUS), { status: 200 })));
+    useStudio.setState({
+      adapterId: 'mock',
+      turboBackendId: 'mock',
+      bridgeModelStatus: null,
+      bridgeModelBusy: false,
+      bridgeModelError: null,
+      backendSettings: sanitizeBackendSettings({
+        selectedBackend: 'mock',
+        bridgeUrl: 'http://bridge.local',
+        bridgeRenderer: 'auto',
+      }),
+    });
+
+    await useStudio.getState().installBridgeRuntime();
+
+    const state = useStudio.getState();
+    expect(state.adapterId).toBe('bridge');
+    expect(state.bridgeModelStatus?.managedRuntime?.exists).toBe(true);
+    expect(state.backendSettings.selectedBackend).toBe('bridge');
     expect(state.backendSettings.bridgeRenderer).toBe('diffusers');
   });
 });

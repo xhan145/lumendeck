@@ -17,10 +17,10 @@ header.
 
 **Real generation (v0.2):** the desktop build **auto-starts a bundled render bridge**. The Backend
 panel offers three bridge renderer modes: **procedural** (instant, offline, always works),
-**diffusers** (real SD-Turbo; needs `torch` on the bridge), and **auto** (real if available, else
-procedural). It also includes a real-photo model panel that checks Diffusers readiness and
-downloads/loads SD-Turbo for the user when the optional Python packages are present. The existing
-**ComfyUI** adapter remains available for an external ComfyUI server.
+**diffusers** (real SD-Turbo), and **auto** (real if available, else procedural). It also includes a
+real-photo model panel that checks Diffusers readiness, creates a managed local runtime when needed,
+and downloads/loads SD-Turbo for the user. The existing **ComfyUI** adapter remains available for an
+external ComfyUI server.
 
 **Graph Health** runs before every render and flags missing/uninstalled models, broken links,
 incompatible sockets, bad dimensions (non-multiple-of-8, too small/large), LoRA family conflicts, and
@@ -55,7 +55,7 @@ Because everything is same-origin, the browser never hits a cross-origin/"failed
 error. If Python has the diffusion deps, renders are real:
 
 ```bash
-python -m pip install torch diffusers transformers accelerate
+python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia
 ```
 
 Without them the app still runs on the built-in procedural renderer, and the Backend panel
@@ -70,8 +70,9 @@ LumenDeck ships as a native Windows desktop app via [Tauri](https://tauri.app): 
 shell around the built web app. As of v0.2 the app **bundles the render bridge as a sidecar and
 auto-starts it on launch**, so generation plumbing works from a single installer with no manual
 Python server step. The offline Procedural renderer works out of the box; real diffusion (SD-Turbo)
-activates if `torch`/`diffusers` are installed on the machine. Use Backend -> Diffusers bridge ->
-Check model / Download model to prepare the Hugging Face weights.
+can be prepared from the app with Backend -> Diffusers bridge -> Install runtime + model. That
+creates an app-local runtime under `%LOCALAPPDATA%\LumenDeck\diffusers-runtime`, installs CPU PyTorch
+and Diffusers, then downloads/loads the Hugging Face weights.
 
 **Install:** run the installer at
 `src-tauri/target/release/bundle/msi/LumenDeck_0.2.0_x64_en-US.msi`. It requires the Microsoft
@@ -142,15 +143,19 @@ In LumenDeck's Backend panel choose **Diffusers bridge**, set the URL to `http:/
 **Test connection**. Point it at your models with the `LUMENDECK_MODEL_DIR` environment variable to
 replace the demo catalog with a real scan (file hashing + family inference).
 
-For real SD-Turbo photos, install the optional Python stack on the bridge host:
+For real SD-Turbo photos, use **Install runtime + model** in the Backend panel. LumenDeck creates an
+app-local runtime, installs CPU PyTorch + Diffusers, and downloads/loads `stabilityai/sd-turbo` into
+the Hugging Face cache. A compatible Python 3.10-3.13 install must be available; Python 3.12 is the
+recommended target.
+
+Advanced/manual install:
 
 ```bash
-python -m pip install torch diffusers transformers accelerate
+python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia
 ```
 
-Then use **Check model** and **Download model** in the Backend panel. The download button calls the
-bridge `/diffusers/download` endpoint, which downloads/loads `stabilityai/sd-turbo` into the Hugging
-Face cache. Full details: [bridge/README.md](bridge/README.md).
+Then use **Check model** and **Download model** in the Backend panel. Full details:
+[bridge/README.md](bridge/README.md).
 
 ### Workflow Templates
 

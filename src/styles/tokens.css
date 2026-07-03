@@ -1,69 +1,102 @@
-/* LumenDeck design tokens — brand palette, dark-only (OLED) */
+/* LumenDeck design tokens — Material 3 dark scheme ("ROAR" language), dark-only.
+   Components consume the --ld-* aliases; the MD3 layer below is the single source. */
 :root {
-  /* Brand */
-  --ld-midnight: #071426;
+  /* ---- Material 3 core palette (from approved mockup) ---- */
+  --md-primary: #1a73e8;
+  --md-primary-light: #4c8df0;
+  --md-on-primary: #ffffff;
+  --md-secondary: #ff8a00;   /* hero accent: Render CTA, focus glow */
+  --md-on-secondary: #1a1200;
+
+  --md-bg: #0e1218;          /* app background / rail / canvas */
+  --md-surface: #12161d;     /* panels */
+  --md-surface-2: #1a1f29;   /* cards */
+  --md-surface-3: #222835;   /* elevated cards / menus */
+  --md-outline: #2c313a;
+  --md-outline-strong: #3a414d;
+
+  --md-on-surface: #e6e1e5;
+  --md-on-surface-dim: #a7aeba;  /* >= 4.5:1 on surface/-2 */
+  --md-on-surface-faint: #8791a0;
+
+  --md-error: #ff5c5c;
+  --md-success: #39d98a;
+
+  /* ---- Brand anchors (kept for reference / logo) ---- */
   --ld-cyan: #34d6f4;
-  --ld-violet: #7c3aed;
-  --ld-mango: #ff8a3d;
-  --ld-mint: #45e6a6;
-  --ld-paper: #fbfcfe;
-  --ld-ink: #101828;
-  --ld-slate: #475467;
+  --ld-violet: #a78bfa;
+  --ld-mango: var(--md-secondary);
+  --ld-paper: var(--md-on-surface);
 
-  /* Semantic surfaces */
-  --ld-bg: var(--ld-midnight);
-  --ld-surface: #0c1d33;
-  --ld-surface-2: #122741;
-  --ld-surface-3: #1a3050;
-  --ld-border: #24405f;
-  --ld-border-strong: #35557c;
+  /* ---- Semantic aliases consumed by components ---- */
+  --ld-bg: var(--md-bg);
+  --ld-surface: var(--md-surface);
+  --ld-surface-2: var(--md-surface-2);
+  --ld-surface-3: var(--md-surface-3);
+  --ld-border: var(--md-outline);
+  --ld-border-strong: var(--md-outline-strong);
 
-  /* Text — contrast-checked on midnight surfaces */
-  --ld-text: var(--ld-paper);
-  --ld-text-dim: #aab6c9;   /* >= 4.5:1 on surface-2 */
-  --ld-text-faint: #8595ac; /* large/secondary text only */
+  --ld-text: var(--md-on-surface);
+  --ld-text-dim: var(--md-on-surface-dim);
+  --ld-text-faint: var(--md-on-surface-faint);
 
-  /* Accents */
-  --ld-accent: var(--ld-cyan);
-  --ld-accent-2: var(--ld-violet);
-  --ld-violet-soft: #a78bfa; /* readable violet for text/borders on dark */
-  --ld-warn: var(--ld-mango);
-  --ld-ok: var(--ld-mint);
-  --ld-danger: #ff6b6b;
+  --ld-accent: var(--md-primary);
+  --ld-accent-2: var(--md-primary-light);
+  --ld-violet-soft: var(--ld-violet);
+  --ld-warn: var(--md-secondary);
+  --ld-ok: var(--md-success);
+  --ld-danger: var(--md-error);
 
-  /* Capsule accents (paired with labels + icons, never color alone) */
-  --cap-prompt: var(--ld-cyan);
-  --cap-model: var(--ld-violet-soft);
-  --cap-lora: var(--ld-mint);
-  --cap-control: var(--ld-mango);
-  --cap-sampler: #6fe3ff;
-  --cap-canvas: #c4b0ff;
+  /* Capsule accents — MD3 tonal set (always paired with label + icon) */
+  --cap-prompt: var(--md-primary);
+  --cap-model: #b794f6;
+  --cap-lora: var(--md-success);
+  --cap-control: var(--md-secondary);
+  --cap-sampler: var(--ld-cyan);
+  --cap-canvas: #a78bfa;
   --cap-queue: #ffb27a;
   --cap-export: #7df0c0;
   --cap-manifest: #9fb0c7;
 
-  /* Socket type colors */
-  --sock-conditioning: var(--ld-cyan);
-  --sock-model: var(--ld-violet-soft);
-  --sock-lora_stack: var(--ld-mint);
-  --sock-control: var(--ld-mango);
-  --sock-latent: #6fe3ff;
-  --sock-image: #c4b0ff;
+  /* Socket type colors (align to capsule tones) */
+  --sock-conditioning: var(--md-primary);
+  --sock-model: #b794f6;
+  --sock-lora_stack: var(--md-success);
+  --sock-control: var(--md-secondary);
+  --sock-latent: var(--ld-cyan);
+  --sock-image: #a78bfa;
   --sock-manifest: #9fb0c7;
 
-  /* Type */
+  /* Type — local Inter (offline); MD3 type scale */
   --ld-font-ui: 'Inter', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   --ld-font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --type-display: 600 32px/40px var(--ld-font-ui);
+  --type-headline: 600 24px/32px var(--ld-font-ui);
+  --type-title: 600 18px/24px var(--ld-font-ui);
+  --type-body: 400 15px/22px var(--ld-font-ui);
+  --type-label: 500 12px/16px var(--ld-font-ui);
 
-  /* Rhythm */
+  /* Rhythm — MD3 shape (4/8/12) + spacing */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
-  --rad-1: 6px; --rad-2: 10px; --rad-3: 14px;
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 6px 24px rgba(0, 0, 0, 0.45);
-  --glow-accent: 0 0 0 1px rgba(52, 214, 244, 0.35), 0 0 18px rgba(52, 214, 244, 0.12);
+  --rad-1: 4px; --rad-2: 8px; --rad-3: 12px; --rad-pill: 999px;
 
-  --focus-ring: 0 0 0 2px var(--ld-bg), 0 0 0 4px var(--ld-cyan);
+  /* MD3 elevation (0/1/3/6dp) */
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --elev-2: 0 2px 6px rgba(0, 0, 0, 0.42);
+  --elev-3: 0 6px 20px rgba(0, 0, 0, 0.48);
+  --shadow-1: var(--elev-1);
+  --shadow-2: var(--elev-3);
+
+  --glow-accent: 0 0 0 1px rgba(26, 115, 232, 0.45), 0 0 20px rgba(26, 115, 232, 0.18);
+  --glow-hero: 0 0 0 1px rgba(255, 138, 0, 0.5), 0 0 22px rgba(255, 138, 0, 0.28);
+
+  --focus-ring: 0 0 0 2px var(--md-bg), 0 0 0 4px var(--md-primary);
+
+  /* Motion — MD3 emphasis + decelerate */
   --dur-fast: 150ms;
   --dur-med: 240ms;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0, 0, 0, 1);        /* decelerate */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1); /* standard emphasis */
 }

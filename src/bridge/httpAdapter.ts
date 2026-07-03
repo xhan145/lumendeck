@@ -29,6 +29,14 @@ export interface BridgeModelStatus {
   cuda: boolean;
   cacheDir: string;
   installCommand: string;
+  installable?: boolean;
+  managedRuntime?: {
+    path?: string;
+    python?: string;
+    exists?: boolean;
+    loaded?: boolean;
+    installer?: { cmd: string[]; version: string } | null;
+  };
   message: string;
   dependencies?: Record<string, unknown>;
 }
@@ -83,6 +91,16 @@ export class HttpAdapter implements BackendAdapter {
     if (!res.ok) {
       const data = await res.json().catch(() => null) as { error?: string; status?: BridgeModelStatus } | null;
       const message = data?.error ?? `Bridge /diffusers/download failed: ${res.status}`;
+      throw Object.assign(new Error(message), { status: data?.status });
+    }
+    return (await res.json()) as BridgeModelStatus;
+  }
+
+  async installDiffusersRuntime(): Promise<BridgeModelStatus> {
+    const res = await fetch(`${this.base}/diffusers/install`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string; status?: BridgeModelStatus } | null;
+      const message = data?.error ?? `Bridge /diffusers/install failed: ${res.status}`;
       throw Object.assign(new Error(message), { status: data?.status });
     }
     return (await res.json()) as BridgeModelStatus;
