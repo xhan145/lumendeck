@@ -11,6 +11,15 @@ up in the other immediately. Every capsule is edited through a shared, accessibl
 
 **Nine Capsules:** Prompt, Model, LoRA Rack, Control, Sampler, Canvas, Queue, Export, Manifest.
 
+**Recipe portability (v0.2):** save the current workflow as a `.lumen` file and re-open it later, or
+start from a built-in **template** (Neon Poster, Ink Sketch, Portrait Studio) — all from the Recipe
+View header.
+
+**Real generation (v0.2):** the desktop build **auto-starts a bundled render bridge** (no manual
+step). The Backend panel offers three bridge renderer modes — **procedural** (instant, offline,
+always works), **diffusers** (real SD-Turbo; needs `torch` on the bridge), and **auto** (real if
+available, else procedural) — plus the existing **ComfyUI** adapter for an external ComfyUI server.
+
 **Graph Health** runs before every render and flags missing/uninstalled models, broken links,
 incompatible sockets, bad dimensions (non-multiple-of-8, too small/large), LoRA family conflicts, and
 likely VRAM over-budget. Render is blocked with a reason while any error is present.
@@ -39,22 +48,28 @@ npm run build
 ## Desktop app (Windows MSI)
 
 LumenDeck ships as a native Windows desktop app via [Tauri](https://tauri.app) — a small
-WebView2-based shell around the built web app (no Electron, no bundled browser). The offline
-Procedural renderer works out of the box; the Python bridge remains an optional separate process.
+WebView2-based shell around the built web app (no Electron, no bundled browser). As of v0.2 the app
+**bundles the render bridge as a sidecar and auto-starts it on launch**, so real-generation plumbing
+works from a single installer with no manual Python step. The offline Procedural renderer works out
+of the box; real diffusion (SD-Turbo) activates if `torch`/`diffusers` are installed on the machine.
 
 **Install:** run the installer at
-`src-tauri/target/release/bundle/msi/LumenDeck_0.1.0_x64_en-US.msi` (~1.6 MB). It requires the
-Microsoft **WebView2** runtime, which is preinstalled on Windows 11.
+`src-tauri/target/release/bundle/msi/LumenDeck_0.2.0_x64_en-US.msi`. It requires the Microsoft
+**WebView2** runtime, preinstalled on Windows 11.
 
-**Build it yourself** (needs Rust + the MSVC toolchain; the WiX bundler is fetched automatically):
+**Build it yourself** (needs Rust + the MSVC toolchain and Python + PyInstaller; the WiX bundler is
+fetched automatically):
 
 ```bash
 npm install
-npm run tauri build          # runs `npm run build`, compiles the shell, emits the .msi
+pip install pyinstaller
+python bridge/build_sidecar.py   # freezes the bridge -> src-tauri/binaries/
+npm run tauri build              # runs `npm run build`, compiles the shell, bundles sidecar + .msi
 ```
 
 The produced `.exe` is at `src-tauri/target/release/lumendeck.exe`. App icons are generated from
-`src-tauri/icon-source.png` via `npm run tauri icon <path>`.
+`src-tauri/icon-source.png` via `npm run tauri icon <path>`. The bundled bridge is spawned on port
+8787 and terminates with the app (stdin-EOF watchdog + Tauri child cleanup).
 
 ## Backends
 

@@ -1,3 +1,35 @@
+# LumenDeck v0.2.0 — Release Notes
+
+Turns LumenDeck into a single installer that launches and can make real images, and adds recipe
+portability.
+
+## Highlights
+
+- **Auto-starting bundled bridge.** The render bridge is rewritten as a pure-stdlib HTTP server,
+  frozen with PyInstaller into a sidecar exe, and spawned automatically by the desktop app on port
+  8787 — no manual `uvicorn` step. It stops with the app via a stdin-EOF watchdog plus Tauri's child
+  cleanup. The app auto-selects the bridge on first boot (unless you pick a backend yourself).
+- **Real diffusion, three ways.** Backend panel renderer modes: **procedural** (instant, offline,
+  always works), **diffusers** (real SD-Turbo via `torch`/`diffusers`, weights fetched on first use),
+  and **auto** (real if available, else procedural). The existing **ComfyUI** adapter remains for an
+  external ComfyUI server.
+- **Recipe save/load + templates.** Save the workflow as a `.lumen` file and re-open it (validated,
+  never crashes on bad input); or start from a built-in template — Neon Poster, Ink Sketch, Portrait
+  Studio.
+
+## Verification (honest)
+
+- Verified: 67 unit tests pass; `tsc` clean; frozen sidecar serves `/health` and `/generate` (valid
+  PNG); the desktop app auto-spawns the sidecar and the watchdog stops it when the parent pipe closes;
+  templates apply and mutate the workflow in the live preview; renderer-mode setting round-trips.
+- **Not verified in this environment:** real SD-Turbo inference (multi-GB `torch` + weights download,
+  CPU-slow) and a reachable ComfyUI server. The diffusers code path is built and guarded; procedural
+  is the guaranteed fallback, so a render never fails for lack of a real backend.
+- Known edge: a `taskkill /F` hard-kill of the app *tree* can momentarily orphan the PyInstaller
+  grandchild; normal window-close and pipe-closing kills are handled by the watchdog.
+
+---
+
 # LumenDeck v0.1.0 — Release Notes
 
 First working release of LumenDeck, a local-first, node-native generative image studio and spiritual
