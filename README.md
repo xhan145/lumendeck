@@ -36,6 +36,26 @@ npm test
 npm run build
 ```
 
+## Desktop app (Windows MSI)
+
+LumenDeck ships as a native Windows desktop app via [Tauri](https://tauri.app) — a small
+WebView2-based shell around the built web app (no Electron, no bundled browser). The offline
+Procedural renderer works out of the box; the Python bridge remains an optional separate process.
+
+**Install:** run the installer at
+`src-tauri/target/release/bundle/msi/LumenDeck_0.1.0_x64_en-US.msi` (~1.6 MB). It requires the
+Microsoft **WebView2** runtime, which is preinstalled on Windows 11.
+
+**Build it yourself** (needs Rust + the MSVC toolchain; the WiX bundler is fetched automatically):
+
+```bash
+npm install
+npm run tauri build          # runs `npm run build`, compiles the shell, emits the .msi
+```
+
+The produced `.exe` is at `src-tauri/target/release/lumendeck.exe`. App icons are generated from
+`src-tauri/icon-source.png` via `npm run tauri icon <path>`.
+
 ## Backends
 
 ### Mock Backend
