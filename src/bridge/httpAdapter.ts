@@ -10,8 +10,18 @@ export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8787';
 export class HttpAdapter implements BackendAdapter {
   id = 'bridge';
   label = 'Local bridge (FastAPI)';
+  private renderer: string = 'auto';
 
   constructor(private base: string = DEFAULT_BRIDGE_URL) {}
+
+  setBaseUrl(url: string): void {
+    this.base = url.trim().replace(/\/+$/, '') || DEFAULT_BRIDGE_URL;
+  }
+
+  /** Which bridge renderer to request: 'procedural' | 'diffusers' | 'auto'. */
+  setRenderer(mode: string): void {
+    this.renderer = mode;
+  }
 
   async ping(): Promise<boolean> {
     try {
@@ -33,7 +43,7 @@ export class HttpAdapter implements BackendAdapter {
     const res = await fetch(`${this.base}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(job),
+      body: JSON.stringify({ ...job, renderer: this.renderer }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');

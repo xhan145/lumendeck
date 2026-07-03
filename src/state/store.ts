@@ -109,8 +109,18 @@ export const mockAdapter = new MockAdapter();
 export const httpAdapter = new HttpAdapter();
 export const comfyAdapter = new ComfyAdapter();
 
+// Set once the user explicitly picks a backend this session, so the auto-detect
+// in probeBridge never overrides a deliberate choice.
+let userPinnedBackend = false;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 function activeAdapter(settings: BackendSettings): BackendAdapter {
-  if (settings.selectedBackend === 'bridge') return httpAdapter;
+  if (settings.selectedBackend === 'bridge') {
+    httpAdapter.setBaseUrl(settings.bridgeUrl);
+    httpAdapter.setRenderer(settings.bridgeRenderer);
+    return httpAdapter;
+  }
   if (settings.selectedBackend === 'comfyui') {
     comfyAdapter.setBaseUrl(settings.comfyUrl);
     return comfyAdapter;
@@ -184,6 +194,7 @@ export const useStudio = create<StudioState>((set, get) => {
       set({ rackPresets: get().rackPresets.filter((p) => p.id !== id) }),
 
     setAdapter: (adapterId) => {
+      userPinnedBackend = true;
       const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: adapterId });
       set({
         adapterId,
@@ -270,10 +281,22 @@ export const useStudio = create<StudioState>((set, get) => {
     },
 
     probeBridge: async () => {
-      const online = await httpAdapter.ping();
+      // The bundled sidecar takes ~1s to boot; retry with backoff before giving up.
+      httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+      let online = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        online = await httpAdapter.ping();
+        if (online) break;
+        await sleep(800);
+      }
       set({ bridgeOnline: online });
       if (online && get().shelfSource === 'demo') {
         await get().refreshShelfFromBridge();
+      }
+      // Auto-select the local bridge on first boot when the user hasn't chosen a backend.
+      if (online && !userPinnedBackend && get().adapterId === 'mock') {
+        const backendSettings = sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge' });
+        set({ adapterId: 'bridge', backendSettings, turboBackendId: settingsBackendToTurboBackend('bridge') });
       }
       if (!online && get().adapterId === 'bridge') set({ adapterId: 'mock' });
     },
