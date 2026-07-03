@@ -1,0 +1,69 @@
+/* LumenDeck design tokens — brand palette, dark-only (OLED) */
+:root {
+  /* Brand */
+  --ld-midnight: #071426;
+  --ld-cyan: #34d6f4;
+  --ld-violet: #7c3aed;
+  --ld-mango: #ff8a3d;
+  --ld-mint: #45e6a6;
+  --ld-paper: #fbfcfe;
+  --ld-ink: #101828;
+  --ld-slate: #475467;
+
+  /* Semantic surfaces */
+  --ld-bg: var(--ld-midnight);
+  --ld-surface: #0c1d33;
+  --ld-surface-2: #122741;
+  --ld-surface-3: #1a3050;
+  --ld-border: #24405f;
+  --ld-border-strong: #35557c;
+
+  /* Text — contrast-checked on midnight surfaces */
+  --ld-text: var(--ld-paper);
+  --ld-text-dim: #aab6c9;   /* >= 4.5:1 on surface-2 */
+  --ld-text-faint: #8595ac; /* large/secondary text only */
+
+  /* Accents */
+  --ld-accent: var(--ld-cyan);
+  --ld-accent-2: var(--ld-violet);
+  --ld-violet-soft: #a78bfa; /* readable violet for text/borders on dark */
+  --ld-warn: var(--ld-mango);
+  --ld-ok: var(--ld-mint);
+  --ld-danger: #ff6b6b;
+
+  /* Capsule accents (paired with labels + icons, never color alone) */
+  --cap-prompt: var(--ld-cyan);
+  --cap-model: var(--ld-violet-soft);
+  --cap-lora: var(--ld-mint);
+  --cap-control: var(--ld-mango);
+  --cap-sampler: #6fe3ff;
+  --cap-canvas: #c4b0ff;
+  --cap-queue: #ffb27a;
+  --cap-export: #7df0c0;
+  --cap-manifest: #9fb0c7;
+
+  /* Socket type colors */
+  --sock-conditioning: var(--ld-cyan);
+  --sock-model: var(--ld-violet-soft);
+  --sock-lora_stack: var(--ld-mint);
+  --sock-control: var(--ld-mango);
+  --sock-latent: #6fe3ff;
+  --sock-image: #c4b0ff;
+  --sock-manifest: #9fb0c7;
+
+  /* Type */
+  --ld-font-ui: 'Inter', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --ld-font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+
+  /* Rhythm */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --rad-1: 6px; --rad-2: 10px; --rad-3: 14px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 24px rgba(0, 0, 0, 0.45);
+  --glow-accent: 0 0 0 1px rgba(52, 214, 244, 0.35), 0 0 18px rgba(52, 214, 244, 0.12);
+
+  --focus-ring: 0 0 0 2px var(--ld-bg), 0 0 0 4px var(--ld-cyan);
+  --dur-fast: 150ms;
+  --dur-med: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
