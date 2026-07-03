@@ -9,14 +9,18 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // Auto-start the bundled render bridge sidecar on port 8787.
-            // The shell plugin terminates it when the app exits.
             let handle = app.handle().clone();
             if let Ok(cmd) = handle.shell().sidecar("lumendeck-bridge") {
-                if let Ok((mut rx, _child)) = cmd.args(["--port", "8787"]).spawn() {
+                if let Ok((mut rx, child)) = cmd.args(["--port", "8787"]).spawn() {
+                    // Keep the child (and its stdin pipe) alive for the app's whole
+                    // lifetime. If we dropped it, the stdin pipe would close and the
+                    // sidecar's watchdog would exit immediately. On app exit/crash the
+                    // OS closes this handle, the sidecar sees stdin EOF, and it stops —
+                    // which also reaps PyInstaller's onefile grandchild.
+                    std::mem::forget(child);
                     tauri::async_runtime::spawn(async move {
                         while let Some(event) = rx.recv().await {
                             if let CommandEvent::Stderr(line) | CommandEvent::Stdout(line) = event {
-                                // Drain output so the sidecar pipe never blocks.
                                 let _ = String::from_utf8(line);
                             }
                         }
