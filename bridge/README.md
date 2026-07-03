@@ -1,37 +1,71 @@
 # LumenDeck Render Bridge
 
-A tiny local FastAPI backend that gives LumenDeck a real text-to-image path and a
-local model scanner. The default generator is a **pure-standard-library procedural
-renderer** — no GPU, no Pillow, no numpy — so it runs anywhere and produces
-deterministic, reproducible images from a seed. It is the reference implementation
-of the `BackendAdapter` contract; swap in a real backend via `adapters.py`.
+A tiny local backend that gives LumenDeck a real text-to-image path and a local model
+scanner. It has **two servers that share the same routes and logic**:
+
+- **`server.py` — pure Python standard library** (no third-party deps). This is what the
+  desktop app bundles: `build_sidecar.py` freezes it with PyInstaller into a single exe
+  the Tauri app auto-starts. No Python needed on the user's machine.
+- **`main.py` — FastAPI** (optional, for local dev with hot docs/validation). Deprecated in
+  favour of `server.py`; kept for convenience. Needs `pip install -r requirements.txt`.
+
+The default generator is a **pure-stdlib procedural renderer** (`renderer.py`) — no GPU, no
+Pillow, no numpy — deterministic and reproducible from a seed, so it runs anywhere. An
+optional **real** path (`diffusers_backend.py`, SD-Turbo) activates only if `torch` +
+`diffusers` are importable.
 
 ## Endpoints
 
-| Method | Path        | Purpose                                             |
-|--------|-------------|-----------------------------------------------------|
-| GET    | `/health`   | `{ "status": "ok", "adapter": "procedural" }`       |
-| GET    | `/models`   | `ModelAsset[]` — local scan or demo catalog         |
-| POST   | `/generate` | `{ image_base64, seed }` from a render job          |
+| Method | Path        | Purpose                                                        |
+|--------|-------------|----------------------------------------------------------------|
+| GET    | `/health`   | `{ "status":"ok", "adapter":"procedural", "diffusers":bool }`  |
+| GET    | `/models`   | `ModelAsset[]` — local scan or demo catalog                    |
+| POST   | `/generate` | `{ image_base64, seed }` — body may set `renderer` (see below) |
 
-The front-end client is `src/bridge/httpAdapter.ts` (default `http://127.0.0.1:8787`).
-Select **Diffusers bridge** in the Backend panel and set the URL to match.
+`POST /generate` accepts a `renderer` field: `"procedural"` (always), `"diffusers"` (real
+SD-Turbo; 503 if torch absent), or `"auto"` (diffusers if available, else procedural).
 
-## Run
+Front-end client: `src/bridge/httpAdapter.ts` (default `http://127.0.0.1:8787`). In the
+desktop app the sidecar starts automatically; select **Diffusers bridge** in the Backend
+panel to use it, and pick the renderer mode there.
+
+## Run (stdlib — no install)
 
 ```bash
 cd bridge
-python -m venv .venv
-# Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+python server.py --port 8787
+```
+
+## Run (FastAPI dev — optional)
+
+```bash
+cd bridge && pip install -r requirements.txt
 uvicorn main:app --host 127.0.0.1 --port 8787
 ```
 
+## Build the desktop sidecar
+
+```bash
+pip install pyinstaller
+python bridge/build_sidecar.py
+# -> src-tauri/binaries/lumendeck-bridge-x86_64-pc-windows-msvc.exe
+```
+
+## Enable real diffusion (SD-Turbo)
+
+```bash
+pip install torch diffusers transformers accelerate
+```
+
+With those present, `/health` reports `"diffusers": true` and `renderer:"auto"`/`"diffusers"`
+runs a real SD-Turbo pipeline (weights download to the Hugging Face cache on first use; CPU
+works but is slow — a CUDA GPU is much faster). Without them, the bridge stays procedural.
+
 ## Scan local models
 
-Point the bridge at a models folder; it walks the tree for
-`.safetensors/.ckpt/.pt/.pth`, hashes each file, and infers family from the name.
-Files under a `lora`/`loras` folder are tagged as LoRAs.
+Point the bridge at a models folder; it walks the tree for `.safetensors/.ckpt/.pt/.pth`,
+hashes each file, and infers family from the name. Files under a `lora`/`loras` folder are
+tagged as LoRAs.
 
 ```bash
 # Windows
@@ -45,14 +79,14 @@ With no directory set (or an empty one) `/models` returns the demo catalog.
 ## Test
 
 ```bash
-pytest            # if installed
-python test_renderer.py   # standalone, no pytest needed
+python test_server.py            # stdlib server routes (no pytest needed)
+python test_renderer.py          # procedural renderer determinism
+python test_diffusers_backend.py # diffusers availability/guard
+pytest                           # runs all of the above if installed
 ```
 
-## Plug in a real backend
+## Plug in another real backend
 
-`adapters.py` defines `GeneratorAdapter` (ABC) with `ProceduralAdapter` and a
-documented `A1111Adapter` stub. Implement `A1111Adapter.generate` against a running
-AUTOMATIC1111 WebUI (`/sdapi/v1/txt2img`), then set `adapter = A1111Adapter()` in
-`main.py`. The front-end also ships a ComfyUI adapter (`src/bridge/comfyAdapter.ts`)
-that talks directly to a local ComfyUI server if you prefer that route.
+`adapters.py` defines `GeneratorAdapter` (ABC) with `ProceduralAdapter` and a documented
+`A1111Adapter` stub. The front-end also ships a ComfyUI adapter
+(`src/bridge/comfyAdapter.ts`) that talks directly to a local ComfyUI server.

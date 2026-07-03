@@ -1,0 +1,2 @@
+# Tauri externalBin sidecars are built here by bridge/build_sidecar.py.
+# The frozen .exe files are gitignored (large); the build script is tracked.
