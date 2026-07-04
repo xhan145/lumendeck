@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 _MODEL_ID = os.environ.get("LUMENDECK_DIFFUSERS_MODEL", "stabilityai/sd-turbo")
-_INSTALL_COMMAND = "python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia"
+_TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+_TORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
+_INSTALL_COMMAND = "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch."
 _python_cache: dict[str, Any] | None | bool = False
 
 _WORKER_SOURCE = r'''
@@ -57,7 +59,11 @@ def module_info(module_name, package_name=None):
         version = importlib.metadata.version(package_name)
     except importlib.metadata.PackageNotFoundError:
         version = None
-    return {"installed": True, "version": version}
+    try:
+        module = __import__(module_name)
+    except Exception as exc:
+        return {"installed": True, "version": version, "importable": False, "error": str(exc)}
+    return {"installed": True, "version": version, "importable": True, "module": module}
 
 
 def cache_dir():
@@ -88,10 +94,11 @@ def model_cached():
 def status(message=None, loaded=False):
     torch_info = module_info("torch")
     diffusers_info = module_info("diffusers")
-    ready = bool(torch_info["installed"] and diffusers_info["installed"])
+    torch = torch_info.pop("module", None)
+    diffusers_info.pop("module", None)
+    ready = bool(torch_info.get("importable") and diffusers_info.get("importable"))
     device = "unknown"
     cuda = False
-    torch = sys.modules.get("torch")
     if torch is not None:
         try:
             cuda = bool(torch.cuda.is_available())
@@ -115,7 +122,7 @@ def status(message=None, loaded=False):
         "device": device,
         "cuda": cuda,
         "cacheDir": cache_dir(),
-        "installCommand": "python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia",
+        "installCommand": "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch.",
         "message": message,
         "dependencies": {
             "torch": torch_info,
@@ -310,6 +317,39 @@ def _base_python_has_module(module_name: str) -> bool:
         return False
 
 
+def _has_nvidia_gpu() -> bool:
+    if os.environ.get("LUMENDECK_TORCH_DEVICE", "").lower() == "cpu":
+        return False
+    if os.environ.get("LUMENDECK_TORCH_DEVICE", "").lower() == "cuda":
+        return True
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return False
+    try:
+        proc = _run([nvidia_smi, "--query-gpu=name", "--format=csv,noheader"], timeout=10)
+        return bool(proc.stdout.strip())
+    except Exception:
+        return False
+
+
+def _torch_index_url() -> str:
+    configured = os.environ.get("LUMENDECK_TORCH_INDEX_URL")
+    if configured:
+        return configured
+    return _TORCH_CUDA_INDEX_URL if _has_nvidia_gpu() else _TORCH_CPU_INDEX_URL
+
+
+def _torch_target_label() -> str:
+    return "cuda" if _torch_index_url() != _TORCH_CPU_INDEX_URL else "cpu"
+
+
+def _reset_site_dir() -> None:
+    site = _site_dir()
+    if site.exists():
+        shutil.rmtree(site, ignore_errors=True)
+    site.mkdir(parents=True, exist_ok=True)
+
+
 def _remove_target_package(package_name: str) -> None:
     site = _site_dir()
     if not site.exists():
@@ -422,12 +462,22 @@ def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 
     return json.loads(lines[-1])
 
 
-def _pip_install(args: list[str], timeout: int = 1800, no_deps: bool = False) -> None:
+def _pip_install(
+    args: list[str],
+    timeout: int = 1800,
+    no_deps: bool = False,
+    index_url: str | None = None,
+    force_reinstall: bool = False,
+) -> None:
     python = _find_python()
     if not python:
         raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
     _site_dir().mkdir(parents=True, exist_ok=True)
     cmd = python["cmd"] + ["-m", "pip", "install", "--upgrade", "--target", str(_site_dir())]
+    if index_url:
+        cmd += ["--index-url", index_url]
+    if force_reinstall:
+        cmd.append("--force-reinstall")
     if no_deps:
         cmd.append("--no-deps")
     cmd += args
@@ -446,6 +496,8 @@ def _decorate_status(status: dict[str, Any]) -> dict[str, Any]:
         "worker": str(_worker_path()),
         "exists": _site_dir().exists(),
         "installer": python,
+        "torchTarget": _torch_target_label(),
+        "torchIndexUrl": _torch_index_url(),
     }
     deps = status.setdefault("dependencies", {})
     deps["managedRuntime"] = runtime
@@ -488,10 +540,8 @@ def install_runtime() -> dict[str, Any]:
     if not python:
         raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
 
-    if _base_python_has_module("torch"):
-        _remove_target_package("torch")
-    else:
-        _pip_install(["torch", "--index-url", "https://download.pytorch.org/whl/cpu"], timeout=1800)
+    _reset_site_dir()
+    _pip_install(["torch"], index_url=_torch_index_url(), force_reinstall=True, timeout=2400)
     _pip_install(
         ["huggingface-hub", "filelock", "numpy==1.26.4", "packaging", "pillow", "pyyaml", "regex", "requests", "tqdm", "tokenizers==0.19.1", "safetensors"],
         timeout=1200,
