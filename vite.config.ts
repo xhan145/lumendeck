@@ -68,6 +68,7 @@ export default defineConfig({
       '/models': bridgeProxy,
       '/generate': bridgeProxy,
       '/diffusers': bridgeProxy,
+      '/progress': bridgeProxy,
     },
   },
   test: {

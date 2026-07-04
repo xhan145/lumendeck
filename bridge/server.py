@@ -15,17 +15,60 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import re
 import sys
+import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
-from scanner import get_shelf
+from scanner import discover_model_dir, get_shelf
 
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/generate", "/diffusers")
+API_PREFIXES = ("/health", "/models", "/generate", "/diffusers", "/progress")
+
+# ---- Render progress (file-based; the diffusers worker is a separate process) ----
+_JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def _progress_path(job_id: str) -> str:
+    return os.path.join(tempfile.gettempdir(), f"lumendeck-progress-{job_id}.json")
+
+
+def _write_progress(job_id: str, data: dict) -> None:
+    try:
+        with open(_progress_path(job_id), "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+    except OSError:
+        pass
+
+
+def _read_progress(job_id: str) -> dict:
+    try:
+        with open(_progress_path(job_id), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {"phase": "unknown"}
+
+
+def _prune_progress_files(max_age_s: int = 3600) -> None:
+    """Drop stale progress files so temp doesn't accumulate them."""
+    try:
+        now = time.time()
+        for name in os.listdir(tempfile.gettempdir()):
+            if not name.startswith("lumendeck-progress-"):
+                continue
+            path = os.path.join(tempfile.gettempdir(), name)
+            try:
+                if now - os.path.getmtime(path) > max_age_s:
+                    os.remove(path)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 try:
     import diffusers_backend
@@ -42,6 +85,45 @@ CORS = {
 
 def _diffusers_available() -> bool:
     return _HAS_DIFFUSERS_MODULE and diffusers_backend.is_available()
+
+
+# Probing diffusers availability spawns worker subprocesses (seconds). /health and
+# /models must answer instantly (the app pings with a 1.5s timeout), so they read a
+# cache refreshed by a background thread; /generate keeps the authoritative check.
+_STATUS_CACHE: dict = {"ts": 0.0, "available": False, "status": None, "busy": False}
+
+
+def _refresh_diffusers_cache_async() -> None:
+    if _STATUS_CACHE["busy"]:
+        return
+    _STATUS_CACHE["busy"] = True
+
+    def work() -> None:
+        try:
+            available = _diffusers_available()
+            status = _diffusers_status()
+            _STATUS_CACHE.update(available=available, status=status, ts=time.time())
+        except Exception:
+            _STATUS_CACHE["ts"] = time.time()
+        finally:
+            _STATUS_CACHE["busy"] = False
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _cached_diffusers() -> tuple[bool, dict]:
+    if time.time() - _STATUS_CACHE["ts"] > 30:
+        _refresh_diffusers_cache_async()
+    status = _STATUS_CACHE["status"]
+    if status is None:
+        status = {
+            "modelId": "stabilityai/sd-turbo",
+            "dependenciesReady": False,
+            "loaded": False,
+            "modelCached": None,
+            "message": "Checking Diffusers availability…",
+        }
+    return bool(_STATUS_CACHE["available"]), status
 
 
 def _diffusers_status() -> dict:
@@ -67,7 +149,7 @@ def _diffusers_shelf_entry() -> dict:
     Marked installed only when it can actually render (deps present AND weights
     cached), so the app auto-selects it only when real output will succeed.
     """
-    status = _diffusers_status()
+    _available, status = _cached_diffusers()
     ready = bool(status.get("dependenciesReady"))
     cached = status.get("modelCached")
     # Usable when deps are present and the weights are not known-missing. If cache
@@ -89,14 +171,97 @@ def _diffusers_shelf_entry() -> dict:
     }
 
 
+HUB_MODELS = {
+    # shelf id -> Hugging Face model id (None = the configured default model)
+    "diffusers-real": None,
+    "diffusers-sdxl": "stabilityai/sdxl-turbo",
+}
+
+
+def _hub_cached(hub_id: str) -> bool:
+    """Filesystem check for HF-cache presence (works in the frozen sidecar too)."""
+    cache_root = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    folder = "models--" + hub_id.replace("/", "--")
+    return any(
+        os.path.isdir(os.path.join(cache_root, sub, folder))
+        for sub in ("hub", "")
+    )
+
+
+def _sdxl_shelf_entry() -> dict:
+    _available, status = _cached_diffusers()
+    ready = bool(status.get("dependenciesReady"))
+    hub_id = "stabilityai/sdxl-turbo"
+    installed = ready and _hub_cached(hub_id)
+    return {
+        "id": "diffusers-sdxl",
+        "assetType": "checkpoint",
+        "name": "sdxl-turbo (real diffusion)",
+        "family": "SDXL",
+        "path": hub_id,
+        "hash": "diffusers",
+        "sizeMB": 6940,
+        "tags": ["real", "diffusers", "turbo", "sdxl"],
+        "compatibility": "Real SDXL-Turbo. First use downloads ~7 GB to the Hugging Face cache."
+        + ("" if installed else " Not downloaded yet."),
+        "license": f"{hub_id} — see model card",
+        "installed": installed,
+    }
+
+
 def _shelf_with_real() -> list:
-    """Local scan (or demo) plus the real Diffusers model; real model first when usable."""
+    """Local scan (or demo) plus the real Diffusers models; usable real model first."""
     shelf = list(get_shelf())
     entry = _diffusers_shelf_entry()
+    shelf.append(_sdxl_shelf_entry())
     if entry["installed"]:
         return [entry, *shelf]
     shelf.append(entry)
     return shelf
+
+
+def _resolve_render_targets(job: dict, shelf: list, model_root: str | None) -> dict:
+    """Annotate a render job with modelRef/loraFiles for the diffusers worker.
+
+    Pure given its inputs (shelf list + scan root), so it is unit-testable.
+    Unknown/demo assets resolve to the default hub model / are skipped.
+    """
+    assets = {str(a.get("id")): a for a in shelf}
+
+    def abs_path(asset: dict) -> str | None:
+        rel = str(asset.get("path", ""))
+        if os.path.isabs(rel) and os.path.isfile(rel):
+            return os.path.normpath(rel)
+        if model_root:
+            candidate = os.path.normpath(os.path.join(model_root, rel))
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    model_id = str(job.get("modelId") or "")
+    if model_id in HUB_MODELS:
+        hub = HUB_MODELS[model_id]
+        job["modelRef"] = {"kind": "hub", "id": hub} if hub else {"kind": "hub"}
+    else:
+        asset = assets.get(model_id)
+        path = abs_path(asset) if asset and asset.get("assetType") == "checkpoint" else None
+        if path:
+            job["modelRef"] = {"kind": "file", "path": path, "family": asset.get("family", "")}
+        else:
+            job["modelRef"] = {"kind": "hub"}  # default model
+
+    lora_files = []
+    for lora in job.get("loras") or []:
+        asset = assets.get(str(lora.get("id")))
+        if not asset or asset.get("assetType") != "lora":
+            continue
+        path = abs_path(asset)
+        if not path:
+            print(f"[models] skipping LoRA without a real file: {lora.get('id')}", flush=True)
+            continue
+        lora_files.append({"path": path, "weight": float(lora.get("weight", 1.0))})
+    job["loraFiles"] = lora_files
+    return job
 
 
 def _procedural(job: dict) -> dict:
@@ -123,12 +288,20 @@ def build_response(method: str, path: str, body: bytes):
 
     if method == "GET" and path == "/health":
         headers["Content-Type"] = "application/json"
-        payload = {"status": "ok", "adapter": "procedural", "diffusers": _diffusers_available(), "model": _diffusers_status()}
+        available, status = _cached_diffusers()
+        payload = {"status": "ok", "adapter": "procedural", "diffusers": available, "model": status}
         return 200, headers, json.dumps(payload).encode()
 
     if method == "GET" and path == "/models":
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(_shelf_with_real()).encode()
+
+    if method == "GET" and path.startswith("/progress/"):
+        headers["Content-Type"] = "application/json"
+        job_id = path[len("/progress/"):]
+        if not _JOB_ID.match(job_id):
+            return 200, headers, json.dumps({"phase": "unknown"}).encode()
+        return 200, headers, json.dumps(_read_progress(job_id)).encode()
 
     if method == "GET" and path == "/diffusers/status":
         headers["Content-Type"] = "application/json"
@@ -159,18 +332,35 @@ def build_response(method: str, path: str, body: bytes):
         except json.JSONDecodeError:
             return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
         mode = str(job.get("renderer", "auto"))
+        job_id = str(job.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        if track:
+            _prune_progress_files()
+            job["progressPath"] = _progress_path(job_id)
+            _write_progress(job_id, {"phase": "loading"})
         if mode in ("diffusers", "auto") and _diffusers_available():
             try:
-                return 200, headers, json.dumps(diffusers_backend.generate(job)).encode()
+                _resolve_render_targets(job, _shelf_with_real(), discover_model_dir())
+                result = diffusers_backend.generate(job)
+                if track:
+                    _write_progress(job_id, {"phase": "done"})
+                return 200, headers, json.dumps(result).encode()
             except Exception as exc:  # fall back to procedural on any inference error
                 import traceback
                 print(f"[diffusers] render failed, falling back to procedural: {exc}", flush=True)
                 traceback.print_exc()
                 if mode == "diffusers":
+                    if track:
+                        _write_progress(job_id, {"phase": "error"})
                     return 503, headers, json.dumps({"error": f"diffusers failed: {exc}"}).encode()
         if mode == "diffusers" and not _diffusers_available():
+            if track:
+                _write_progress(job_id, {"phase": "error"})
             return 503, headers, json.dumps({"error": "diffusers/torch not installed on the bridge"}).encode()
-        return 200, headers, json.dumps(_procedural(job)).encode()
+        result = _procedural(job)
+        if track:
+            _write_progress(job_id, {"phase": "done"})
+        return 200, headers, json.dumps(result).encode()
 
     return 404, headers, json.dumps({"error": "not found"}).encode()
 
@@ -250,6 +440,7 @@ def run(port: int) -> None:
               f"Another bridge is probably already running — reusing it.", flush=True)
         return
     print(f"LumenDeck bridge on http://127.0.0.1:{port}", flush=True)
+    _refresh_diffusers_cache_async()  # warm the status cache so /health is honest fast
     server.serve_forever()
 
 
