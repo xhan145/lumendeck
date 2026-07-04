@@ -87,6 +87,45 @@ def _diffusers_available() -> bool:
     return _HAS_DIFFUSERS_MODULE and diffusers_backend.is_available()
 
 
+# Probing diffusers availability spawns worker subprocesses (seconds). /health and
+# /models must answer instantly (the app pings with a 1.5s timeout), so they read a
+# cache refreshed by a background thread; /generate keeps the authoritative check.
+_STATUS_CACHE: dict = {"ts": 0.0, "available": False, "status": None, "busy": False}
+
+
+def _refresh_diffusers_cache_async() -> None:
+    if _STATUS_CACHE["busy"]:
+        return
+    _STATUS_CACHE["busy"] = True
+
+    def work() -> None:
+        try:
+            available = _diffusers_available()
+            status = _diffusers_status()
+            _STATUS_CACHE.update(available=available, status=status, ts=time.time())
+        except Exception:
+            _STATUS_CACHE["ts"] = time.time()
+        finally:
+            _STATUS_CACHE["busy"] = False
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _cached_diffusers() -> tuple[bool, dict]:
+    if time.time() - _STATUS_CACHE["ts"] > 30:
+        _refresh_diffusers_cache_async()
+    status = _STATUS_CACHE["status"]
+    if status is None:
+        status = {
+            "modelId": "stabilityai/sd-turbo",
+            "dependenciesReady": False,
+            "loaded": False,
+            "modelCached": None,
+            "message": "Checking Diffusers availability…",
+        }
+    return bool(_STATUS_CACHE["available"]), status
+
+
 def _diffusers_status() -> dict:
     if not _HAS_DIFFUSERS_MODULE:
         return {
@@ -110,7 +149,7 @@ def _diffusers_shelf_entry() -> dict:
     Marked installed only when it can actually render (deps present AND weights
     cached), so the app auto-selects it only when real output will succeed.
     """
-    status = _diffusers_status()
+    _available, status = _cached_diffusers()
     ready = bool(status.get("dependenciesReady"))
     cached = status.get("modelCached")
     # Usable when deps are present and the weights are not known-missing. If cache
@@ -150,7 +189,7 @@ def _hub_cached(hub_id: str) -> bool:
 
 
 def _sdxl_shelf_entry() -> dict:
-    status = _diffusers_status()
+    _available, status = _cached_diffusers()
     ready = bool(status.get("dependenciesReady"))
     hub_id = "stabilityai/sdxl-turbo"
     installed = ready and _hub_cached(hub_id)
@@ -249,7 +288,8 @@ def build_response(method: str, path: str, body: bytes):
 
     if method == "GET" and path == "/health":
         headers["Content-Type"] = "application/json"
-        payload = {"status": "ok", "adapter": "procedural", "diffusers": _diffusers_available(), "model": _diffusers_status()}
+        available, status = _cached_diffusers()
+        payload = {"status": "ok", "adapter": "procedural", "diffusers": available, "model": status}
         return 200, headers, json.dumps(payload).encode()
 
     if method == "GET" and path == "/models":
@@ -400,6 +440,7 @@ def run(port: int) -> None:
               f"Another bridge is probably already running — reusing it.", flush=True)
         return
     print(f"LumenDeck bridge on http://127.0.0.1:{port}", flush=True)
+    _refresh_diffusers_cache_async()  # warm the status cache so /health is honest fast
     server.serve_forever()
 
 
