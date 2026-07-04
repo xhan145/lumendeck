@@ -8,6 +8,7 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
+  { id: 'guide', label: 'Guide', icon: () => Icon.help({ size: 22 }) },
   { id: 'recipe', label: 'Recipe', icon: () => Icon.home({ size: 22 }) },
   { id: 'graph', label: 'Graph', icon: () => Icon.graph({ size: 22 }) },
   { id: 'shelf', label: 'Shelf', icon: () => Icon.grid({ size: 22 }) },

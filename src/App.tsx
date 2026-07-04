@@ -4,6 +4,7 @@ import { APP_VERSION } from './state/storeConstants';
 import { BackendSettingsPanel } from './components/BackendSettingsPanel';
 import { TurboForgePanel } from './components/TurboForgePanel';
 import { Gallery } from './components/gallery/Gallery';
+import { GuideView } from './components/guide/GuideView';
 import { GraphView } from './components/graph/GraphView';
 import { HealthPanel } from './components/health/HealthPanel';
 import { BrandMark, Icon } from './components/icons';
@@ -17,6 +18,7 @@ import './styles/base.css';
 import './styles/app.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
+  guide: 'Guide',
   recipe: 'Recipe',
   graph: 'Graph',
   shelf: 'Model Shelf',
@@ -121,7 +123,8 @@ export function App() {
       <div className="workspace">
         <NavRail view={view} setView={(v) => { setView(v); setRailOpen(false); }} onSettings={() => setRailOpen((v) => !v)} />
         <div className="main-pane">
-          {view === 'recipe' ? <RecipeView />
+          {view === 'guide' ? <GuideView onOpenControls={() => setRailOpen((v) => !v)} />
+            : view === 'recipe' ? <RecipeView />
             : view === 'graph' ? <GraphView />
             : view === 'shelf' ? <ModelShelf />
             : <Gallery />}

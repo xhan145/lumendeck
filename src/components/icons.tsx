@@ -105,6 +105,15 @@ export const Icon = {
     ),
   pulse: (p?: IconProps) => svg(<path d="M3 12h4l2-6 4 12 2-6h6" />, p),
   folder: (p?: IconProps) => svg(<path d="M3 6h6l2 2h10v11H3z" />, p),
+  help: (p?: IconProps) =>
+    svg(
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M9.8 9a2.25 2.25 0 1 1 3.6 1.8c-.9.6-1.4 1.2-1.4 2.2" />
+        <circle cx="12" cy="17" r="0.8" fill="currentColor" stroke="none" />
+      </>,
+      p,
+    ),
   grid: (p?: IconProps) =>
     svg(
       <>

@@ -40,7 +40,7 @@ import {
 import { loadPersisted, savePersisted } from './persistence';
 import { APP_VERSION } from './storeConstants';
 
-export type ViewId = 'recipe' | 'graph' | 'shelf' | 'gallery';
+export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery';
 
 export interface GalleryItem {
   id: string;
@@ -183,7 +183,7 @@ export const useStudio = create<StudioState>((set, get) => {
     shelf: DEMO_SHELF,
     shelfSource: 'demo',
     health: checkHealth(initialWorkflow, DEMO_SHELF),
-    view: 'recipe',
+    view: 'guide',
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
     gallery: persisted.gallery ?? [],
