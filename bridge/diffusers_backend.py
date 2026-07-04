@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +146,20 @@ def main():
         return
     if command == "generate":
         job = json.load(sys.stdin)
+        progress_path = job.get("progressPath")
+
+        def report(data):
+            # Best-effort progress channel back to the bridge server (file-based,
+            # since this worker is a separate process).
+            if not progress_path:
+                return
+            try:
+                with open(progress_path, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh)
+            except OSError:
+                pass
+
+        report({"phase": "loading"})
         import torch
         pipe = load_pipe()
         seed = int(job.get("seed", 0))
@@ -152,14 +167,26 @@ def main():
             seed = 0
         generator = torch.Generator(device=pipe.device).manual_seed(seed)
         steps = max(1, min(8, int(job.get("steps", 2))))
-        image = pipe(
+        report({"phase": "rendering", "step": 0, "steps": steps})
+
+        def on_step(_pipe, step, _timestep, callback_kwargs):
+            report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
+            return callback_kwargs
+
+        kwargs = dict(
             prompt=str(job.get("prompt", "")),
             num_inference_steps=steps,
             guidance_scale=0.0,
             width=int(job.get("width", 512)),
             height=int(job.get("height", 512)),
             generator=generator,
-        ).images[0]
+        )
+        try:
+            image = pipe(**kwargs, callback_on_step_end=on_step).images[0]
+        except TypeError:
+            # Older diffusers without callback_on_step_end — render without progress.
+            image = pipe(**kwargs).images[0]
+        report({"phase": "done", "step": steps, "steps": steps})
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         print(json.dumps({"image_base64": base64.b64encode(buf.getvalue()).decode("ascii"), "seed": seed}))
@@ -216,6 +243,21 @@ def _run(cmd: list[str], timeout: int = 1200, input_text: str | None = None) -> 
     )
 
 
+_native_torch_cache: dict[str, bool] = {}
+
+
+def _python_has_native_torch(python: dict[str, Any]) -> bool:
+    """True when this interpreter can import torch without the managed site dir."""
+    key = " ".join(python["cmd"])
+    if key not in _native_torch_cache:
+        try:
+            _run(python["cmd"] + ["-c", "import torch, diffusers"], timeout=180)
+            _native_torch_cache[key] = True
+        except Exception:
+            _native_torch_cache[key] = False
+    return _native_torch_cache[key]
+
+
 def _base_python_has_module(module_name: str) -> bool:
     python = _find_python()
     if not python:
@@ -246,7 +288,7 @@ def _probe_python(cmd: list[str]) -> dict[str, Any] | None:
         proc = _run(cmd + ["-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"], timeout=20)
         version_text = proc.stdout.strip().splitlines()[-1]
         parts = tuple(int(part) for part in version_text.split(".")[:3])
-        if parts < (3, 10) or parts >= (3, 14):
+        if parts < (3, 10) or parts >= (3, 15):
             return None
         return {"cmd": cmd, "version": version_text}
     except Exception:
@@ -289,6 +331,10 @@ def _find_python() -> dict[str, Any] | None:
     if _python_cache is not False:
         return _python_cache
     candidates: list[list[str]] = []
+    # Prefer the interpreter running this bridge — it is proven importable here.
+    # (Skip when frozen: PyInstaller's sys.executable cannot run worker scripts.)
+    if not getattr(sys, "frozen", False) and sys.executable:
+        candidates.append([sys.executable])
     if os.name == "nt":
         candidates.extend([["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"], ["py", "-3"]])
     candidates.extend([["python"], ["python3"]])
@@ -305,10 +351,17 @@ def _find_python() -> dict[str, Any] | None:
 def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
     worker = _write_worker()
     env = os.environ.copy()
-    env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
+    # Only inject the managed site-packages when the chosen Python lacks torch
+    # natively. A Python that already has torch must use its own package set —
+    # mixing in the managed runtime's pinned wheels (built for another Python
+    # version) breaks imports like numpy.
+    if _python_has_native_torch(python):
+        env.pop("LUMENDECK_DIFFUSERS_SITE", None)
+    else:
+        env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
     env["LUMENDECK_DIFFUSERS_MODEL"] = _MODEL_ID
     proc = subprocess.run(
         python["cmd"] + [str(worker), command],

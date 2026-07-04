@@ -43,6 +43,27 @@ def test_models_includes_real_diffusers_entry():
     assert "diffusers-real" in ids
 
 
+def test_progress_unknown_job_returns_unknown_phase():
+    status, _headers, body = build_response("GET", "/progress/does-not-exist", b"")
+    assert status == 200
+    assert json.loads(body)["phase"] == "unknown"
+
+
+def test_progress_rejects_invalid_job_ids():
+    status, _headers, body = build_response("GET", "/progress/../../etc", b"")
+    assert status == 200 and json.loads(body)["phase"] == "unknown"
+
+
+def test_generate_with_job_id_reports_done():
+    payload = json.dumps({"prompt": "x", "seed": 2, "width": 64, "height": 64, "steps": 4,
+                          "renderer": "procedural", "jobId": "test-job-123"}).encode()
+    status, _headers, _body = build_response("POST", "/generate", payload)
+    assert status == 200
+    p_status, _h, p_body = build_response("GET", "/progress/test-job-123", b"")
+    assert p_status == 200
+    assert json.loads(p_body)["phase"] == "done"
+
+
 def test_diffusers_status_returns_model_status():
     status, _headers, body = build_response("GET", "/diffusers/status", b"")
     assert status == 200

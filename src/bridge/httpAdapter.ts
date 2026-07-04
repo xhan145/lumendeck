@@ -108,18 +108,45 @@ export class HttpAdapter implements BackendAdapter {
 
   async generate(job: RenderJob, onProgress?: (p: number) => void): Promise<RenderResult> {
     onProgress?.(0.05);
-    const res = await fetch(`${this.base}/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...job, renderer: this.renderer }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Bridge /generate failed (${res.status}): ${text.slice(0, 200)}`);
+    const jobId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
+
+    // Live progress: poll the bridge's per-job endpoint while the POST is in flight.
+    // Best-effort — poll errors are ignored and never fail the render.
+    let polling = Boolean(onProgress);
+    const pollLoop = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 600));
+        if (!polling) break;
+        try {
+          const res = await fetch(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1200) });
+          if (!res.ok) continue;
+          const p = (await res.json()) as { phase?: string; step?: number; steps?: number };
+          if (p.phase === 'loading') onProgress?.(0.1);
+          else if (p.phase === 'rendering' && p.steps && p.steps > 0) {
+            onProgress?.(Math.min(0.95, 0.15 + 0.8 * ((p.step ?? 0) / p.steps)));
+          }
+        } catch {
+          // ignore — progress is advisory
+        }
+      }
+    };
+    if (polling) void pollLoop();
+
+    try {
+      const res = await fetch(`${this.base}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...job, renderer: this.renderer, jobId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Bridge /generate failed (${res.status}): ${text.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as { image_base64: string; seed: number };
+      onProgress?.(1);
+      return { dataUrl: `data:image/png;base64,${data.image_base64}`, seed: data.seed };
+    } finally {
+      polling = false;
     }
-    onProgress?.(0.9);
-    const data = (await res.json()) as { image_base64: string; seed: number };
-    onProgress?.(1);
-    return { dataUrl: `data:image/png;base64,${data.image_base64}`, seed: data.seed };
   }
 }

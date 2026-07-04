@@ -15,8 +15,11 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import re
 import sys
+import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
@@ -25,7 +28,47 @@ from scanner import get_shelf
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/generate", "/diffusers")
+API_PREFIXES = ("/health", "/models", "/generate", "/diffusers", "/progress")
+
+# ---- Render progress (file-based; the diffusers worker is a separate process) ----
+_JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def _progress_path(job_id: str) -> str:
+    return os.path.join(tempfile.gettempdir(), f"lumendeck-progress-{job_id}.json")
+
+
+def _write_progress(job_id: str, data: dict) -> None:
+    try:
+        with open(_progress_path(job_id), "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+    except OSError:
+        pass
+
+
+def _read_progress(job_id: str) -> dict:
+    try:
+        with open(_progress_path(job_id), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {"phase": "unknown"}
+
+
+def _prune_progress_files(max_age_s: int = 3600) -> None:
+    """Drop stale progress files so temp doesn't accumulate them."""
+    try:
+        now = time.time()
+        for name in os.listdir(tempfile.gettempdir()):
+            if not name.startswith("lumendeck-progress-"):
+                continue
+            path = os.path.join(tempfile.gettempdir(), name)
+            try:
+                if now - os.path.getmtime(path) > max_age_s:
+                    os.remove(path)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 try:
     import diffusers_backend
@@ -130,6 +173,13 @@ def build_response(method: str, path: str, body: bytes):
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(_shelf_with_real()).encode()
 
+    if method == "GET" and path.startswith("/progress/"):
+        headers["Content-Type"] = "application/json"
+        job_id = path[len("/progress/"):]
+        if not _JOB_ID.match(job_id):
+            return 200, headers, json.dumps({"phase": "unknown"}).encode()
+        return 200, headers, json.dumps(_read_progress(job_id)).encode()
+
     if method == "GET" and path == "/diffusers/status":
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(_diffusers_status()).encode()
@@ -159,18 +209,34 @@ def build_response(method: str, path: str, body: bytes):
         except json.JSONDecodeError:
             return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
         mode = str(job.get("renderer", "auto"))
+        job_id = str(job.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        if track:
+            _prune_progress_files()
+            job["progressPath"] = _progress_path(job_id)
+            _write_progress(job_id, {"phase": "loading"})
         if mode in ("diffusers", "auto") and _diffusers_available():
             try:
-                return 200, headers, json.dumps(diffusers_backend.generate(job)).encode()
+                result = diffusers_backend.generate(job)
+                if track:
+                    _write_progress(job_id, {"phase": "done"})
+                return 200, headers, json.dumps(result).encode()
             except Exception as exc:  # fall back to procedural on any inference error
                 import traceback
                 print(f"[diffusers] render failed, falling back to procedural: {exc}", flush=True)
                 traceback.print_exc()
                 if mode == "diffusers":
+                    if track:
+                        _write_progress(job_id, {"phase": "error"})
                     return 503, headers, json.dumps({"error": f"diffusers failed: {exc}"}).encode()
         if mode == "diffusers" and not _diffusers_available():
+            if track:
+                _write_progress(job_id, {"phase": "error"})
             return 503, headers, json.dumps({"error": "diffusers/torch not installed on the bridge"}).encode()
-        return 200, headers, json.dumps(_procedural(job)).encode()
+        result = _procedural(job)
+        if track:
+            _write_progress(job_id, {"phase": "done"})
+        return 200, headers, json.dumps(result).encode()
 
     return 404, headers, json.dumps({"error": "not found"}).encode()
 
