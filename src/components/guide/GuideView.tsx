@@ -87,7 +87,7 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
   const dependenciesReady = bridgeModelStatus?.dependenciesReady === true;
   const modelDownloaded = bridgeModelStatus?.loaded === true || bridgeModelStatus?.modelCached === true;
   const realModelReady = usingBridge && bridgeOnline && realRenderer && dependenciesReady && modelDownloaded;
-  const canInstallRuntime = !bridgeModelBusy && bridgeModelStatus?.installable !== false;
+  const canInstallRuntime = !bridgeModelBusy;
   const graphReady = errors.length === 0;
   const recipeReady = Boolean(prompt && checkpoint && checkpoint.installed && width > 0 && height > 0);
   const canRenderReal = realModelReady && graphReady && recipeReady && !bridgeModelBusy;

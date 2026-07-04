@@ -126,6 +126,15 @@ def _cached_diffusers() -> tuple[bool, dict]:
     return bool(_STATUS_CACHE["available"]), status
 
 
+def _set_diffusers_cache(status: dict) -> None:
+    _STATUS_CACHE.update(
+        available=bool(status.get("dependenciesReady")) and status.get("modelCached") is not False,
+        status=status,
+        ts=time.time(),
+        busy=False,
+    )
+
+
 def _diffusers_status() -> dict:
     if not _HAS_DIFFUSERS_MODULE:
         return {
@@ -312,7 +321,9 @@ def build_response(method: str, path: str, body: bytes):
         if not _HAS_DIFFUSERS_MODULE:
             return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
         try:
-            return 200, headers, json.dumps(diffusers_backend.download_model()).encode()
+            status = diffusers_backend.download_model()
+            _set_diffusers_cache(status)
+            return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
 
@@ -321,7 +332,9 @@ def build_response(method: str, path: str, body: bytes):
         if not _HAS_DIFFUSERS_MODULE:
             return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
         try:
-            return 200, headers, json.dumps(diffusers_backend.install_runtime()).encode()
+            status = diffusers_backend.install_runtime()
+            _set_diffusers_cache(status)
+            return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
 
