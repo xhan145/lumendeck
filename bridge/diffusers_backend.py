@@ -8,12 +8,14 @@ the PyInstaller sidecar's own Python runtime.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -201,8 +203,131 @@ def apply_loras(pipe, lora_files):
             print(f"[worker] set_adapters failed: {exc}", file=sys.stderr, flush=True)
 
 
+def _ref_key(ref):
+    if ref.get("kind") == "file":
+        return "file:" + str(ref.get("path", ""))
+    return "hub:" + str(ref.get("id") or MODEL_ID)
+
+
+def do_generate(job, state):
+    """Render one image, reusing state['pipe'] when the model hasn't changed.
+
+    `state` persists across calls in serve mode, so the (multi-GB) model loads once
+    and only reloads when you switch checkpoints. In one-shot mode it's a fresh dict.
+    """
+    progress_path = job.get("progressPath")
+
+    def report(data):
+        if not progress_path:
+            return
+        try:
+            with open(progress_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError:
+            pass
+
+    import torch
+    model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}
+    key = _ref_key(model_ref)
+    if state.get("key") != key or state.get("pipe") is None:
+        report({"phase": "loading"})
+        if state.get("pipe") is not None:
+            state["pipe"] = None
+            state["lora_key"] = None
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        state["pipe"] = load_pipe(model_ref)
+        state["key"] = key
+        state["lora_key"] = None
+    pipe = state["pipe"]
+
+    lora_key = json.dumps(job.get("loraFiles") or [], sort_keys=True)
+    if state.get("lora_key") != lora_key:
+        try:
+            pipe.unload_lora_weights()
+        except Exception:
+            pass
+        apply_loras(pipe, job.get("loraFiles"))
+        state["lora_key"] = lora_key
+
+    seed = int(job.get("seed", 0))
+    if seed < 0:
+        seed = 0
+    generator = torch.Generator(device=pipe.device).manual_seed(seed)
+    effective_id = str(model_ref.get("id") or MODEL_ID)
+    is_turbo = model_ref.get("kind") != "file" and "turbo" in effective_id.lower()
+    if is_turbo:
+        steps = max(1, min(8, int(job.get("steps", 2))))
+        guidance = 0.0
+    else:
+        steps = max(1, min(50, int(job.get("steps", 25))))
+        guidance = float(job.get("cfg", 7.0))
+    report({"phase": "rendering", "step": 0, "steps": steps})
+
+    def on_step(_pipe, step, _timestep, callback_kwargs):
+        report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
+        return callback_kwargs
+
+    kwargs = dict(
+        prompt=str(job.get("prompt", "")),
+        negative_prompt=str(job.get("negativePrompt", "")) or None,
+        num_inference_steps=steps,
+        guidance_scale=guidance,
+        width=int(job.get("width", 512)),
+        height=int(job.get("height", 512)),
+        generator=generator,
+    )
+    try:
+        image = pipe(**kwargs, callback_on_step_end=on_step).images[0]
+    except TypeError:
+        image = pipe(**kwargs).images[0]
+    report({"phase": "done", "step": steps, "steps": steps})
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return {"image_base64": base64.b64encode(buf.getvalue()).decode("ascii"), "seed": seed}
+
+
+def serve():
+    """Persistent request loop: keeps the model resident across renders.
+
+    Reads one JSON request per stdin line, writes one marker-prefixed JSON result
+    per line to stdout (progress bars/warnings go to stderr, so stdout stays clean).
+    Exits on stdin EOF — i.e. when the bridge that owns this pipe goes away.
+    """
+    marker = "@@LD_RESULT@@"
+    state = {"pipe": None, "key": None, "lora_key": None}
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+            command = req.get("command")
+            payload = req.get("payload") or {}
+            if command == "generate":
+                out = do_generate(payload, state)
+            elif command == "ping":
+                out = {"ok": True}
+            elif command == "status":
+                out = status()
+            else:
+                out = {"error": f"unknown command: {command}"}
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            out = {"error": str(exc)}
+        sys.stdout.write(marker + json.dumps(out) + "\n")
+        sys.stdout.flush()
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if command == "serve":
+        serve()
+        return
     if command == "status":
         print(json.dumps(status()))
         return
@@ -211,63 +336,8 @@ def main():
         print(json.dumps(status("SD-Turbo downloaded and loaded for real photo renders.", loaded=True)))
         return
     if command == "generate":
-        job = json.load(sys.stdin)
-        progress_path = job.get("progressPath")
-
-        def report(data):
-            # Best-effort progress channel back to the bridge server (file-based,
-            # since this worker is a separate process).
-            if not progress_path:
-                return
-            try:
-                with open(progress_path, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh)
-            except OSError:
-                pass
-
-        report({"phase": "loading"})
-        import torch
-        model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}
-        pipe = load_pipe(model_ref)
-        apply_loras(pipe, job.get("loraFiles"))
-        seed = int(job.get("seed", 0))
-        if seed < 0:
-            seed = 0
-        generator = torch.Generator(device=pipe.device).manual_seed(seed)
-        # Turbo-distilled models want no CFG and very few steps; regular
-        # checkpoints need real guidance and more steps.
-        effective_id = str(model_ref.get("id") or MODEL_ID)
-        is_turbo = model_ref.get("kind") != "file" and "turbo" in effective_id.lower()
-        if is_turbo:
-            steps = max(1, min(8, int(job.get("steps", 2))))
-            guidance = 0.0
-        else:
-            steps = max(1, min(50, int(job.get("steps", 25))))
-            guidance = float(job.get("cfg", 7.0))
-        report({"phase": "rendering", "step": 0, "steps": steps})
-
-        def on_step(_pipe, step, _timestep, callback_kwargs):
-            report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
-            return callback_kwargs
-
-        kwargs = dict(
-            prompt=str(job.get("prompt", "")),
-            negative_prompt=str(job.get("negativePrompt", "")) or None,
-            num_inference_steps=steps,
-            guidance_scale=guidance,
-            width=int(job.get("width", 512)),
-            height=int(job.get("height", 512)),
-            generator=generator,
-        )
-        try:
-            image = pipe(**kwargs, callback_on_step_end=on_step).images[0]
-        except TypeError:
-            # Older diffusers without callback_on_step_end — render without progress.
-            image = pipe(**kwargs).images[0]
-        report({"phase": "done", "step": steps, "steps": steps})
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        print(json.dumps({"image_base64": base64.b64encode(buf.getvalue()).decode("ascii"), "seed": seed}))
+        out = do_generate(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
+        print(json.dumps(out))
         return
     raise SystemExit(f"unknown command: {command}")
 
@@ -523,11 +593,7 @@ def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
     return detail or f"diffusers worker failed with exit code {returncode}"
 
 
-def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
-    python = _find_python()
-    if not python:
-        raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
-    worker = _write_worker()
+def _worker_env(python: dict[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
     # Only inject the managed site-packages when the chosen Python lacks torch
     # natively. A Python that already has torch must use its own package set —
@@ -538,6 +604,15 @@ def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 
     else:
         env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
     env["LUMENDECK_DIFFUSERS_MODEL"] = _MODEL_ID
+    return env
+
+
+def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
+    python = _find_python()
+    if not python:
+        raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
+    worker = _write_worker()
+    env = _worker_env(python)
     proc = subprocess.run(
         python["cmd"] + [str(worker), command],
         input=json.dumps(payload or {}),
@@ -553,6 +628,86 @@ def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 
     if not lines:
         raise RuntimeError("diffusers worker returned no JSON")
     return json.loads(lines[-1])
+
+
+_RESULT_MARKER = "@@LD_RESULT@@"
+
+
+class _PersistentWorker:
+    """A long-lived worker that keeps the model resident between renders.
+
+    Requests/responses are newline-delimited JSON over stdin/stdout; results are
+    prefixed with a marker so stray library stdout can't corrupt the stream.
+    Dies automatically when the bridge closes its stdin (i.e. on app exit).
+    """
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+
+    def _alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def _spawn(self) -> None:
+        python = _find_python()
+        if not python:
+            raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
+        worker = _write_worker()
+        log_path = _runtime_dir() / "worker.log"
+        try:
+            log = open(log_path, "ab", buffering=0)
+        except OSError:
+            log = subprocess.DEVNULL
+        self._proc = subprocess.Popen(
+            python["cmd"] + [str(worker), "serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=log,
+            text=True,
+            bufsize=1,
+            env=_worker_env(python),
+        )
+
+    def request(self, command: str, payload: dict[str, Any], timeout: int = 1800) -> dict[str, Any]:
+        with self._lock:
+            if not self._alive():
+                self._spawn()
+            assert self._proc and self._proc.stdin and self._proc.stdout
+            message = json.dumps({"command": command, "payload": payload}) + "\n"
+            try:
+                self._proc.stdin.write(message)
+                self._proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                self._spawn()
+                assert self._proc and self._proc.stdin
+                self._proc.stdin.write(message)
+                self._proc.stdin.flush()
+            while True:
+                line = self._proc.stdout.readline()
+                if line == "":
+                    self._proc = None
+                    raise RuntimeError("diffusers worker exited unexpectedly (see worker.log)")
+                if line.startswith(_RESULT_MARKER):
+                    return json.loads(line[len(_RESULT_MARKER):])
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._alive():
+                assert self._proc
+                try:
+                    if self._proc.stdin:
+                        self._proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+            self._proc = None
+
+
+_persistent_worker = _PersistentWorker()
+atexit.register(_persistent_worker.shutdown)
 
 
 def _pip_install(
@@ -655,4 +810,9 @@ def generate(job: dict) -> dict:
     status = model_status()
     if not status.get("dependenciesReady"):
         raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
-    return _worker("generate", payload=job, timeout=1800)
+    # Persistent worker: the model stays resident, so only the first render pays the
+    # multi-GB load cost; later renders reuse it (reloading only on a model switch).
+    out = _persistent_worker.request("generate", job, timeout=1800)
+    if isinstance(out, dict) and out.get("error"):
+        raise RuntimeError(out["error"])
+    return out
