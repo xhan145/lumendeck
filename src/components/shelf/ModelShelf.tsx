@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { findAsset, type ModelAsset, type ModelFamily } from '../../core/shelf';
 import { findNode } from '../../core/workflow';
 import type { LoraSlot } from '../../core/types';
 import { useStudio } from '../../state/store';
 import { Icon } from '../icons';
+import { CivitaiBrowser } from './CivitaiBrowser';
 
 type Filter = 'all' | 'checkpoint' | 'lora';
 const FAMILIES: (ModelFamily | 'all')[] = ['all', 'SD1.5', 'SDXL', 'SD3', 'Flux'];
@@ -72,8 +73,23 @@ function AssetCard({ asset }: { asset: ModelAsset }) {
 export function ModelShelf() {
   const shelf = useStudio((s) => s.shelf);
   const shelfSource = useStudio((s) => s.shelfSource);
+  const bridgeModelFolderStatus = useStudio((s) => s.bridgeModelFolderStatus);
+  const bridgeModelFolderBusy = useStudio((s) => s.bridgeModelFolderBusy);
+  const bridgeModelFolderError = useStudio((s) => s.bridgeModelFolderError);
+  const refreshModelFolderStatus = useStudio((s) => s.refreshModelFolderStatus);
+  const refreshShelfFromBridge = useStudio((s) => s.refreshShelfFromBridge);
+  const setBridgeModelFolder = useStudio((s) => s.setBridgeModelFolder);
   const [type, setType] = useState<Filter>('all');
   const [family, setFamily] = useState<ModelFamily | 'all'>('all');
+  const [folderPath, setFolderPath] = useState('');
+
+  useEffect(() => {
+    void refreshModelFolderStatus();
+  }, [refreshModelFolderStatus]);
+
+  useEffect(() => {
+    setFolderPath(bridgeModelFolderStatus?.configured || bridgeModelFolderStatus?.active || '');
+  }, [bridgeModelFolderStatus?.active, bridgeModelFolderStatus?.configured]);
 
   const filtered = shelf.filter(
     (a) => (type === 'all' || a.assetType === type) && (family === 'all' || a.family === family),
@@ -88,6 +104,43 @@ export function ModelShelf() {
             {shelf.length} assets · source: {shelfSource === 'bridge' ? 'local bridge scan' : 'demo catalog'}
           </span>
         </div>
+        <section className="shelf-folder" aria-label="Local models folder">
+          <div className="shelf-folder-copy">
+            <h3>{Icon.folder({ size: 16 })} Bring your own models</h3>
+            <p>
+              Point LumenDeck at a folder containing checkpoints and LoRAs. It scans .safetensors, .ckpt, .pt, and .pth files, including ComfyUI-style subfolders.
+            </p>
+            <div className="shelf-folder-status">
+              <span className="chip">Active: {bridgeModelFolderStatus?.active || 'auto/demo'}</span>
+              <span className="chip">{bridgeModelFolderStatus?.checkpointCount ?? 0} checkpoints</span>
+              <span className="chip">{bridgeModelFolderStatus?.loraCount ?? 0} LoRAs</span>
+            </div>
+          </div>
+          <div className="shelf-folder-controls">
+            <label className="field">
+              <span className="field-label">Folder path</span>
+              <input
+                value={folderPath}
+                placeholder="C:\ComfyUI\models or D:\AI\models"
+                onChange={(event) => setFolderPath(event.target.value)}
+              />
+              <span className="field-help">Paste an absolute Windows folder path. Clear it to return to auto-detect/demo.</span>
+            </label>
+            <div className="turbo-actions">
+              <button className="btn primary" type="button" disabled={bridgeModelFolderBusy} onClick={() => void setBridgeModelFolder(folderPath)}>
+                {Icon.folder({ size: 14 })} {bridgeModelFolderBusy ? 'Scanning...' : 'Scan folder'}
+              </button>
+              <button className="btn" type="button" disabled={bridgeModelFolderBusy} onClick={() => { setFolderPath(''); void setBridgeModelFolder(''); }}>
+                {Icon.restore({ size: 14 })} Auto
+              </button>
+              <button className="btn" type="button" disabled={bridgeModelFolderBusy} onClick={() => { void refreshModelFolderStatus(); void refreshShelfFromBridge(); }}>
+                {Icon.pulse({ size: 14 })} Refresh
+              </button>
+            </div>
+            {bridgeModelFolderError ? <p className="backend-model-error">{bridgeModelFolderError}</p> : null}
+          </div>
+        </section>
+        <CivitaiBrowser />
         <div className="shelf-filters" role="group" aria-label="Filter by type">
           {(['all', 'checkpoint', 'lora'] as Filter[]).map((f) => (
             <button key={f} className="chip filter-chip" aria-pressed={type === f} onClick={() => setType(f)}>

@@ -20,6 +20,20 @@ function resolveBase(url: string): string {
   return isTauri() ? DEFAULT_BRIDGE_URL : '';
 }
 
+export interface CivitaiResult {
+  modelId: number;
+  name: string;
+  type: string;
+  nsfw: boolean;
+  baseModel: string;
+  versionId: number;
+  fileName: string;
+  sizeKB: number;
+  downloadUrl: string;
+  thumbnail: string;
+  downloads: number;
+}
+
 export interface BridgeModelStatus {
   modelId: string;
   dependenciesReady: boolean;
@@ -39,6 +53,16 @@ export interface BridgeModelStatus {
   };
   message: string;
   dependencies?: Record<string, unknown>;
+}
+
+export interface BridgeModelFolderStatus {
+  configured: string;
+  active: string;
+  assetCount: number;
+  checkpointCount: number;
+  loraCount: number;
+  usingDemo: boolean;
+  candidates: string[];
 }
 
 /**
@@ -80,10 +104,78 @@ export class HttpAdapter implements BackendAdapter {
     return (await res.json()) as ModelAsset[];
   }
 
+  async civitaiSearch(query: string, type: 'Checkpoint' | 'LORA', token = ''): Promise<CivitaiResult[]> {
+    const params = new URLSearchParams({ query, type });
+    if (token) params.set('token', token);
+    const res = await fetch(`${this.base}/civitai/search?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string } | null;
+      throw new Error(data?.error ?? `Civitai search failed: ${res.status}`);
+    }
+    return ((await res.json()) as { items: CivitaiResult[] }).items;
+  }
+
+  async civitaiDownload(
+    item: CivitaiResult,
+    token: string,
+    onProgress?: (received: number, total: number) => void,
+  ): Promise<{ path: string; bytes: number }> {
+    const jobId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
+    const assetType = item.type === 'LORA' ? 'lora' : 'checkpoint';
+    let polling = Boolean(onProgress);
+    const poll = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 700));
+        if (!polling) break;
+        try {
+          const res = await fetch(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1500) });
+          if (!res.ok) continue;
+          const p = (await res.json()) as { phase?: string; received?: number; total?: number };
+          if (p.phase === 'downloading') onProgress?.(p.received ?? 0, p.total ?? 0);
+        } catch { /* advisory */ }
+      }
+    };
+    if (polling) void poll();
+    try {
+      const res = await fetch(`${this.base}/civitai/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ downloadUrl: item.downloadUrl, fileName: item.fileName, assetType, token, jobId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(data?.error ?? `Download failed: ${res.status}`);
+      }
+      return (await res.json()) as { path: string; bytes: number };
+    } finally {
+      polling = false;
+    }
+  }
+
   async diffusersStatus(): Promise<BridgeModelStatus> {
     const res = await fetch(`${this.base}/diffusers/status`);
     if (!res.ok) throw new Error(`Bridge /diffusers/status failed: ${res.status}`);
     return (await res.json()) as BridgeModelStatus;
+  }
+
+  async modelFolderStatus(): Promise<BridgeModelFolderStatus> {
+    const res = await fetch(`${this.base}/model-folder`);
+    if (!res.ok) throw new Error(`Bridge /model-folder failed: ${res.status}`);
+    return (await res.json()) as BridgeModelFolderStatus;
+  }
+
+  async setModelFolder(path: string): Promise<BridgeModelFolderStatus> {
+    const res = await fetch(`${this.base}/model-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string; status?: BridgeModelFolderStatus } | null;
+      const message = data?.error ?? `Bridge /model-folder failed: ${res.status}`;
+      throw Object.assign(new Error(message), { status: data?.status });
+    }
+    return (await res.json()) as BridgeModelFolderStatus;
   }
 
   async downloadDiffusersModel(): Promise<BridgeModelStatus> {
@@ -142,9 +234,14 @@ export class HttpAdapter implements BackendAdapter {
         const text = await res.text().catch(() => '');
         throw new Error(`Bridge /generate failed (${res.status}): ${text.slice(0, 200)}`);
       }
-      const data = (await res.json()) as { image_base64: string; seed: number };
+      const data = (await res.json()) as { image_base64: string; seed: number; fallback?: boolean; fallbackReason?: string };
       onProgress?.(1);
-      return { dataUrl: `data:image/png;base64,${data.image_base64}`, seed: data.seed };
+      return {
+        dataUrl: `data:image/png;base64,${data.image_base64}`,
+        seed: data.seed,
+        fallback: data.fallback,
+        fallbackReason: data.fallbackReason,
+      };
     } finally {
       polling = false;
     }

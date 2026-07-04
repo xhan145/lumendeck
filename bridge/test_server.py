@@ -19,6 +19,55 @@ def test_models_returns_list():
     assert status == 200 and isinstance(json.loads(body), list)
 
 
+def test_model_folder_status_route():
+    status, _headers, body = build_response("GET", "/model-folder", b"")
+    assert status == 200
+    data = json.loads(body)
+    assert "configured" in data
+    assert "active" in data
+    assert "assetCount" in data
+
+
+def test_model_folder_rejects_missing_folder():
+    payload = json.dumps({"path": r"C:\definitely-not-a-lumendeck-model-folder"}).encode()
+    status, _headers, body = build_response("POST", "/model-folder", payload)
+    data = json.loads(body)
+    assert status == 400
+    assert "Folder does not exist" in data["error"]
+
+
+def test_model_folder_accepts_folder_and_scans():
+    import scanner
+    import shutil
+    import tempfile
+
+    previous_home = os.environ.get("LUMENDECK_HOME")
+    previous_model_dir = os.environ.get("LUMENDECK_MODEL_DIR")
+    home = tempfile.mkdtemp()
+    root = tempfile.mkdtemp()
+    try:
+        os.environ["LUMENDECK_HOME"] = home
+        os.environ.pop("LUMENDECK_MODEL_DIR", None)
+        open(os.path.join(root, "portrait_xl.safetensors"), "wb").write(b"model")
+        payload = json.dumps({"path": root}).encode()
+        status, _headers, body = build_response("POST", "/model-folder", payload)
+        data = json.loads(body)
+        assert status == 200
+        assert data["active"] == root
+        assert data["checkpointCount"] == 1
+    finally:
+        if previous_home is None:
+            os.environ.pop("LUMENDECK_HOME", None)
+        else:
+            os.environ["LUMENDECK_HOME"] = previous_home
+        if previous_model_dir is None:
+            os.environ.pop("LUMENDECK_MODEL_DIR", None)
+        else:
+            os.environ["LUMENDECK_MODEL_DIR"] = previous_model_dir
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def test_generate_returns_png_base64():
     payload = json.dumps({"prompt": "x", "seed": 5, "width": 96, "height": 96, "steps": 6}).encode()
     status, _headers, body = build_response("POST", "/generate", payload)
@@ -198,6 +247,9 @@ def test_diffusers_install_uses_backend_without_real_install():
 if __name__ == "__main__":
     test_health_reports_procedural_and_diffusers_flag()
     test_models_returns_list()
+    test_model_folder_status_route()
+    test_model_folder_rejects_missing_folder()
+    test_model_folder_accepts_folder_and_scans()
     test_generate_returns_png_base64()
     test_unknown_route_404()
     test_options_preflight_cors()

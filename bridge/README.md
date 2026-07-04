@@ -19,8 +19,10 @@ numpy, deterministic and reproducible from a seed, so it runs anywhere. An optio
 |--------|-----------------------|--------------------------------------------------------------------------|
 | GET    | `/health`             | `{ "status":"ok", "adapter":"procedural", "diffusers":bool, "model":... }` |
 | GET    | `/models`             | `ModelAsset[]` - local scan or demo catalog                              |
+| GET    | `/model-folder`       | Current configured/active local model folder and scan counts             |
+| POST   | `/model-folder`       | Persist a local model folder, then rescan                                |
 | GET    | `/diffusers/status`   | Diffusers dependency, cache, device, and model readiness                  |
-| POST   | `/diffusers/install`  | Creates managed runtime, installs CPU PyTorch/Diffusers, downloads model  |
+| POST   | `/diffusers/install`  | Creates managed runtime, installs CUDA-or-CPU PyTorch/Diffusers, downloads model |
 | POST   | `/diffusers/download` | Downloads/loads the configured Diffusers model into the HF cache          |
 | POST   | `/generate`           | `{ image_base64, seed }` - body may set `renderer` (see below)            |
 
@@ -59,7 +61,7 @@ Use **Install runtime + model** in the app's Backend panel. The bridge will:
 
 1. Find a compatible Python 3.10-3.13 install (Python 3.12 recommended).
 2. Create an app-local venv at `%LOCALAPPDATA%\LumenDeck\diffusers-runtime`.
-3. Install CPU PyTorch, Diffusers, Transformers, Accelerate, Safetensors, and Kornia.
+3. Install CUDA PyTorch on NVIDIA systems, otherwise CPU PyTorch, plus Diffusers, Transformers, Accelerate, Safetensors, and Kornia.
 4. Download/load `stabilityai/sd-turbo`.
 
 You can point the installer at a specific Python with `LUMENDECK_PYTHON`, or choose a different venv
@@ -90,6 +92,9 @@ text-to-image model id.
 
 Point the bridge at a models folder; it walks the tree for `.safetensors/.ckpt/.pt/.pth`, hashes each
 file, and infers family from the name. Files under a `lora`/`loras` folder are tagged as LoRAs.
+
+In the app, use **Model Shelf -> Bring your own models** and paste the folder path. The setting is
+persisted to `%LOCALAPPDATA%\LumenDeck\settings.json` and applies to the bundled desktop sidecar too.
 
 ```bash
 # Windows

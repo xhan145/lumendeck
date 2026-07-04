@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,9 @@ from pathlib import Path
 from typing import Any
 
 _MODEL_ID = os.environ.get("LUMENDECK_DIFFUSERS_MODEL", "stabilityai/sd-turbo")
-_INSTALL_COMMAND = "python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia"
+_TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+_TORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
+_INSTALL_COMMAND = "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch."
 _python_cache: dict[str, Any] | None | bool = False
 
 _WORKER_SOURCE = r'''
@@ -29,6 +32,7 @@ import importlib.util
 import io
 import json
 import os
+import struct
 import sys
 from pathlib import Path
 
@@ -57,7 +61,11 @@ def module_info(module_name, package_name=None):
         version = importlib.metadata.version(package_name)
     except importlib.metadata.PackageNotFoundError:
         version = None
-    return {"installed": True, "version": version}
+    try:
+        module = __import__(module_name)
+    except Exception as exc:
+        return {"installed": True, "version": version, "importable": False, "error": str(exc)}
+    return {"installed": True, "version": version, "importable": True, "module": module}
 
 
 def cache_dir():
@@ -88,10 +96,11 @@ def model_cached():
 def status(message=None, loaded=False):
     torch_info = module_info("torch")
     diffusers_info = module_info("diffusers")
-    ready = bool(torch_info["installed"] and diffusers_info["installed"])
+    torch = torch_info.pop("module", None)
+    diffusers_info.pop("module", None)
+    ready = bool(torch_info.get("importable") and diffusers_info.get("importable"))
     device = "unknown"
     cuda = False
-    torch = sys.modules.get("torch")
     if torch is not None:
         try:
             cuda = bool(torch.cuda.is_available())
@@ -115,7 +124,7 @@ def status(message=None, loaded=False):
         "device": device,
         "cuda": cuda,
         "cacheDir": cache_dir(),
-        "installCommand": "python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia",
+        "installCommand": "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch.",
         "message": message,
         "dependencies": {
             "torch": torch_info,
@@ -127,14 +136,35 @@ def status(message=None, loaded=False):
     }
 
 
+def detect_single_file_family(path):
+    """Read the .safetensors header (tensor names only, no data) to tell SDXL from SD1.5.
+
+    Filenames lie ('cyberrealisticPony' is SDXL), so inspect the actual weights.
+    Returns 'SDXL' | 'SD1.5' | None (unreadable)."""
+    try:
+        with open(path, "rb") as fh:
+            n = struct.unpack("<Q", fh.read(8))[0]
+            header = json.loads(fh.read(n))
+        keys = header.keys()
+        if any(("conditioner.embedders.1" in k) or ("add_embedding" in k) or (".label_emb." in k) for k in keys):
+            return "SDXL"
+        return "SD1.5"
+    except Exception:
+        return None
+
+
 def load_pipe(model_ref=None):
     import torch
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     ref = model_ref or {"kind": "hub", "id": MODEL_ID}
     if ref.get("kind") == "file":
         path = str(ref.get("path", ""))
-        family = str(ref.get("family", "")).upper()
-        is_xl = "XL" in family or "xl" in Path(path).name.lower()
+        detected = detect_single_file_family(path)
+        if detected:
+            is_xl = detected == "SDXL"
+        else:
+            family = str(ref.get("family", "")).upper()
+            is_xl = "XL" in family or "xl" in Path(path).name.lower()
         if is_xl:
             from diffusers import StableDiffusionXLPipeline as PipeCls
         else:
@@ -143,7 +173,14 @@ def load_pipe(model_ref=None):
     else:
         from diffusers import AutoPipelineForText2Image
         pipe = AutoPipelineForText2Image.from_pretrained(ref.get("id") or MODEL_ID, torch_dtype=dtype)
-    return pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    # Fit large models (SDXL) into modest VRAM (e.g. 8 GB laptop GPUs).
+    for enable in ("enable_attention_slicing", "enable_vae_slicing", "enable_vae_tiling"):
+        try:
+            getattr(pipe, enable)()
+        except Exception:
+            pass
+    return pipe
 
 
 def apply_loras(pipe, lora_files):
@@ -310,6 +347,39 @@ def _base_python_has_module(module_name: str) -> bool:
         return False
 
 
+def _has_nvidia_gpu() -> bool:
+    if os.environ.get("LUMENDECK_TORCH_DEVICE", "").lower() == "cpu":
+        return False
+    if os.environ.get("LUMENDECK_TORCH_DEVICE", "").lower() == "cuda":
+        return True
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return False
+    try:
+        proc = _run([nvidia_smi, "--query-gpu=name", "--format=csv,noheader"], timeout=10)
+        return bool(proc.stdout.strip())
+    except Exception:
+        return False
+
+
+def _torch_index_url() -> str:
+    configured = os.environ.get("LUMENDECK_TORCH_INDEX_URL")
+    if configured:
+        return configured
+    return _TORCH_CUDA_INDEX_URL if _has_nvidia_gpu() else _TORCH_CPU_INDEX_URL
+
+
+def _torch_target_label() -> str:
+    return "cuda" if _torch_index_url() != _TORCH_CPU_INDEX_URL else "cpu"
+
+
+def _reset_site_dir() -> None:
+    site = _site_dir()
+    if site.exists():
+        shutil.rmtree(site, ignore_errors=True)
+    site.mkdir(parents=True, exist_ok=True)
+
+
 def _remove_target_package(package_name: str) -> None:
     site = _site_dir()
     if not site.exists():
@@ -367,12 +437,56 @@ def _candidate_paths() -> list[Path]:
     return out
 
 
+def _managed_runtime_python() -> dict[str, Any] | None:
+    """Interpreter matching the managed CUDA runtime's ABI (e.g. cp312).
+
+    The managed runtime installs a CUDA torch built for one Python version. It only
+    imports under that exact version, so when the runtime exists we must run the
+    worker with a matching interpreter — otherwise we fall back to whatever torch is
+    installed system-wide, which is often CPU-only and can't run large models.
+    """
+    site = _site_dir()
+    if not site.exists():
+        return None
+    tag = None
+    for info in site.glob("torch-*.dist-info"):
+        wheel = info / "WHEEL"
+        if wheel.exists():
+            for line in wheel.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.lower().startswith("tag:"):
+                    tag = line.split(":", 1)[1].strip()
+                    break
+        if tag:
+            break
+    if not tag:
+        return None
+    match = re.search(r"cp3(\d+)", tag)
+    if not match:
+        return None
+    ver = f"3.{match.group(1)}"
+    candidates: list[list[str]] = []
+    if os.name == "nt":
+        candidates.append(["py", f"-{ver}"])
+    candidates.append([f"python{ver}"])
+    for candidate in candidates:
+        found = _probe_python(candidate)
+        if found:
+            return found
+    return None
+
+
 def _find_python() -> dict[str, Any] | None:
     global _python_cache
     if _python_cache is not False:
         return _python_cache
+    # Highest priority: the interpreter that matches a managed CUDA runtime, so
+    # GPU rendering actually engages instead of silently using system CPU torch.
+    managed = _managed_runtime_python()
+    if managed:
+        _python_cache = managed
+        return managed
     candidates: list[list[str]] = []
-    # Prefer the interpreter running this bridge — it is proven importable here.
+    # Then the interpreter running this bridge — proven importable here.
     # (Skip when frozen: PyInstaller's sys.executable cannot run worker scripts.)
     if not getattr(sys, "frozen", False) and sys.executable:
         candidates.append([sys.executable])
@@ -387,6 +501,26 @@ def _find_python() -> dict[str, Any] | None:
             return found
     _python_cache = None
     return None
+
+
+def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
+    """Extract a meaningful error from worker output.
+
+    Filters out progress bars and library warnings (which otherwise dominate the
+    tail and hide the real cause), and names native crashes explicitly.
+    """
+    # Windows access violation (e.g. loading SDXL weights into an SD1.5 pipeline).
+    if returncode in (3221225477, -1073741819):
+        return (
+            "The model process crashed while loading this checkpoint (access violation). "
+            "This usually means the checkpoint is an architecture the pipeline can't load. "
+            "Try a different checkpoint, or report it."
+        )
+    text = (stderr or stdout or "").strip()
+    noise = ("it/s", "s/it", "%|", "[transformers]", "Fetching ", "Loading pipeline")
+    signal = [ln for ln in text.splitlines() if ln.strip() and not any(tok in ln for tok in noise)]
+    detail = "\n".join(signal[-12:]) if signal else text[-1000:]
+    return detail or f"diffusers worker failed with exit code {returncode}"
 
 
 def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
@@ -414,20 +548,29 @@ def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 
         env=env,
     )
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(detail[-1000:] or f"diffusers worker failed with exit code {proc.returncode}")
+        raise RuntimeError(_worker_error(proc.returncode, proc.stderr, proc.stdout))
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     if not lines:
         raise RuntimeError("diffusers worker returned no JSON")
     return json.loads(lines[-1])
 
 
-def _pip_install(args: list[str], timeout: int = 1800, no_deps: bool = False) -> None:
+def _pip_install(
+    args: list[str],
+    timeout: int = 1800,
+    no_deps: bool = False,
+    index_url: str | None = None,
+    force_reinstall: bool = False,
+) -> None:
     python = _find_python()
     if not python:
         raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
     _site_dir().mkdir(parents=True, exist_ok=True)
     cmd = python["cmd"] + ["-m", "pip", "install", "--upgrade", "--target", str(_site_dir())]
+    if index_url:
+        cmd += ["--index-url", index_url]
+    if force_reinstall:
+        cmd.append("--force-reinstall")
     if no_deps:
         cmd.append("--no-deps")
     cmd += args
@@ -446,6 +589,8 @@ def _decorate_status(status: dict[str, Any]) -> dict[str, Any]:
         "worker": str(_worker_path()),
         "exists": _site_dir().exists(),
         "installer": python,
+        "torchTarget": _torch_target_label(),
+        "torchIndexUrl": _torch_index_url(),
     }
     deps = status.setdefault("dependencies", {})
     deps["managedRuntime"] = runtime
@@ -488,10 +633,8 @@ def install_runtime() -> dict[str, Any]:
     if not python:
         raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
 
-    if _base_python_has_module("torch"):
-        _remove_target_package("torch")
-    else:
-        _pip_install(["torch", "--index-url", "https://download.pytorch.org/whl/cpu"], timeout=1800)
+    _reset_site_dir()
+    _pip_install(["torch"], index_url=_torch_index_url(), force_reinstall=True, timeout=2400)
     _pip_install(
         ["huggingface-hub", "filelock", "numpy==1.26.4", "packaging", "pillow", "pyyaml", "regex", "requests", "tqdm", "tokenizers==0.19.1", "safetensors"],
         timeout=1200,

@@ -20,15 +20,49 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
-from scanner import discover_model_dir, get_shelf
+from scanner import (
+    configured_model_dir,
+    discover_model_dir,
+    get_shelf,
+    model_dir_status,
+    set_configured_model_dir,
+)
+
+try:
+    import civitai
+    _HAS_CIVITAI = True
+except Exception:
+    _HAS_CIVITAI = False
 
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/generate", "/diffusers", "/progress")
+API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/diffusers", "/progress", "/civitai")
+
+
+def _civitai_dest(file_name: str, asset_type: str) -> str:
+    """Resolve where a downloaded Civitai file should land in the model folder.
+
+    LoRAs go under loras/ so the scanner tags them correctly; checkpoints at root.
+    Falls back to an app-local models folder (persisted) when none is configured."""
+    root = configured_model_dir()
+    if not root or not os.path.isdir(root):
+        root = os.path.join(
+            os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LumenDeck", "models",
+        )
+        os.makedirs(root, exist_ok=True)
+        try:
+            set_configured_model_dir(root)
+        except Exception:
+            os.environ["LUMENDECK_MODEL_DIR"] = root
+    safe = os.path.basename(file_name) or "model.safetensors"
+    if asset_type.lower() == "lora":
+        return os.path.join(root, "loras", safe)
+    return os.path.join(root, safe)
 
 # ---- Render progress (file-based; the diffusers worker is a separate process) ----
 _JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -124,6 +158,15 @@ def _cached_diffusers() -> tuple[bool, dict]:
             "message": "Checking Diffusers availability…",
         }
     return bool(_STATUS_CACHE["available"]), status
+
+
+def _set_diffusers_cache(status: dict) -> None:
+    _STATUS_CACHE.update(
+        available=bool(status.get("dependenciesReady")) and status.get("modelCached") is not False,
+        status=status,
+        ts=time.time(),
+        busy=False,
+    )
 
 
 def _diffusers_status() -> dict:
@@ -296,6 +339,55 @@ def build_response(method: str, path: str, body: bytes):
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(_shelf_with_real()).encode()
 
+    if method == "GET" and path == "/model-folder":
+        headers["Content-Type"] = "application/json"
+        return 200, headers, json.dumps(model_dir_status()).encode()
+
+    if method == "GET" and path.startswith("/civitai/search"):
+        headers["Content-Type"] = "application/json"
+        if not _HAS_CIVITAI:
+            return 503, headers, json.dumps({"error": "Civitai module unavailable in this build."}).encode()
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
+        query = qs.get("query", [""])[0]
+        types = qs.get("type", ["Checkpoint"])[0]
+        token = qs.get("token", [""])[0] or os.environ.get("CIVITAI_TOKEN", "")
+        try:
+            items = civitai.search(query, types=types, token=token)
+            return 200, headers, json.dumps({"items": items}).encode()
+        except Exception as exc:
+            return 502, headers, json.dumps({"error": f"Civitai search failed: {exc}"}).encode()
+
+    if method == "POST" and path == "/civitai/download":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_CIVITAI:
+            return 503, headers, json.dumps({"error": "Civitai module unavailable in this build."}).encode()
+        try:
+            req = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        url = str(req.get("downloadUrl", ""))
+        if not url:
+            return 400, headers, json.dumps({"error": "downloadUrl is required"}).encode()
+        asset_type = str(req.get("assetType", "checkpoint"))
+        token = str(req.get("token", "")) or os.environ.get("CIVITAI_TOKEN", "")
+        job_id = str(req.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        dest = _civitai_dest(str(req.get("fileName", "")), asset_type)
+
+        def _report(received: int, total: int) -> None:
+            if track:
+                _write_progress(job_id, {"phase": "downloading", "received": received, "total": total})
+
+        try:
+            result = civitai.download(url, dest, token=token, progress=_report)
+            if track:
+                _write_progress(job_id, {"phase": "done"})
+            return 200, headers, json.dumps(result).encode()
+        except Exception as exc:
+            if track:
+                _write_progress(job_id, {"phase": "error"})
+            return 502, headers, json.dumps({"error": f"Download failed: {exc}"}).encode()
+
     if method == "GET" and path.startswith("/progress/"):
         headers["Content-Type"] = "application/json"
         job_id = path[len("/progress/"):]
@@ -312,7 +404,9 @@ def build_response(method: str, path: str, body: bytes):
         if not _HAS_DIFFUSERS_MODULE:
             return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
         try:
-            return 200, headers, json.dumps(diffusers_backend.download_model()).encode()
+            status = diffusers_backend.download_model()
+            _set_diffusers_cache(status)
+            return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
 
@@ -321,9 +415,23 @@ def build_response(method: str, path: str, body: bytes):
         if not _HAS_DIFFUSERS_MODULE:
             return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
         try:
-            return 200, headers, json.dumps(diffusers_backend.install_runtime()).encode()
+            status = diffusers_backend.install_runtime()
+            _set_diffusers_cache(status)
+            return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
+
+    if method == "POST" and path == "/model-folder":
+        headers["Content-Type"] = "application/json"
+        try:
+            data = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        try:
+            status = set_configured_model_dir(str(data.get("path", "")))
+            return 200, headers, json.dumps(status).encode()
+        except Exception as exc:
+            return 400, headers, json.dumps({"error": str(exc), "status": model_dir_status()}).encode()
 
     if method == "POST" and path == "/generate":
         headers["Content-Type"] = "application/json"
@@ -338,6 +446,7 @@ def build_response(method: str, path: str, body: bytes):
             _prune_progress_files()
             job["progressPath"] = _progress_path(job_id)
             _write_progress(job_id, {"phase": "loading"})
+        fallback_reason = None
         if mode in ("diffusers", "auto") and _diffusers_available():
             try:
                 _resolve_render_targets(job, _shelf_with_real(), discover_model_dir())
@@ -349,6 +458,7 @@ def build_response(method: str, path: str, body: bytes):
                 import traceback
                 print(f"[diffusers] render failed, falling back to procedural: {exc}", flush=True)
                 traceback.print_exc()
+                fallback_reason = str(exc)
                 if mode == "diffusers":
                     if track:
                         _write_progress(job_id, {"phase": "error"})
@@ -357,7 +467,13 @@ def build_response(method: str, path: str, body: bytes):
             if track:
                 _write_progress(job_id, {"phase": "error"})
             return 503, headers, json.dumps({"error": "diffusers/torch not installed on the bridge"}).encode()
+        if mode == "auto" and not _diffusers_available():
+            fallback_reason = "Real diffusion isn't ready on the bridge (torch/model not installed)."
         result = _procedural(job)
+        # Never a silent placeholder: tell the UI a real render was expected but fell back.
+        if fallback_reason:
+            result["fallback"] = True
+            result["fallbackReason"] = fallback_reason
         if track:
             _write_progress(job_id, {"phase": "done"})
         return 200, headers, json.dumps(result).encode()

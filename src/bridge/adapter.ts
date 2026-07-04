@@ -20,6 +20,9 @@ export interface RenderResult {
   /** actual seed used (resolved when job seed is -1) */
   seed: number;
   backendTimings?: PipelineTimings;
+  /** true when a real render was expected but the backend fell back to procedural */
+  fallback?: boolean;
+  fallbackReason?: string;
 }
 
 /**
