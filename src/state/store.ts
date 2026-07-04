@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { buildRenderJob, type BackendAdapter } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
-import { HttpAdapter, type BridgeModelStatus } from '../bridge/httpAdapter';
+import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
 import { checkHealth, type HealthIssue } from '../core/health';
 import { buildManifest, type ExportManifest } from '../core/manifest';
@@ -72,6 +72,9 @@ interface StudioState {
   bridgeModelStatus: BridgeModelStatus | null;
   bridgeModelBusy: boolean;
   bridgeModelError: string | null;
+  bridgeModelFolderStatus: BridgeModelFolderStatus | null;
+  bridgeModelFolderBusy: boolean;
+  bridgeModelFolderError: string | null;
   backendSettings: BackendSettings;
   turboPresetId: TurboPresetId;
   turboBackendId: BackendId;
@@ -107,6 +110,8 @@ interface StudioState {
   clearTurboCache(): void;
   probeBridge(): Promise<void>;
   refreshShelfFromBridge(): Promise<void>;
+  refreshModelFolderStatus(): Promise<void>;
+  setBridgeModelFolder(path: string): Promise<void>;
   refreshBridgeModelStatus(): Promise<void>;
   installBridgeRuntime(): Promise<void>;
   downloadBridgeModel(): Promise<void>;
@@ -193,6 +198,9 @@ export const useStudio = create<StudioState>((set, get) => {
     bridgeModelStatus: null,
     bridgeModelBusy: false,
     bridgeModelError: null,
+    bridgeModelFolderStatus: null,
+    bridgeModelFolderBusy: false,
+    bridgeModelFolderError: null,
     backendSettings: initialBackendSettings,
     turboPresetId: 'fast',
     turboBackendId: settingsBackendToTurboBackend(initialBackendSettings.selectedBackend),
@@ -388,7 +396,7 @@ export const useStudio = create<StudioState>((set, get) => {
         await get().refreshShelfFromBridge();
       }
       if (online) {
-        await get().refreshBridgeModelStatus();
+        await Promise.all([get().refreshBridgeModelStatus(), get().refreshModelFolderStatus()]);
       }
       // Auto-select the local bridge on first boot when the user hasn't chosen a backend.
       if (online && !userPinnedBackend && get().adapterId === 'mock') {
@@ -407,6 +415,47 @@ export const useStudio = create<StudioState>((set, get) => {
         }
       } catch (err) {
         console.warn('LumenDeck: bridge shelf refresh failed', err);
+      }
+    },
+
+    refreshModelFolderStatus: async () => {
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelFolderStatus = await httpAdapter.modelFolderStatus();
+        set({ bridgeModelFolderStatus, bridgeModelFolderError: null });
+      } catch (err) {
+        set({
+          bridgeModelFolderError: err instanceof Error ? err.message : String(err),
+          bridgeModelFolderStatus: null,
+        });
+      }
+    },
+
+    setBridgeModelFolder: async (path) => {
+      set({ bridgeModelFolderBusy: true, bridgeModelFolderError: null });
+      try {
+        httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
+        const bridgeModelFolderStatus = await httpAdapter.setModelFolder(path);
+        const shelf = await httpAdapter.listModels();
+        const workflow = applyAutoCheckpoint(get().workflow, shelf, { upgrade: !userPinnedModel });
+        set({
+          bridgeModelFolderStatus,
+          bridgeModelFolderBusy: false,
+          bridgeModelFolderError: null,
+          shelf,
+          shelfSource: 'bridge',
+          workflow,
+          health: checkHealth(workflow, shelf),
+          turboLastPlan: null,
+          turboError: null,
+        });
+      } catch (err) {
+        const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelFolderStatus }).status : undefined;
+        set({
+          bridgeModelFolderStatus: status ?? get().bridgeModelFolderStatus,
+          bridgeModelFolderBusy: false,
+          bridgeModelFolderError: err instanceof Error ? err.message : String(err),
+        });
       }
     },
 

@@ -557,6 +557,43 @@
 .shelf-head { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
 .shelf-head h2 { font-size: 18px; }
 .shelf-head .sub { color: var(--ld-text-dim); font-size: 13px; }
+.shelf-folder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.85fr);
+  gap: var(--sp-4);
+  align-items: start;
+  padding: var(--sp-4);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  background: rgba(7, 20, 38, 0.45);
+  margin-bottom: var(--sp-4);
+}
+.shelf-folder-copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.shelf-folder-copy h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+.shelf-folder-copy p {
+  margin: 0;
+  color: var(--ld-text-dim);
+  font-size: 13px;
+}
+.shelf-folder-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.shelf-folder-controls {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
 .shelf-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: var(--sp-4); }
 .filter-chip { cursor: pointer; transition: all var(--dur-fast) var(--ease-out); }
 .filter-chip[aria-pressed='true'] { color: var(--ld-cyan); border-color: rgba(52, 214, 244, 0.5); background: rgba(52, 214, 244, 0.08); }
@@ -784,6 +821,7 @@
   }
   .tab { white-space: nowrap; }
   .turbo-metrics { grid-template-columns: 1fr; }
+  .shelf-folder { grid-template-columns: 1fr; }
 }
 
 /* ===== Recipe actions (save/open/templates) ===== */

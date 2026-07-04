@@ -61,6 +61,41 @@ describe('bridge model management', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://bridge.local/diffusers/install', { method: 'POST' });
   });
 
+  it('sets a local model folder through the bridge', async () => {
+    const folderStatus = {
+      configured: 'D:/models',
+      active: 'D:/models',
+      assetCount: 2,
+      checkpointCount: 1,
+      loraCount: 1,
+      usingDemo: false,
+      candidates: ['D:/models'],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(folderStatus), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = new HttpAdapter('http://bridge.local');
+
+    const status = await adapter.setModelFolder('D:/models');
+
+    expect(status.checkpointCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith('http://bridge.local/model-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'D:/models' }),
+    });
+  });
+
+  it('surfaces model folder errors with bridge status payloads', async () => {
+    const status = { configured: '', active: '', assetCount: 0, checkpointCount: 0, loraCount: 0, usingDemo: true, candidates: [] };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'Folder does not exist', status }), { status: 400 })));
+    const adapter = new HttpAdapter('http://bridge.local');
+
+    await expect(adapter.setModelFolder('Z:/missing')).rejects.toMatchObject({
+      message: 'Folder does not exist',
+      status,
+    });
+  });
+
   it('stores a successful model download and selects real Diffusers rendering', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(READY_STATUS), { status: 200 })));
     useStudio.setState({

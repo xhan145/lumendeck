@@ -41,6 +41,16 @@ export interface BridgeModelStatus {
   dependencies?: Record<string, unknown>;
 }
 
+export interface BridgeModelFolderStatus {
+  configured: string;
+  active: string;
+  assetCount: number;
+  checkpointCount: number;
+  loraCount: number;
+  usingDemo: boolean;
+  candidates: string[];
+}
+
 /**
  * Client for the local Python render bridge (see bridge/README.md).
  * The bridge serves /health, /models (local scanner), /generate, and optional
@@ -84,6 +94,26 @@ export class HttpAdapter implements BackendAdapter {
     const res = await fetch(`${this.base}/diffusers/status`);
     if (!res.ok) throw new Error(`Bridge /diffusers/status failed: ${res.status}`);
     return (await res.json()) as BridgeModelStatus;
+  }
+
+  async modelFolderStatus(): Promise<BridgeModelFolderStatus> {
+    const res = await fetch(`${this.base}/model-folder`);
+    if (!res.ok) throw new Error(`Bridge /model-folder failed: ${res.status}`);
+    return (await res.json()) as BridgeModelFolderStatus;
+  }
+
+  async setModelFolder(path: string): Promise<BridgeModelFolderStatus> {
+    const res = await fetch(`${this.base}/model-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string; status?: BridgeModelFolderStatus } | null;
+      const message = data?.error ?? `Bridge /model-folder failed: ${res.status}`;
+      throw Object.assign(new Error(message), { status: data?.status });
+    }
+    return (await res.json()) as BridgeModelFolderStatus;
   }
 
   async downloadDiffusersModel(): Promise<BridgeModelStatus> {

@@ -23,12 +23,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
-from scanner import discover_model_dir, get_shelf
+from scanner import discover_model_dir, get_shelf, model_dir_status, set_configured_model_dir
 
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/generate", "/diffusers", "/progress")
+API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/diffusers", "/progress")
 
 # ---- Render progress (file-based; the diffusers worker is a separate process) ----
 _JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -305,6 +305,10 @@ def build_response(method: str, path: str, body: bytes):
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(_shelf_with_real()).encode()
 
+    if method == "GET" and path == "/model-folder":
+        headers["Content-Type"] = "application/json"
+        return 200, headers, json.dumps(model_dir_status()).encode()
+
     if method == "GET" and path.startswith("/progress/"):
         headers["Content-Type"] = "application/json"
         job_id = path[len("/progress/"):]
@@ -337,6 +341,18 @@ def build_response(method: str, path: str, body: bytes):
             return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
+
+    if method == "POST" and path == "/model-folder":
+        headers["Content-Type"] = "application/json"
+        try:
+            data = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        try:
+            status = set_configured_model_dir(str(data.get("path", "")))
+            return 200, headers, json.dumps(status).encode()
+        except Exception as exc:
+            return 400, headers, json.dumps({"error": str(exc), "status": model_dir_status()}).encode()
 
     if method == "POST" and path == "/generate":
         headers["Content-Type"] = "application/json"

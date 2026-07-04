@@ -66,6 +66,7 @@ export default defineConfig({
     proxy: {
       '/health': bridgeProxy,
       '/models': bridgeProxy,
+      '/model-folder': bridgeProxy,
       '/generate': bridgeProxy,
       '/diffusers': bridgeProxy,
       '/progress': bridgeProxy,

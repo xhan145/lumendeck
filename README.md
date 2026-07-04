@@ -140,13 +140,15 @@ python server.py --port 8787
 ```
 
 In LumenDeck's Backend panel choose **Diffusers bridge**, set the URL to `http://127.0.0.1:8787`, and
-**Test connection**. Point it at your models with the `LUMENDECK_MODEL_DIR` environment variable to
-replace the demo catalog with a real scan (file hashing + family inference).
+**Test connection**. Open **Model Shelf -> Bring your own models**, paste a folder path, and scan it
+to replace the demo catalog with local checkpoints/LoRAs (file hashing + family inference). The older
+`LUMENDECK_MODEL_DIR` environment variable still works for scripted launches.
 
 For real SD-Turbo photos, use **Install runtime + model** in the Backend panel. LumenDeck creates an
-app-local runtime, installs CPU PyTorch + Diffusers, and downloads/loads `stabilityai/sd-turbo` into
-the Hugging Face cache. A compatible Python 3.10-3.13 install must be available; Python 3.12 is the
-recommended target.
+app-local runtime, installs PyTorch + Diffusers, and downloads/loads `stabilityai/sd-turbo` into the
+Hugging Face cache. On NVIDIA systems it installs CUDA PyTorch; otherwise it falls back to CPU
+PyTorch. A compatible Python 3.10-3.13 install must be available; Python 3.12 is the recommended
+target.
 
 Advanced/manual install:
 
