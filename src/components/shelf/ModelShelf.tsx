@@ -4,6 +4,7 @@ import { findNode } from '../../core/workflow';
 import type { LoraSlot } from '../../core/types';
 import { useStudio } from '../../state/store';
 import { Icon } from '../icons';
+import { CivitaiBrowser } from './CivitaiBrowser';
 
 type Filter = 'all' | 'checkpoint' | 'lora';
 const FAMILIES: (ModelFamily | 'all')[] = ['all', 'SD1.5', 'SDXL', 'SD3', 'Flux'];
@@ -139,6 +140,7 @@ export function ModelShelf() {
             {bridgeModelFolderError ? <p className="backend-model-error">{bridgeModelFolderError}</p> : null}
           </div>
         </section>
+        <CivitaiBrowser />
         <div className="shelf-filters" role="group" aria-label="Filter by type">
           {(['all', 'checkpoint', 'lora'] as Filter[]).map((f) => (
             <button key={f} className="chip filter-chip" aria-pressed={type === f} onClick={() => setType(f)}>

@@ -156,7 +156,10 @@ export function GraphView() {
       onPointerMove={onPointerMove}
       onPointerUp={endInteractions}
       onPointerLeave={endInteractions}
+      style={{ backgroundPosition: `${view.tx * 0.5}px ${view.ty * 0.5}px` }}
     >
+      {/* Parallax ambience: drifts slower than nodes for depth + bloom. */}
+      <div className="graph-glow" style={{ transform: `translate(${view.tx * 0.3}px, ${view.ty * 0.3}px)` }} />
       <div className="graph-toolbar" role="toolbar" aria-label="Add capsule">
         {CAPSULE_KINDS.map((kind) => (
           <button key={kind} className="btn" type="button" onClick={() => addAtCenter(kind)} title={`Add ${CAPSULES[kind].title}`}>
@@ -180,7 +183,8 @@ export function GraphView() {
                 stroke={socketColor(type)}
                 strokeWidth={2}
                 fill="none"
-                opacity={0.8}
+                opacity={0.85}
+                style={{ color: socketColor(type) }}
                 onClick={() => disconnectEdge(edge.id)}
               >
                 <title>Click to disconnect</title>

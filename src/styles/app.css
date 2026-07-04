@@ -423,17 +423,32 @@
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
 
 /* ===== Graph view ===== */
-.graph-wrap { position: absolute; inset: 0; overflow: hidden; background:
-  radial-gradient(1200px 500px at 30% -10%, rgba(124, 58, 237, 0.09), transparent),
-  radial-gradient(circle at 1px 1px, rgba(170, 182, 201, 0.13) 1px, transparent 0);
-  background-size: auto, 24px 24px;
+.graph-wrap { position: absolute; inset: 0; overflow: hidden;
+  background: radial-gradient(circle at 1px 1px, rgba(170, 182, 201, 0.13) 1px, transparent 0);
+  background-size: 24px 24px;
   cursor: grab;
   touch-action: none;
 }
 .graph-wrap.panning { cursor: grabbing; }
-.graph-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+/* Parallax bloom layer — sits behind the grid, drifts slower than nodes. */
+.graph-glow {
+  position: absolute; inset: -20% -20% -20% -20%; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(900px 520px at 28% 8%, rgba(26, 115, 232, 0.16), transparent 60%),
+    radial-gradient(760px 520px at 82% 88%, rgba(255, 138, 0, 0.12), transparent 60%),
+    radial-gradient(600px 600px at 60% 40%, rgba(124, 58, 237, 0.10), transparent 65%);
+  will-change: transform;
+}
+.graph-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; z-index: 1; }
 .graph-edges { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
-.graph-edges path.wire { pointer-events: stroke; cursor: pointer; }
+.graph-edges path.wire {
+  pointer-events: stroke; cursor: pointer;
+  stroke-dasharray: 7 7;
+  filter: drop-shadow(0 0 3px currentColor);
+  animation: wire-flow 0.9s linear infinite;
+}
+.graph-edges path.wire:hover { stroke-width: 3; filter: drop-shadow(0 0 6px currentColor); }
+@keyframes wire-flow { to { stroke-dashoffset: -14; } }
 
 .gnode {
   position: absolute;
@@ -443,8 +458,20 @@
   border-radius: var(--rad-2);
   box-shadow: var(--shadow-2);
   user-select: none;
+  transition: box-shadow var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.gnode.selected { border-color: var(--ld-cyan); box-shadow: var(--glow-accent), var(--shadow-2); }
+.gnode::before {
+  /* soft accent bloom halo */
+  content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 18px -6px color-mix(in srgb, var(--accent) 60%, transparent);
+  opacity: 0.55;
+}
+.gnode:hover { border-color: var(--ld-border-strong); }
+.gnode.selected { border-color: var(--ld-cyan); box-shadow: var(--glow-accent), var(--shadow-2); animation: node-pulse 2.4s ease-in-out infinite; }
+@keyframes node-pulse {
+  0%, 100% { box-shadow: var(--glow-accent), var(--shadow-2); }
+  50% { box-shadow: 0 0 0 1px rgba(52, 214, 244, 0.55), 0 0 26px rgba(52, 214, 244, 0.28), var(--shadow-2); }
+}
 .gnode:focus-visible { box-shadow: var(--focus-ring), var(--shadow-2); outline: none; }
 .gnode-head {
   display: flex;
@@ -837,3 +864,28 @@
   padding: var(--sp-3) var(--sp-4);
 }
 .template-card h3 { font-size: 14px; margin-bottom: 2px; }
+
+/* ===== Civitai browser ===== */
+.civitai { display: block; }
+.civitai-controls { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-2); }
+.civitai-searchbar { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+.civitai-searchbar input { flex: 1; min-width: 200px; }
+.civitai-type { display: flex; gap: 4px; }
+.civitai-token { font-size: 12px; color: var(--ld-text-dim); }
+.civitai-token summary { cursor: pointer; padding: 4px 0; }
+.civitai-token input { margin-top: 6px; width: 100%; }
+.civitai-grid {
+  display: grid; gap: var(--sp-3); margin-top: var(--sp-4);
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+.civitai-card { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.civitai-thumb { position: relative; aspect-ratio: 1 / 1; background: var(--ld-surface-2); overflow: hidden; }
+.civitai-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.civitai-thumb-empty { display: grid; place-items: center; height: 100%; color: var(--ld-text-faint); }
+.civitai-nsfw {
+  position: absolute; top: 6px; right: 6px; font-size: 10px; font-weight: 600;
+  padding: 2px 6px; border-radius: var(--rad-1); background: rgba(255, 92, 92, 0.85); color: #fff;
+}
+.civitai-meta { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-3); }
+.civitai-meta h4 { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.civitai-chips { display: flex; gap: 4px; flex-wrap: wrap; }

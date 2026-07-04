@@ -20,6 +20,20 @@ function resolveBase(url: string): string {
   return isTauri() ? DEFAULT_BRIDGE_URL : '';
 }
 
+export interface CivitaiResult {
+  modelId: number;
+  name: string;
+  type: string;
+  nsfw: boolean;
+  baseModel: string;
+  versionId: number;
+  fileName: string;
+  sizeKB: number;
+  downloadUrl: string;
+  thumbnail: string;
+  downloads: number;
+}
+
 export interface BridgeModelStatus {
   modelId: string;
   dependenciesReady: boolean;
@@ -88,6 +102,54 @@ export class HttpAdapter implements BackendAdapter {
     const res = await fetch(`${this.base}/models`);
     if (!res.ok) throw new Error(`Bridge /models failed: ${res.status}`);
     return (await res.json()) as ModelAsset[];
+  }
+
+  async civitaiSearch(query: string, type: 'Checkpoint' | 'LORA', token = ''): Promise<CivitaiResult[]> {
+    const params = new URLSearchParams({ query, type });
+    if (token) params.set('token', token);
+    const res = await fetch(`${this.base}/civitai/search?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string } | null;
+      throw new Error(data?.error ?? `Civitai search failed: ${res.status}`);
+    }
+    return ((await res.json()) as { items: CivitaiResult[] }).items;
+  }
+
+  async civitaiDownload(
+    item: CivitaiResult,
+    token: string,
+    onProgress?: (received: number, total: number) => void,
+  ): Promise<{ path: string; bytes: number }> {
+    const jobId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
+    const assetType = item.type === 'LORA' ? 'lora' : 'checkpoint';
+    let polling = Boolean(onProgress);
+    const poll = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 700));
+        if (!polling) break;
+        try {
+          const res = await fetch(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1500) });
+          if (!res.ok) continue;
+          const p = (await res.json()) as { phase?: string; received?: number; total?: number };
+          if (p.phase === 'downloading') onProgress?.(p.received ?? 0, p.total ?? 0);
+        } catch { /* advisory */ }
+      }
+    };
+    if (polling) void poll();
+    try {
+      const res = await fetch(`${this.base}/civitai/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ downloadUrl: item.downloadUrl, fileName: item.fileName, assetType, token, jobId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(data?.error ?? `Download failed: ${res.status}`);
+      }
+      return (await res.json()) as { path: string; bytes: number };
+    } finally {
+      polling = false;
+    }
   }
 
   async diffusersStatus(): Promise<BridgeModelStatus> {

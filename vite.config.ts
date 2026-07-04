@@ -70,6 +70,7 @@ export default defineConfig({
       '/generate': bridgeProxy,
       '/diffusers': bridgeProxy,
       '/progress': bridgeProxy,
+      '/civitai': bridgeProxy,
     },
   },
   test: {
