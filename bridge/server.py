@@ -367,6 +367,7 @@ def build_response(method: str, path: str, body: bytes):
             _prune_progress_files()
             job["progressPath"] = _progress_path(job_id)
             _write_progress(job_id, {"phase": "loading"})
+        fallback_reason = None
         if mode in ("diffusers", "auto") and _diffusers_available():
             try:
                 _resolve_render_targets(job, _shelf_with_real(), discover_model_dir())
@@ -378,6 +379,7 @@ def build_response(method: str, path: str, body: bytes):
                 import traceback
                 print(f"[diffusers] render failed, falling back to procedural: {exc}", flush=True)
                 traceback.print_exc()
+                fallback_reason = str(exc)
                 if mode == "diffusers":
                     if track:
                         _write_progress(job_id, {"phase": "error"})
@@ -386,7 +388,13 @@ def build_response(method: str, path: str, body: bytes):
             if track:
                 _write_progress(job_id, {"phase": "error"})
             return 503, headers, json.dumps({"error": "diffusers/torch not installed on the bridge"}).encode()
+        if mode == "auto" and not _diffusers_available():
+            fallback_reason = "Real diffusion isn't ready on the bridge (torch/model not installed)."
         result = _procedural(job)
+        # Never a silent placeholder: tell the UI a real render was expected but fell back.
+        if fallback_reason:
+            result["fallback"] = True
+            result["fallbackReason"] = fallback_reason
         if track:
             _write_progress(job_id, {"phase": "done"})
         return 200, headers, json.dumps(result).encode()

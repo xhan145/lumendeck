@@ -172,9 +172,14 @@ export class HttpAdapter implements BackendAdapter {
         const text = await res.text().catch(() => '');
         throw new Error(`Bridge /generate failed (${res.status}): ${text.slice(0, 200)}`);
       }
-      const data = (await res.json()) as { image_base64: string; seed: number };
+      const data = (await res.json()) as { image_base64: string; seed: number; fallback?: boolean; fallbackReason?: string };
       onProgress?.(1);
-      return { dataUrl: `data:image/png;base64,${data.image_base64}`, seed: data.seed };
+      return {
+        dataUrl: `data:image/png;base64,${data.image_base64}`,
+        seed: data.seed,
+        fallback: data.fallback,
+        fallbackReason: data.fallbackReason,
+      };
     } finally {
       polling = false;
     }

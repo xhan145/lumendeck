@@ -551,6 +551,11 @@ export const useStudio = create<StudioState>((set, get) => {
           patch({ error: `${error instanceof Error ? error.message : String(error)} Falling back to mock backend.` });
           result = await mockAdapter.generate(job, (progress) => patch({ progress }));
         }
+        // Bridge produced a procedural placeholder when a real render was expected —
+        // surface it loudly instead of pretending the render succeeded.
+        if (result.fallback) {
+          patch({ error: `Real render failed — showing procedural placeholder. ${result.fallbackReason ?? ''}`.trim() });
+        }
         profiler.measure('backendRequestMs', 'backend-start');
         for (const [key, value] of Object.entries(result.backendTimings ?? {})) {
           profiler.set(key as keyof NonNullable<typeof result.backendTimings>, Number(value));

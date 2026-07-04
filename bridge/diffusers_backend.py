@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,7 @@ import importlib.util
 import io
 import json
 import os
+import struct
 import sys
 from pathlib import Path
 
@@ -134,14 +136,35 @@ def status(message=None, loaded=False):
     }
 
 
+def detect_single_file_family(path):
+    """Read the .safetensors header (tensor names only, no data) to tell SDXL from SD1.5.
+
+    Filenames lie ('cyberrealisticPony' is SDXL), so inspect the actual weights.
+    Returns 'SDXL' | 'SD1.5' | None (unreadable)."""
+    try:
+        with open(path, "rb") as fh:
+            n = struct.unpack("<Q", fh.read(8))[0]
+            header = json.loads(fh.read(n))
+        keys = header.keys()
+        if any(("conditioner.embedders.1" in k) or ("add_embedding" in k) or (".label_emb." in k) for k in keys):
+            return "SDXL"
+        return "SD1.5"
+    except Exception:
+        return None
+
+
 def load_pipe(model_ref=None):
     import torch
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     ref = model_ref or {"kind": "hub", "id": MODEL_ID}
     if ref.get("kind") == "file":
         path = str(ref.get("path", ""))
-        family = str(ref.get("family", "")).upper()
-        is_xl = "XL" in family or "xl" in Path(path).name.lower()
+        detected = detect_single_file_family(path)
+        if detected:
+            is_xl = detected == "SDXL"
+        else:
+            family = str(ref.get("family", "")).upper()
+            is_xl = "XL" in family or "xl" in Path(path).name.lower()
         if is_xl:
             from diffusers import StableDiffusionXLPipeline as PipeCls
         else:
@@ -150,7 +173,14 @@ def load_pipe(model_ref=None):
     else:
         from diffusers import AutoPipelineForText2Image
         pipe = AutoPipelineForText2Image.from_pretrained(ref.get("id") or MODEL_ID, torch_dtype=dtype)
-    return pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+    # Fit large models (SDXL) into modest VRAM (e.g. 8 GB laptop GPUs).
+    for enable in ("enable_attention_slicing", "enable_vae_slicing", "enable_vae_tiling"):
+        try:
+            getattr(pipe, enable)()
+        except Exception:
+            pass
+    return pipe
 
 
 def apply_loras(pipe, lora_files):
@@ -407,12 +437,56 @@ def _candidate_paths() -> list[Path]:
     return out
 
 
+def _managed_runtime_python() -> dict[str, Any] | None:
+    """Interpreter matching the managed CUDA runtime's ABI (e.g. cp312).
+
+    The managed runtime installs a CUDA torch built for one Python version. It only
+    imports under that exact version, so when the runtime exists we must run the
+    worker with a matching interpreter — otherwise we fall back to whatever torch is
+    installed system-wide, which is often CPU-only and can't run large models.
+    """
+    site = _site_dir()
+    if not site.exists():
+        return None
+    tag = None
+    for info in site.glob("torch-*.dist-info"):
+        wheel = info / "WHEEL"
+        if wheel.exists():
+            for line in wheel.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.lower().startswith("tag:"):
+                    tag = line.split(":", 1)[1].strip()
+                    break
+        if tag:
+            break
+    if not tag:
+        return None
+    match = re.search(r"cp3(\d+)", tag)
+    if not match:
+        return None
+    ver = f"3.{match.group(1)}"
+    candidates: list[list[str]] = []
+    if os.name == "nt":
+        candidates.append(["py", f"-{ver}"])
+    candidates.append([f"python{ver}"])
+    for candidate in candidates:
+        found = _probe_python(candidate)
+        if found:
+            return found
+    return None
+
+
 def _find_python() -> dict[str, Any] | None:
     global _python_cache
     if _python_cache is not False:
         return _python_cache
+    # Highest priority: the interpreter that matches a managed CUDA runtime, so
+    # GPU rendering actually engages instead of silently using system CPU torch.
+    managed = _managed_runtime_python()
+    if managed:
+        _python_cache = managed
+        return managed
     candidates: list[list[str]] = []
-    # Prefer the interpreter running this bridge — it is proven importable here.
+    # Then the interpreter running this bridge — proven importable here.
     # (Skip when frozen: PyInstaller's sys.executable cannot run worker scripts.)
     if not getattr(sys, "frozen", False) and sys.executable:
         candidates.append([sys.executable])
@@ -427,6 +501,26 @@ def _find_python() -> dict[str, Any] | None:
             return found
     _python_cache = None
     return None
+
+
+def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
+    """Extract a meaningful error from worker output.
+
+    Filters out progress bars and library warnings (which otherwise dominate the
+    tail and hide the real cause), and names native crashes explicitly.
+    """
+    # Windows access violation (e.g. loading SDXL weights into an SD1.5 pipeline).
+    if returncode in (3221225477, -1073741819):
+        return (
+            "The model process crashed while loading this checkpoint (access violation). "
+            "This usually means the checkpoint is an architecture the pipeline can't load. "
+            "Try a different checkpoint, or report it."
+        )
+    text = (stderr or stdout or "").strip()
+    noise = ("it/s", "s/it", "%|", "[transformers]", "Fetching ", "Loading pipeline")
+    signal = [ln for ln in text.splitlines() if ln.strip() and not any(tok in ln for tok in noise)]
+    detail = "\n".join(signal[-12:]) if signal else text[-1000:]
+    return detail or f"diffusers worker failed with exit code {returncode}"
 
 
 def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
@@ -454,8 +548,7 @@ def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 
         env=env,
     )
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise RuntimeError(detail[-1000:] or f"diffusers worker failed with exit code {proc.returncode}")
+        raise RuntimeError(_worker_error(proc.returncode, proc.stderr, proc.stdout))
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     if not lines:
         raise RuntimeError("diffusers worker returned no JSON")

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import struct
 from pathlib import Path
 
 CHECKPOINT_EXTS = {".safetensors", ".ckpt", ".pt", ".pth"}
@@ -67,6 +68,27 @@ def set_configured_model_dir(path: str) -> dict:
     return model_dir_status()
 
 
+def _family_from_header(path: str) -> str | None:
+    """Detect architecture from the .safetensors tensor-name header (no data read).
+
+    Reliable where filenames aren't: 'cyberrealisticPony' is SDXL. Only works for
+    .safetensors; returns None for other formats or on any read error."""
+    if not path.lower().endswith(".safetensors"):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            n = struct.unpack("<Q", fh.read(8))[0]
+            header = json.loads(fh.read(n))
+        keys = header.keys()
+        if any(("conditioner.embedders.1" in k) or ("add_embedding" in k) or (".label_emb." in k) for k in keys):
+            return "SDXL"
+        if any(("double_blocks." in k) or ("model.diffusion_model.joint_blocks" in k) for k in keys):
+            return "SD3"
+        return "SD1.5"
+    except Exception:
+        return None
+
+
 def _infer_family(name: str) -> str:
     low = name.lower()
     if "xl" in low or "sdxl" in low:
@@ -76,6 +98,11 @@ def _infer_family(name: str) -> str:
     if "sd3" in low or "sd_3" in low:
         return "SD3"
     return "SD1.5"
+
+
+def _detect_family(path: str, name: str) -> str:
+    """Prefer weights-based detection; fall back to the filename heuristic."""
+    return _family_from_header(path) or _infer_family(name)
 
 
 def _short_hash(path: str) -> str:
@@ -109,7 +136,7 @@ def scan_models(root: str) -> list[dict]:
             except OSError:
                 size_mb = 0
             atype = _asset_type(full)
-            family = _infer_family(fname)
+            family = _detect_family(full, fname)
             assets.append({
                 "id": _short_hash(full),
                 "assetType": atype,
