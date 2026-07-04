@@ -55,13 +55,14 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
     bridgeModelBusy,
     bridgeModelError,
     bridgeModelStatus,
+    bridgeModelFolderStatus,
     bridgeOnline,
-    downloadBridgeModel,
     enqueueRender,
     gallery,
     health,
     installBridgeRuntime,
     queue,
+    rackSlots,
     refreshBridgeModelStatus,
     setAdapter,
     setView,
@@ -81,6 +82,9 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
   const prompt = String(promptNode?.params.positive ?? '').trim();
   const width = Number(canvasNode?.params.width ?? 0);
   const height = Number(canvasNode?.params.height ?? 0);
+  const enabledLoras = rackSlots().filter((slot) => slot.enabled);
+  const installedCheckpoints = shelf.filter((asset) => asset.assetType === 'checkpoint' && asset.installed);
+  const localCheckpoints = bridgeModelFolderStatus?.checkpointCount ?? 0;
 
   const usingBridge = backendSettings.selectedBackend === 'bridge' || adapterId === 'bridge';
   const realRenderer = backendSettings.bridgeRenderer === 'diffusers' || backendSettings.bridgeRenderer === 'auto';
@@ -92,15 +96,21 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
   const recipeReady = Boolean(prompt && checkpoint && checkpoint.installed && width > 0 && height > 0);
   const canRenderReal = realModelReady && graphReady && recipeReady && !bridgeModelBusy;
 
+  const cuda = bridgeModelStatus?.cuda === true;
+  const device = bridgeModelStatus?.device ?? 'unknown';
+  const modelsReady = installedCheckpoints.length > 0;
+
   const backendState: StepState = bridgeOnline && usingBridge ? 'done' : bridgeOnline ? 'warning' : 'blocked';
-  const modelState: StepState = realModelReady ? 'done' : dependenciesReady || modelDownloaded ? 'warning' : 'blocked';
+  const gpuState: StepState = cuda ? 'done' : device === 'cpu' ? 'warning' : 'blocked';
+  const runtimeState: StepState = realModelReady ? 'done' : dependenciesReady || modelDownloaded ? 'warning' : 'blocked';
+  const modelsState: StepState = modelsReady ? 'done' : 'warning';
   const graphState: StepState = graphReady ? 'done' : 'blocked';
   const recipeState: StepState = recipeReady ? 'done' : 'warning';
   const renderState: StepState = latestJob?.status === 'done' || gallery.length > 0 ? 'done' : canRenderReal ? 'warning' : 'blocked';
 
   const chooseRealBackend = () => {
     setAdapter('bridge');
-    updateBackendSettings({ selectedBackend: 'bridge', bridgeRenderer: 'diffusers', fallbackToMock: false });
+    updateBackendSettings({ selectedBackend: 'bridge', bridgeRenderer: 'auto', fallbackToMock: false });
   };
 
   return (
@@ -108,10 +118,12 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
       <div className="guide-inner">
         <header className="guide-head">
           <div>
-            <p className="guide-kicker">First real render</p>
-            <h1>Generate your first photo</h1>
+            <p className="guide-kicker">Real photos, step by step</p>
+            <h1>Generate your first real photo</h1>
             <p>
-              Work down this checklist. Each step reflects the current LumenDeck state, so the blocked item is usually the thing stopping generation.
+              Work down this checklist — each item reflects live LumenDeck state, so the blocked one is
+              usually what's stopping generation. Real images come from the Diffusers bridge on your GPU;
+              anything else is the procedural placeholder.
             </p>
           </div>
           <div className="guide-head-actions">
@@ -126,8 +138,9 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
 
         <section className="guide-status-grid" aria-label="Current render status">
           <StatusTile label="Backend" value={usingBridge ? (bridgeOnline ? 'Bridge online' : 'Bridge offline') : 'Mock selected'} state={backendState} />
+          <StatusTile label="Device" value={cuda ? 'GPU (CUDA)' : device === 'cpu' ? 'CPU only' : 'unknown'} state={gpuState} />
           <StatusTile label="Renderer" value={backendSettings.bridgeRenderer} state={realRenderer ? 'done' : 'warning'} />
-          <StatusTile label="Model" value={modelDownloaded ? 'Downloaded' : dependenciesReady ? 'Runtime ready' : 'Needs install'} state={modelState} />
+          <StatusTile label="Model" value={modelDownloaded ? 'Ready' : dependenciesReady ? 'Runtime ready' : 'Needs install'} state={runtimeState} />
           <StatusTile label="Graph" value={graphReady ? 'Healthy' : `${errors.length} error${errors.length === 1 ? '' : 's'}`} state={graphState} />
         </section>
 
@@ -148,42 +161,68 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
             }
           >
             <p>
-              Real photos come from the bridge backend, not Mock. Start LumenDeck with the desktop app, `run.bat`, or `npm run dev`, then keep the backend set to Diffusers bridge.
+              Real photos come from the bridge backend, not Mock. Launch LumenDeck with the desktop app,
+              <code> run.bat</code>, or <code>npm run dev</code> — the bridge starts automatically — then keep the
+              backend on <strong>Diffusers bridge</strong> with renderer <strong>auto</strong> or <strong>diffusers</strong>.
             </p>
-            {!bridgeOnline ? <p className="guide-note danger">The bridge is not answering right now. Restart the app or dev server, then check again.</p> : null}
+            {!bridgeOnline ? <p className="guide-note danger">The bridge isn't answering right now. Restart the app or dev server, then Check bridge.</p> : null}
           </Step>
 
           <Step
             number={2}
-            state={modelState}
-            title="Install the real photo runtime and model"
+            state={gpuState}
+            title="Render on your GPU (not CPU)"
             actions={
               <>
                 <button className="btn primary" type="button" onClick={() => void installBridgeRuntime()} disabled={!canInstallRuntime}>
-                  {Icon.download()} {bridgeModelBusy ? 'Installing...' : 'Install runtime + model'}
+                  {Icon.download()} {bridgeModelBusy ? 'Installing…' : 'Install GPU runtime'}
                 </button>
-                <button className="btn" type="button" onClick={() => void downloadBridgeModel()} disabled={bridgeModelBusy || !dependenciesReady}>
-                  {Icon.download()} Download model
-                </button>
+                <button className="btn" type="button" onClick={() => void refreshBridgeModelStatus()}>{Icon.pulse()} Check device</button>
               </>
             }
           >
             <p>
-              The first install can take a while because Python packages and SD-Turbo weights are downloaded. Leave the app open until the status changes to downloaded.
+              SDXL/Pony checkpoints need a GPU — on CPU they run out of memory and fall back to a placeholder.
+              <strong> Install GPU runtime</strong> sets up an app-local Python with CUDA PyTorch and downloads SD-Turbo.
+              On an NVIDIA card the device below should read <strong>GPU (CUDA)</strong>.
             </p>
             <dl className="guide-mini-grid">
-              <div><dt>Device</dt><dd>{bridgeModelStatus?.device ?? 'unknown'}</dd></div>
-              <div><dt>Model</dt><dd>{bridgeModelStatus?.modelId ?? 'stabilityai/sd-turbo'}</dd></div>
-              <div><dt>Cache</dt><dd>{bridgeModelStatus?.cacheDir ?? 'not checked'}</dd></div>
+              <div><dt>Device</dt><dd>{cuda ? 'GPU (CUDA)' : device}</dd></div>
+              <div><dt>Runtime</dt><dd>{dependenciesReady ? 'ready' : 'not installed'}</dd></div>
+              <div><dt>SD-Turbo</dt><dd>{modelDownloaded ? 'downloaded' : 'not downloaded'}</dd></div>
             </dl>
-            {bridgeModelStatus?.message ? (
-              <p className={`guide-note ${bridgeModelStatus.installable === false ? 'danger' : ''}`}>{bridgeModelStatus.message}</p>
-            ) : null}
+            {device === 'cpu' ? <p className="guide-note">Running on CPU: SD-Turbo and SD1.5 work but are slow; large SDXL models likely won't fit. A CUDA GPU is strongly recommended.</p> : null}
+            {bridgeModelStatus?.message ? <p className="guide-note">{bridgeModelStatus.message}</p> : null}
             {bridgeModelError ? <p className="guide-note danger">{bridgeModelError}</p> : null}
           </Step>
 
           <Step
             number={3}
+            state={modelsState}
+            title="Get a model (Civitai or your own)"
+            actions={
+              <>
+                <button className="btn primary" type="button" onClick={() => setView('shelf')}>{Icon.download()} Browse Civitai</button>
+                <button className="btn" type="button" onClick={() => setView('shelf')}>{Icon.folder()} Model shelf</button>
+              </>
+            }
+          >
+            <p>
+              Three ways to get real models, all on the <strong>Model Shelf</strong>:
+            </p>
+            <ul className="guide-issue-list">
+              <li><strong>SD-Turbo</strong> — downloaded for you by the GPU runtime step above; great for fast tests.</li>
+              <li><strong>Civitai</strong> — search and download checkpoints or LoRAs straight into your model folder.</li>
+              <li><strong>Bring your own</strong> — point LumenDeck at an existing models folder (ComfyUI/A1111) to scan it.</li>
+            </ul>
+            <dl className="guide-mini-grid">
+              <div><dt>Installed checkpoints</dt><dd>{installedCheckpoints.length}</dd></div>
+              <div><dt>Local folder</dt><dd>{bridgeModelFolderStatus?.active ? `${localCheckpoints} checkpoints` : 'auto / demo'}</dd></div>
+            </dl>
+          </Step>
+
+          <Step
+            number={4}
             state={graphState}
             title="Clear graph health errors"
             actions={<button className="btn" type="button" onClick={() => setView('graph')}>{Icon.graph()} Open graph</button>}
@@ -201,9 +240,9 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
           </Step>
 
           <Step
-            number={4}
+            number={5}
             state={recipeState}
-            title="Check the recipe"
+            title="Set the prompt, checkpoint & LoRAs"
             actions={
               <>
                 <button className="btn" type="button" onClick={() => setView('recipe')}>{Icon.home()} Edit recipe</button>
@@ -211,16 +250,20 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
               </>
             }
           >
-            <p>Use the Recipe view for the prompt, checkpoint, sampler, and canvas size. For fast first tests, keep the canvas moderate and batch at 1.</p>
+            <p>
+              In the Recipe view set your prompt, pick a checkpoint, and (optionally) stack LoRAs in the rack —
+              their weights apply to real renders. Keep the canvas moderate for fast first tests.
+            </p>
             <dl className="guide-mini-grid">
               <div><dt>Prompt</dt><dd>{prompt || 'empty'}</dd></div>
               <div><dt>Checkpoint</dt><dd>{checkpoint?.name ?? 'not selected'}</dd></div>
-              <div><dt>Canvas</dt><dd>{width && height ? `${width} x ${height}` : 'unknown'}</dd></div>
+              <div><dt>LoRAs</dt><dd>{enabledLoras.length ? `${enabledLoras.length} active` : 'none'}</dd></div>
+              <div><dt>Canvas</dt><dd>{width && height ? `${width} × ${height}` : 'unknown'}</dd></div>
             </dl>
           </Step>
 
           <Step
-            number={5}
+            number={6}
             state={renderState}
             title="Render and open the gallery"
             actions={
@@ -232,10 +275,10 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
               </>
             }
           >
-            <p>After you press Render, watch the Queue in Controls. The first real render may sit on loading while the model warms up.</p>
+            <p>After you press Render, watch the Queue in Controls. The first real render sits on “loading” while the model warms up, then steps advance live.</p>
             {latestJob ? (
               <p className={`guide-note ${latestJob.status === 'error' ? 'danger' : ''}`}>
-                Last job: {latestJob.status} at {Math.round(latestJob.progress * 100)}%{latestJob.error ? ` - ${latestJob.error}` : ''}
+                Last job: {latestJob.status} at {Math.round(latestJob.progress * 100)}%{latestJob.error ? ` — ${latestJob.error}` : ''}
               </p>
             ) : null}
           </Step>
@@ -244,10 +287,10 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
         <section className="guide-troubleshooting">
           <h2>Troubleshooting</h2>
           <div className="guide-help-grid">
-            <p><strong>Render is disabled.</strong> Fix the checklist item marked red, usually graph health or the model install.</p>
-            <p><strong>It renders but looks fake.</strong> Make sure Backend is Diffusers bridge, Renderer is Diffusers, and fallback to mock is off.</p>
-            <p><strong>Connection fails.</strong> Restart from the repo with `run.bat` or `npm run dev`; the bridge should answer on `/health` through the app.</p>
-            <p><strong>Model install fails.</strong> Open Controls, use Check model, then retry Install runtime + model. The status message shows the exact missing dependency.</p>
+            <p><strong>It renders but looks fake.</strong> Backend must be Diffusers bridge, renderer auto/diffusers, and the device should read GPU (CUDA). A red “Real render failed…” note in the Queue shows the exact reason.</p>
+            <p><strong>SDXL/Pony crashes or is missing.</strong> Those need a GPU; on CPU they run out of memory. Install the GPU runtime, or use SD-Turbo / an SD1.5 model.</p>
+            <p><strong>Civitai download needs a token.</strong> Some models require one — add a Civitai API key in the browser's token field on the Model Shelf.</p>
+            <p><strong>Connection fails.</strong> Restart from the repo with <code>run.bat</code> or <code>npm run dev</code>; the bridge answers on <code>/health</code> through the app.</p>
           </div>
           {latestError?.error ? <p className="guide-note danger">Most recent queue error: {latestError.error}</p> : null}
         </section>
