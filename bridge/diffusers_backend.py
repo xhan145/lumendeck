@@ -127,12 +127,41 @@ def status(message=None, loaded=False):
     }
 
 
-def load_pipe():
+def load_pipe(model_ref=None):
     import torch
-    from diffusers import AutoPipelineForText2Image
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    pipe = AutoPipelineForText2Image.from_pretrained(MODEL_ID, torch_dtype=dtype)
+    ref = model_ref or {"kind": "hub", "id": MODEL_ID}
+    if ref.get("kind") == "file":
+        path = str(ref.get("path", ""))
+        family = str(ref.get("family", "")).upper()
+        is_xl = "XL" in family or "xl" in Path(path).name.lower()
+        if is_xl:
+            from diffusers import StableDiffusionXLPipeline as PipeCls
+        else:
+            from diffusers import StableDiffusionPipeline as PipeCls
+        pipe = PipeCls.from_single_file(path, torch_dtype=dtype)
+    else:
+        from diffusers import AutoPipelineForText2Image
+        pipe = AutoPipelineForText2Image.from_pretrained(ref.get("id") or MODEL_ID, torch_dtype=dtype)
     return pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def apply_loras(pipe, lora_files):
+    """Load scanned LoRA files onto the pipe with independent weights. Best-effort."""
+    names, weights = [], []
+    for index, lora in enumerate(lora_files or []):
+        try:
+            name = f"lora{index}"
+            pipe.load_lora_weights(str(lora["path"]), adapter_name=name)
+            names.append(name)
+            weights.append(float(lora.get("weight", 1.0)))
+        except Exception as exc:
+            print(f"[worker] skipping LoRA {lora.get('path')}: {exc}", file=sys.stderr, flush=True)
+    if names:
+        try:
+            pipe.set_adapters(names, weights)
+        except Exception as exc:
+            print(f"[worker] set_adapters failed: {exc}", file=sys.stderr, flush=True)
 
 
 def main():
@@ -161,12 +190,23 @@ def main():
 
         report({"phase": "loading"})
         import torch
-        pipe = load_pipe()
+        model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}
+        pipe = load_pipe(model_ref)
+        apply_loras(pipe, job.get("loraFiles"))
         seed = int(job.get("seed", 0))
         if seed < 0:
             seed = 0
         generator = torch.Generator(device=pipe.device).manual_seed(seed)
-        steps = max(1, min(8, int(job.get("steps", 2))))
+        # Turbo-distilled models want no CFG and very few steps; regular
+        # checkpoints need real guidance and more steps.
+        effective_id = str(model_ref.get("id") or MODEL_ID)
+        is_turbo = model_ref.get("kind") != "file" and "turbo" in effective_id.lower()
+        if is_turbo:
+            steps = max(1, min(8, int(job.get("steps", 2))))
+            guidance = 0.0
+        else:
+            steps = max(1, min(50, int(job.get("steps", 25))))
+            guidance = float(job.get("cfg", 7.0))
         report({"phase": "rendering", "step": 0, "steps": steps})
 
         def on_step(_pipe, step, _timestep, callback_kwargs):
@@ -175,8 +215,9 @@ def main():
 
         kwargs = dict(
             prompt=str(job.get("prompt", "")),
+            negative_prompt=str(job.get("negativePrompt", "")) or None,
             num_inference_steps=steps,
-            guidance_scale=0.0,
+            guidance_scale=guidance,
             width=int(job.get("width", 512)),
             height=int(job.get("height", 512)),
             generator=generator,

@@ -23,7 +23,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from renderer import RenderRequest, render_png_base64
-from scanner import get_shelf
+from scanner import discover_model_dir, get_shelf
 
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
@@ -132,14 +132,97 @@ def _diffusers_shelf_entry() -> dict:
     }
 
 
+HUB_MODELS = {
+    # shelf id -> Hugging Face model id (None = the configured default model)
+    "diffusers-real": None,
+    "diffusers-sdxl": "stabilityai/sdxl-turbo",
+}
+
+
+def _hub_cached(hub_id: str) -> bool:
+    """Filesystem check for HF-cache presence (works in the frozen sidecar too)."""
+    cache_root = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    folder = "models--" + hub_id.replace("/", "--")
+    return any(
+        os.path.isdir(os.path.join(cache_root, sub, folder))
+        for sub in ("hub", "")
+    )
+
+
+def _sdxl_shelf_entry() -> dict:
+    status = _diffusers_status()
+    ready = bool(status.get("dependenciesReady"))
+    hub_id = "stabilityai/sdxl-turbo"
+    installed = ready and _hub_cached(hub_id)
+    return {
+        "id": "diffusers-sdxl",
+        "assetType": "checkpoint",
+        "name": "sdxl-turbo (real diffusion)",
+        "family": "SDXL",
+        "path": hub_id,
+        "hash": "diffusers",
+        "sizeMB": 6940,
+        "tags": ["real", "diffusers", "turbo", "sdxl"],
+        "compatibility": "Real SDXL-Turbo. First use downloads ~7 GB to the Hugging Face cache."
+        + ("" if installed else " Not downloaded yet."),
+        "license": f"{hub_id} — see model card",
+        "installed": installed,
+    }
+
+
 def _shelf_with_real() -> list:
-    """Local scan (or demo) plus the real Diffusers model; real model first when usable."""
+    """Local scan (or demo) plus the real Diffusers models; usable real model first."""
     shelf = list(get_shelf())
     entry = _diffusers_shelf_entry()
+    shelf.append(_sdxl_shelf_entry())
     if entry["installed"]:
         return [entry, *shelf]
     shelf.append(entry)
     return shelf
+
+
+def _resolve_render_targets(job: dict, shelf: list, model_root: str | None) -> dict:
+    """Annotate a render job with modelRef/loraFiles for the diffusers worker.
+
+    Pure given its inputs (shelf list + scan root), so it is unit-testable.
+    Unknown/demo assets resolve to the default hub model / are skipped.
+    """
+    assets = {str(a.get("id")): a for a in shelf}
+
+    def abs_path(asset: dict) -> str | None:
+        rel = str(asset.get("path", ""))
+        if os.path.isabs(rel) and os.path.isfile(rel):
+            return os.path.normpath(rel)
+        if model_root:
+            candidate = os.path.normpath(os.path.join(model_root, rel))
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    model_id = str(job.get("modelId") or "")
+    if model_id in HUB_MODELS:
+        hub = HUB_MODELS[model_id]
+        job["modelRef"] = {"kind": "hub", "id": hub} if hub else {"kind": "hub"}
+    else:
+        asset = assets.get(model_id)
+        path = abs_path(asset) if asset and asset.get("assetType") == "checkpoint" else None
+        if path:
+            job["modelRef"] = {"kind": "file", "path": path, "family": asset.get("family", "")}
+        else:
+            job["modelRef"] = {"kind": "hub"}  # default model
+
+    lora_files = []
+    for lora in job.get("loras") or []:
+        asset = assets.get(str(lora.get("id")))
+        if not asset or asset.get("assetType") != "lora":
+            continue
+        path = abs_path(asset)
+        if not path:
+            print(f"[models] skipping LoRA without a real file: {lora.get('id')}", flush=True)
+            continue
+        lora_files.append({"path": path, "weight": float(lora.get("weight", 1.0))})
+    job["loraFiles"] = lora_files
+    return job
 
 
 def _procedural(job: dict) -> dict:
@@ -217,6 +300,7 @@ def build_response(method: str, path: str, body: bytes):
             _write_progress(job_id, {"phase": "loading"})
         if mode in ("diffusers", "auto") and _diffusers_available():
             try:
+                _resolve_render_targets(job, _shelf_with_real(), discover_model_dir())
                 result = diffusers_backend.generate(job)
                 if track:
                     _write_progress(job_id, {"phase": "done"})

@@ -1,4 +1,5 @@
 import json
+import os
 
 import server
 from server import build_response
@@ -62,6 +63,52 @@ def test_generate_with_job_id_reports_done():
     p_status, _h, p_body = build_response("GET", "/progress/test-job-123", b"")
     assert p_status == 200
     assert json.loads(p_body)["phase"] == "done"
+
+
+def test_resolve_targets_hub_ids():
+    from server import _resolve_render_targets
+    job = {"modelId": "diffusers-sdxl", "loras": []}
+    _resolve_render_targets(job, [], None)
+    assert job["modelRef"] == {"kind": "hub", "id": "stabilityai/sdxl-turbo"}
+    job2 = {"modelId": "diffusers-real", "loras": []}
+    _resolve_render_targets(job2, [], None)
+    assert job2["modelRef"] == {"kind": "hub"}
+
+
+def test_resolve_targets_unknown_and_demo_fall_back_to_default_hub():
+    from server import _resolve_render_targets
+    demo = [{"id": "ckpt-lumen-xl", "assetType": "checkpoint", "path": "models/checkpoints/nope.safetensors"}]
+    job = {"modelId": "ckpt-lumen-xl", "loras": [{"id": "lora-neon-bloom", "weight": 0.7}]}
+    _resolve_render_targets(job, demo, None)
+    assert job["modelRef"] == {"kind": "hub"}
+    assert job["loraFiles"] == []
+
+
+def test_resolve_targets_scanned_files(tmp_path=None):
+    import tempfile
+    from server import _resolve_render_targets
+    root = tempfile.mkdtemp()
+    ckpt = os.path.join(root, "photoreal_xl.safetensors")
+    lora = os.path.join(root, "loras", "style.safetensors")
+    os.makedirs(os.path.dirname(lora), exist_ok=True)
+    open(ckpt, "wb").write(b"x")
+    open(lora, "wb").write(b"x")
+    shelf = [
+        {"id": "scan-ckpt", "assetType": "checkpoint", "path": "photoreal_xl.safetensors", "family": "SDXL"},
+        {"id": "scan-lora", "assetType": "lora", "path": "loras/style.safetensors", "family": "SDXL"},
+    ]
+    job = {"modelId": "scan-ckpt", "loras": [{"id": "scan-lora", "weight": 0.55}]}
+    _resolve_render_targets(job, shelf, root)
+    assert job["modelRef"]["kind"] == "file" and job["modelRef"]["path"] == ckpt
+    assert job["modelRef"]["family"] == "SDXL"
+    assert job["loraFiles"] == [{"path": lora, "weight": 0.55}]
+
+
+def test_models_includes_sdxl_entry():
+    status, _headers, body = build_response("GET", "/models", b"")
+    assets = {a["id"]: a for a in json.loads(body)}
+    assert "diffusers-sdxl" in assets
+    assert assets["diffusers-sdxl"]["family"] == "SDXL"
 
 
 def test_diffusers_status_returns_model_status():
@@ -155,6 +202,13 @@ if __name__ == "__main__":
     test_unknown_route_404()
     test_options_preflight_cors()
     test_models_includes_real_diffusers_entry()
+    test_progress_unknown_job_returns_unknown_phase()
+    test_progress_rejects_invalid_job_ids()
+    test_generate_with_job_id_reports_done()
+    test_resolve_targets_hub_ids()
+    test_resolve_targets_unknown_and_demo_fall_back_to_default_hub()
+    test_resolve_targets_scanned_files()
+    test_models_includes_sdxl_entry()
     test_diffusers_status_returns_model_status()
     test_diffusers_download_uses_backend_without_real_weights()
     test_diffusers_download_failure_includes_status()
