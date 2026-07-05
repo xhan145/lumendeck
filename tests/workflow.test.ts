@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   addNode,
+  autoLayout,
   canConnect,
   connect,
   createDefaultWorkflow,
   createNode,
   disconnect,
+  duplicateNode,
   findNode,
   moveNode,
   removeNode,
@@ -13,10 +15,10 @@ import {
 } from '../src/core/workflow';
 
 describe('default workflow', () => {
-  it('contains all nine capsules fully wired', () => {
+  it('contains all core capsules fully wired', () => {
     const wf = createDefaultWorkflow();
-    expect(wf.nodes).toHaveLength(9);
-    expect(wf.edges).toHaveLength(8);
+    expect(wf.nodes).toHaveLength(10);
+    expect(wf.edges).toHaveLength(9);
     expect(wf.schemaVersion).toBe(1);
   });
 });
@@ -46,6 +48,27 @@ describe('workflow ops', () => {
     const next = moveNode(wf, prompt.id, 500, 501);
     expect(findNode(next, 'prompt')).toMatchObject({ x: 500, y: 501 });
   });
+
+  it('duplicateNode copies params without copying edges', () => {
+    let wf = createDefaultWorkflow();
+    const prompt = findNode(wf, 'prompt')!;
+    wf = updateNodeParam(wf, prompt.id, 'positive', 'copy me');
+    const next = duplicateNode(wf, prompt.id);
+    const prompts = next.nodes.filter((n) => n.kind === 'prompt');
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1].params.positive).toBe('copy me');
+    expect(next.edges.filter((edge) => edge.from.node === prompts[1].id || edge.to.node === prompts[1].id)).toHaveLength(0);
+  });
+
+  it('autoLayout gives duplicate node kinds stable lanes', () => {
+    let wf = createDefaultWorkflow();
+    wf = duplicateNode(wf, findNode(wf, 'prompt')!.id);
+    const next = autoLayout(wf);
+    const prompts = next.nodes.filter((n) => n.kind === 'prompt');
+    expect(prompts[0].x).toBe(40);
+    expect(prompts[1].x).toBe(40);
+    expect(prompts[1].y).toBeGreaterThan(prompts[0].y);
+  });
 });
 
 describe('canConnect', () => {
@@ -65,19 +88,25 @@ describe('canConnect', () => {
   it('rejects self-connections and cycles', () => {
     let wf = createDefaultWorkflow();
     const queue = findNode(wf, 'queue')!;
-    expect(
-      canConnect(wf, { node: queue.id, socket: 'image_out' }, { node: queue.id, socket: 'image' }).ok,
-    ).toBe(false);
+    expect(canConnect(wf, { node: queue.id, socket: 'media_out' }, { node: queue.id, socket: 'media' }).ok).toBe(false);
 
     // queue.image_out already flows to export; sampler → queue exists.
     // Wiring queue back into sampler's latent input is a type mismatch, so
     // build an explicit cycle with two image-typed nodes instead:
     const q2 = createNode('queue', 0, 0);
     wf = addNode(wf, q2);
-    wf = connect(wf, { node: queue.id, socket: 'image_out' }, { node: q2.id, socket: 'image' });
-    const back = canConnect(wf, { node: q2.id, socket: 'image_out' }, { node: queue.id, socket: 'image' });
+    wf = connect(wf, { node: queue.id, socket: 'media_out' }, { node: q2.id, socket: 'media' });
+    const back = canConnect(wf, { node: q2.id, socket: 'media_out' }, { node: queue.id, socket: 'media' });
     expect(back.ok).toBe(false);
     expect(back.reason).toMatch(/cycle/i);
+  });
+
+  it('allows image outputs to feed media inputs', () => {
+    const wf = createDefaultWorkflow();
+    const sampler = findNode(wf, 'sampler')!;
+    const queue = findNode(wf, 'queue')!;
+    const res = canConnect(wf, { node: sampler.id, socket: 'image' }, { node: queue.id, socket: 'media' });
+    expect(res.ok).toBe(true);
   });
 
   it('connect replaces the existing edge on an input socket', () => {

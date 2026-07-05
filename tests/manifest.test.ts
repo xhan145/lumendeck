@@ -27,11 +27,12 @@ describe('buildManifest', () => {
     expect(m.seed).toBe(42);
     expect(m.sampler.name).toBe('euler_a');
     expect(m.model).toMatchObject({ id: 'ckpt-lumen-xl', family: 'SDXL', hash: 'a1b2c3d4e5f60718' });
+    expect(m.media).toMatchObject({ type: 'image', format: 'png', frameCount: 24, fps: 8 });
     // disabled slots excluded
     expect(m.loras).toHaveLength(2);
     expect(m.loras[0]).toMatchObject({ id: 'lora-neon-bloom', weight: 0.7 });
     expect(m.graphVersion).toBe(wf.version);
-    expect(m.graph.nodes).toHaveLength(9);
+    expect(m.graph.nodes).toHaveLength(10);
   });
 
   it('handles an empty model selection with null model', () => {

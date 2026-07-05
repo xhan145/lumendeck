@@ -69,11 +69,32 @@ def test_model_folder_accepts_folder_and_scans():
 
 
 def test_generate_returns_png_base64():
-    payload = json.dumps({"prompt": "x", "seed": 5, "width": 96, "height": 96, "steps": 6}).encode()
+    payload = json.dumps({"prompt": "x", "seed": 5, "width": 96, "height": 96, "steps": 6, "renderer": "procedural"}).encode()
     status, _headers, body = build_response("POST", "/generate", payload)
     assert status == 200
     out = json.loads(body)
     assert out["seed"] == 5 and out["image_base64"].startswith("iVBORw0K")
+
+
+def test_generate_video_returns_gif_base64():
+    payload = json.dumps({
+        "prompt": "x",
+        "seed": 5,
+        "width": 96,
+        "height": 96,
+        "steps": 6,
+        "renderer": "procedural",
+        "output": "video",
+        "frameCount": 4,
+        "fps": 8,
+    }).encode()
+    status, _headers, body = build_response("POST", "/generate", payload)
+    assert status == 200
+    out = json.loads(body)
+    assert out["seed"] == 5
+    assert out["mediaType"] == "video"
+    assert out["mimeType"] == "image/gif"
+    assert out["video_base64"].startswith("R0lGODlh")
 
 
 def test_unknown_route_404():
@@ -251,6 +272,7 @@ if __name__ == "__main__":
     test_model_folder_rejects_missing_folder()
     test_model_folder_accepts_folder_and_scans()
     test_generate_returns_png_base64()
+    test_generate_video_returns_gif_base64()
     test_unknown_route_404()
     test_options_preflight_cors()
     test_models_includes_real_diffusers_entry()

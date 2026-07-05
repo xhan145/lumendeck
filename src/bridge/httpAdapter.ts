@@ -234,10 +234,26 @@ export class HttpAdapter implements BackendAdapter {
         const text = await res.text().catch(() => '');
         throw new Error(`Bridge /generate failed (${res.status}): ${text.slice(0, 200)}`);
       }
-      const data = (await res.json()) as { image_base64: string; seed: number; fallback?: boolean; fallbackReason?: string };
+      const data = (await res.json()) as {
+        image_base64?: string;
+        video_base64?: string;
+        mediaType?: 'image' | 'video';
+        mimeType?: string;
+        extension?: string;
+        seed: number;
+        fallback?: boolean;
+        fallbackReason?: string;
+      };
       onProgress?.(1);
+      const mediaType = data.mediaType ?? (data.video_base64 ? 'video' : 'image');
+      const mimeType = data.mimeType ?? (mediaType === 'video' ? 'image/gif' : 'image/png');
+      const payload = data.video_base64 ?? data.image_base64;
+      if (!payload) throw new Error('Bridge /generate response did not include media data.');
       return {
-        dataUrl: `data:image/png;base64,${data.image_base64}`,
+        dataUrl: `data:${mimeType};base64,${payload}`,
+        mediaType,
+        mimeType,
+        extension: data.extension ?? (mimeType === 'image/gif' ? 'gif' : 'png'),
         seed: data.seed,
         fallback: data.fallback,
         fallbackReason: data.fallbackReason,

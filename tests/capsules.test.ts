@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { CAPSULES, CAPSULE_KINDS, defaultParams } from '../src/core/capsules';
 
 describe('capsule registry', () => {
-  it('defines all nine capsules', () => {
+  it('defines all core capsules', () => {
     expect(CAPSULE_KINDS.sort()).toEqual(
-      ['canvas', 'control', 'export', 'loraRack', 'manifest', 'model', 'prompt', 'queue', 'sampler'],
+      ['canvas', 'control', 'export', 'loraRack', 'manifest', 'model', 'prompt', 'queue', 'sampler', 'video'],
     );
   });
 

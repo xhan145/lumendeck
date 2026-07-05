@@ -8,7 +8,7 @@ import { CapsuleParams } from '../inspector/CapsuleParams';
 import { RecipeActions } from './RecipeActions';
 
 /** Beginner-friendly ordering of the workflow as a top-to-bottom recipe. */
-const RECIPE_ORDER: CapsuleKind[] = ['prompt', 'model', 'loraRack', 'control', 'canvas', 'sampler', 'export'];
+const RECIPE_ORDER: CapsuleKind[] = ['prompt', 'model', 'loraRack', 'control', 'canvas', 'sampler', 'video', 'export'];
 
 export function RecipeView() {
   const workflow = useStudio((s) => s.workflow);

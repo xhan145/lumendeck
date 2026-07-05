@@ -122,6 +122,9 @@ export class ComfyAdapter implements BackendAdapter {
     console.info(`LumenDeck ComfyUI request completed in ${Math.round(performance.now() - submitStarted)} ms`);
     return {
       dataUrl,
+      mediaType: 'image',
+      mimeType: blob.type || 'image/png',
+      extension: blob.type === 'image/webp' ? 'webp' : 'png',
       seed,
       backendTimings: {
         backendRequestMs,

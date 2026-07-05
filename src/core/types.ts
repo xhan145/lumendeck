@@ -6,6 +6,7 @@ export type SocketType =
   | 'control'
   | 'latent'
   | 'image'
+  | 'media'
   | 'manifest';
 
 export type CapsuleKind =
@@ -14,6 +15,7 @@ export type CapsuleKind =
   | 'loraRack'
   | 'control'
   | 'sampler'
+  | 'video'
   | 'canvas'
   | 'queue'
   | 'export'

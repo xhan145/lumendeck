@@ -196,6 +196,13 @@ const CAPSULE_PATHS: Record<CapsuleKind, React.ReactNode> = {
     </>
   ),
   sampler: <path d="M3 17c3 0 3-10 6-10s3 10 6 10 3-10 6-10" />,
+  video: (
+    <>
+      <rect x="4" y="6" width="13" height="12" rx="2" />
+      <path d="m17 10 4-2v8l-4-2" />
+      <path d="M8 10h5M8 14h3" />
+    </>
+  ),
   canvas: (
     <>
       <rect x="4" y="4" width="16" height="16" rx="2" />

@@ -4,7 +4,7 @@ Run with pytest, or standalone: `python test_renderer.py`.
 """
 import base64
 
-from renderer import RenderRequest, render_png_base64
+from renderer import RenderRequest, render_gif_base64, render_png_base64
 from scanner import demo_catalog
 
 
@@ -26,6 +26,13 @@ def test_output_is_a_valid_png():
     assert b"IEND" in data[-12:]
 
 
+def test_output_is_a_valid_animated_gif():
+    data = base64.b64decode(render_gif_base64(RenderRequest(prompt="x", seed=7, width=96, height=96, frame_count=4, fps=8)))
+    assert data[:6] == b"GIF89a"
+    assert data.endswith(b";")
+    assert data.count(b"\x21\xF9\x04") == 4
+
+
 def test_demo_catalog_shape():
     shelf = demo_catalog()
     assert len(shelf) >= 4
@@ -37,5 +44,6 @@ if __name__ == "__main__":
     test_render_is_deterministic_per_seed()
     test_render_varies_with_seed()
     test_output_is_a_valid_png()
+    test_output_is_a_valid_animated_gif()
     test_demo_catalog_shape()
     print("bridge renderer: all checks passed")

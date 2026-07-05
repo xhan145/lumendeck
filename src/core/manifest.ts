@@ -11,6 +11,7 @@ export interface ExportManifest {
   seed: number;
   sampler: { name: string; steps: number; cfg: number };
   canvas: { width: number; height: number };
+  media: { type: 'image' | 'video'; format: string; frameCount: number; fps: number };
   model: { id: string; name: string; family: string; hash: string } | null;
   loras: { id: string; name: string; weight: number; hash: string }[];
   graphVersion: number;
@@ -26,6 +27,8 @@ export function buildManifest(
   const prompt = findNode(wf, 'prompt');
   const sampler = findNode(wf, 'sampler');
   const canvas = findNode(wf, 'canvas');
+  const video = findNode(wf, 'video');
+  const exportNode = findNode(wf, 'export');
   const model = findNode(wf, 'model');
   const rack = findNode(wf, 'loraRack');
 
@@ -47,6 +50,12 @@ export function buildManifest(
     canvas: {
       width: Number(canvas?.params.width ?? 0),
       height: Number(canvas?.params.height ?? 0),
+    },
+    media: {
+      type: video?.params.enabled ? 'video' : 'image',
+      format: String(exportNode?.params.format ?? (video?.params.enabled ? 'gif' : 'png')),
+      frameCount: Number(video?.params.frameCount ?? 1),
+      fps: Number(video?.params.fps ?? 0),
     },
     model: checkpoint
       ? { id: checkpoint.id, name: checkpoint.name, family: checkpoint.family, hash: checkpoint.hash }

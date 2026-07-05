@@ -533,6 +533,22 @@
   max-width: calc(100% - 24px);
 }
 .graph-toolbar .btn { font-size: 12px; padding: 5px 10px; min-height: 30px; background: rgba(12, 29, 51, 0.9); }
+.graph-palette-search {
+  width: 150px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border-radius: var(--rad-1);
+  border: 1px solid var(--ld-border);
+  background: rgba(12, 29, 51, 0.92);
+  color: var(--ld-text);
+  font-size: 12px;
+}
+.graph-toolbar-sep {
+  width: 1px;
+  min-height: 28px;
+  background: var(--ld-border);
+  margin: 0 3px;
+}
 .graph-hint {
   position: absolute;
   bottom: var(--sp-3);
@@ -676,7 +692,8 @@
 .gallery-inner { max-width: 1080px; margin: 0 auto; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-4); }
 .render-card { overflow: hidden; padding: 0; text-align: left; display: block; width: 100%; }
-.render-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--ld-surface-3); }
+.render-card img,
+.render-card video { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--ld-surface-3); }
 .render-card .meta { padding: 10px 12px; display: grid; gap: 3px; }
 .render-card .meta .p { font-size: 12.5px; color: var(--ld-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .render-card .meta .s { font-size: 11.5px; color: var(--ld-text-faint); display: flex; justify-content: space-between; gap: 8px; }
@@ -703,7 +720,8 @@
 .drawer-head { display: flex; align-items: center; gap: 8px; padding: var(--sp-4); border-bottom: 1px solid var(--ld-border); }
 .drawer-head h2 { font-size: 15px; flex: 1; }
 .drawer-body { padding: var(--sp-4); overflow-y: auto; display: grid; gap: var(--sp-4); }
-.drawer-body img { width: 100%; border-radius: var(--rad-1); border: 1px solid var(--ld-border); }
+.drawer-body img,
+.drawer-body video { width: 100%; border-radius: var(--rad-1); border: 1px solid var(--ld-border); }
 .detail-grid { display: grid; gap: 8px; font-size: 13px; }
 .detail-grid dt { color: var(--ld-text-faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; }
 .detail-grid dd { margin: 0 0 6px; color: var(--ld-text); overflow-wrap: anywhere; }

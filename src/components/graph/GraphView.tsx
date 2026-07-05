@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { CAPSULES, CAPSULE_KINDS } from '../../core/capsules';
 import { canConnect } from '../../core/workflow';
@@ -24,8 +24,9 @@ function nodeSummary(kind: CapsuleKind, params: Record<string, unknown>): string
     case 'prompt': return String(params.positive ?? '').slice(0, 60) || 'No prompt';
     case 'model': return params.assetId ? String(params.assetId) : 'No checkpoint';
     case 'loraRack': return `${Array.isArray(params.slots) ? params.slots.length : 0} LoRA slots`;
-    case 'sampler': return `${params.sampler} · ${params.steps} steps · cfg ${params.cfg}`;
-    case 'canvas': return `${params.width}×${params.height} ×${params.batch}`;
+    case 'sampler': return `${params.sampler} | ${params.steps} steps | cfg ${params.cfg}`;
+    case 'video': return params.enabled ? `${params.frameCount} frames @ ${params.fps} fps | ${params.cameraMotion}` : 'Disabled';
+    case 'canvas': return `${params.width}x${params.height} x${params.batch}`;
     case 'control': return params.enabled ? `${params.mode} @ ${params.strength}` : 'Disabled';
     default: return CAPSULES[kind].description;
   }
@@ -39,10 +40,13 @@ export function GraphView() {
   const connectSockets = useStudio((s) => s.connectSockets);
   const disconnectEdge = useStudio((s) => s.disconnectEdge);
   const addCapsule = useStudio((s) => s.addCapsule);
+  const duplicateCapsule = useStudio((s) => s.duplicateCapsule);
+  const autoLayoutGraph = useStudio((s) => s.autoLayoutGraph);
   const removeCapsule = useStudio((s) => s.removeCapsule);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ tx: 24, ty: 16, scale: 0.85 });
+  const [query, setQuery] = useState('');
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
   const [wire, setWire] = useState<WireDraft | null>(null);
@@ -118,6 +122,11 @@ export function GraphView() {
   const onNodeKey = (nodeId: string) => (e: React.KeyboardEvent) => {
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+      e.preventDefault();
+      duplicateCapsule(nodeId);
+      return;
+    }
     const step = e.shiftKey ? 1 : 8;
     if (e.key === 'ArrowLeft') { e.preventDefault(); moveNodeTo(nodeId, node.x - step, node.y); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); moveNodeTo(nodeId, node.x + step, node.y); }
@@ -146,6 +155,25 @@ export function GraphView() {
     addCapsule(kind, Math.round(c.x - 120), Math.round(c.y - 60));
   };
 
+  const fitView = () => {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect || workflow.nodes.length === 0) return;
+    const minX = Math.min(...workflow.nodes.map((n) => n.x));
+    const minY = Math.min(...workflow.nodes.map((n) => n.y));
+    const maxX = Math.max(...workflow.nodes.map((n) => n.x + 260));
+    const maxY = Math.max(...workflow.nodes.map((n) => n.y + 180));
+    const scale = Math.max(0.4, Math.min(1.2, Math.min((rect.width - 80) / (maxX - minX), (rect.height - 120) / (maxY - minY))));
+    setView({ scale, tx: 40 - minX * scale, ty: 70 - minY * scale });
+  };
+
+  const paletteKinds = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return CAPSULE_KINDS;
+    return CAPSULE_KINDS.filter((kind) => `${CAPSULES[kind].title} ${CAPSULES[kind].description}`.toLowerCase().includes(q));
+  }, [query]);
+
+  const selectedNode = workflow.nodes.find((node) => node.id === selectedNodeId);
+
   return (
     <div
       ref={wrapRef}
@@ -161,11 +189,34 @@ export function GraphView() {
       {/* Parallax ambience: drifts slower than nodes for depth + bloom. */}
       <div className="graph-glow" style={{ transform: `translate(${view.tx * 0.3}px, ${view.ty * 0.3}px)` }} />
       <div className="graph-toolbar" role="toolbar" aria-label="Add capsule">
-        {CAPSULE_KINDS.map((kind) => (
+        <input
+          className="graph-palette-search"
+          value={query}
+          placeholder="Search nodes"
+          aria-label="Search nodes"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        {paletteKinds.map((kind) => (
           <button key={kind} className="btn" type="button" onClick={() => addAtCenter(kind)} title={`Add ${CAPSULES[kind].title}`}>
             <CapsuleIcon kind={kind} size={14} /> {CAPSULES[kind].title}
           </button>
         ))}
+        <span className="graph-toolbar-sep" />
+        <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
+          Duplicate
+        </button>
+        <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && removeCapsule(selectedNode.id)} title="Delete selected node">
+          Delete
+        </button>
+        <button className="btn" type="button" onClick={() => { autoLayoutGraph(); requestAnimationFrame(fitView); }} title="Auto-layout graph">
+          Auto-layout
+        </button>
+        <button className="btn" type="button" onClick={() => setView({ tx: 24, ty: 16, scale: 0.85 })} title="Reset view">
+          Reset
+        </button>
+        <button className="btn" type="button" onClick={fitView} title="Fit graph">
+          Fit
+        </button>
       </div>
 
       <div className="graph-stage" style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})` }}>
@@ -219,7 +270,7 @@ export function GraphView() {
       </div>
 
       <div className="graph-hint">
-        Drag headers to move · drag an output port to an input to wire · click a wire to remove · scroll to zoom ·
+        Drag headers to move | drag an output port to an input to wire | click a wire to remove | scroll to zoom |
         {' '}{workflow.nodes.length} capsules, {workflow.edges.length} links
       </div>
     </div>
