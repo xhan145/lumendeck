@@ -22,6 +22,12 @@ export interface RenderJob {
   cameraMotion: string;
   loop: boolean;
   format: string;
+  initImage?: string;
+  maskImage?: string;
+  denoiseStrength: number;
+  hiresScale: number;
+  hiresDenoise: number;
+  hiresSteps: number;
 }
 
 export interface RenderResult {
@@ -70,6 +76,8 @@ export function buildRenderJob(wf: Workflow): RenderJob {
   const model = findNode(wf, 'model');
   const rack = findNode(wf, 'loraRack');
   const video = findNode(wf, 'video');
+  const imageInput = findNode(wf, 'imageLoader');
+  const hires = findNode(wf, 'hiresFix');
   const exportNode = findNode(wf, 'export');
   const slots = ((rack?.params.slots as LoraSlot[] | undefined) ?? []).filter((s) => s.enabled);
   const videoEnabled = Boolean(video?.params.enabled);
@@ -95,6 +103,14 @@ export function buildRenderJob(wf: Workflow): RenderJob {
     cameraMotion: String(video?.params.cameraMotion ?? 'orbit'),
     loop: Boolean(video?.params.loop ?? true),
     format: videoEnabled ? 'gif' : (exportFormat || 'png'),
+    // img2img/inpaint: an uploaded image (base64) on the Load Image capsule.
+    initImage: (imageInput?.params.image as string) || undefined,
+    maskImage: (imageInput?.params.mask as string) || undefined,
+    denoiseStrength: Number(imageInput?.params.strength ?? 0.6),
+    // hires fix: a second upscale+denoise pass when the Hires Fix capsule is present.
+    hiresScale: Number(hires?.params.scale ?? 1),
+    hiresDenoise: Number(hires?.params.denoise ?? 0.35),
+    hiresSteps: Number(hires?.params.steps ?? 14),
   };
 }
 

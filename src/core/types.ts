@@ -92,7 +92,7 @@ export interface SocketDef {
 export interface ParamDef {
   id: string;
   label: string;
-  kind: 'text' | 'textarea' | 'number' | 'select' | 'seed' | 'toggle';
+  kind: 'text' | 'textarea' | 'number' | 'select' | 'seed' | 'toggle' | 'image';
   min?: number;
   max?: number;
   step?: number;

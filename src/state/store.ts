@@ -125,6 +125,7 @@ interface StudioState {
   installBridgeRuntime(): Promise<void>;
   downloadBridgeModel(): Promise<void>;
   enqueueRender(): Promise<void>;
+  enqueueBatch(count: number): Promise<void>;
   removeGalleryItem(id: string): void;
   restoreSnapshot(item: GalleryItem): void;
   loadWorkflowFile(file: LumenFile): void;
@@ -669,6 +670,19 @@ export const useStudio = create<StudioState>((set, get) => {
         patch({ status: 'done', progress: 1, phase: 'done', previewDataUrl: result.dataUrl });
       } catch (err) {
         patch({ status: 'error', error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+
+    enqueueBatch: async (count) => {
+      // Seed grid: run N renders back to back. A random seed (-1) yields N
+      // variations; a fixed seed repeats it. Errors in one don't stop the batch.
+      const n = Math.max(1, Math.min(16, Math.floor(count)));
+      for (let i = 0; i < n; i++) {
+        try {
+          await get().enqueueRender();
+        } catch {
+          // enqueueRender records its own error on the queue item; keep going.
+        }
       }
     },
 
