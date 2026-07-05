@@ -402,19 +402,59 @@ def do_generate(job, state):
         report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
         return callback_kwargs
 
-    kwargs = dict(
-        prompt=str(job.get("prompt", "")),
-        negative_prompt=str(job.get("negativePrompt", "")) or None,
-        num_inference_steps=steps,
-        guidance_scale=guidance,
-        width=int(job.get("width", 512)),
-        height=int(job.get("height", 512)),
-        generator=generator,
-    )
-    try:
-        image = pipe(**kwargs, callback_on_step_end=on_step).images[0]
-    except TypeError:
-        image = pipe(**kwargs).images[0]
+    width, height = int(job.get("width", 512)), int(job.get("height", 512))
+    init_b64 = job.get("initImage")
+    mask_b64 = job.get("maskImage")
+
+    if init_b64:
+        # img2img / inpaint: reuse the loaded checkpoint's weights via from_pipe
+        # (no reload), just a different pipeline class.
+        from PIL import Image
+        is_xl = _model_family(model_ref) == "SDXL"
+
+        def _decode(b64):
+            raw = base64.b64decode(str(b64).split(",")[-1])
+            return Image.open(io.BytesIO(raw)).convert("RGB").resize((width, height))
+
+        init_img = _decode(init_b64)
+        strength = max(0.05, min(1.0, float(job.get("denoise", 0.6))))
+        common = dict(
+            prompt=str(job.get("prompt", "")),
+            negative_prompt=str(job.get("negativePrompt", "")) or None,
+            num_inference_steps=steps,
+            guidance_scale=guidance,
+            strength=strength,
+            generator=generator,
+        )
+        if mask_b64:
+            from diffusers import StableDiffusionInpaintPipeline, StableDiffusionXLInpaintPipeline
+            InpaintCls = StableDiffusionXLInpaintPipeline if is_xl else StableDiffusionInpaintPipeline
+            task_pipe = InpaintCls.from_pipe(pipe)
+            call = dict(image=init_img, mask_image=_decode(mask_b64), width=width, height=height, **common)
+        else:
+            from diffusers import StableDiffusionImg2ImgPipeline, StableDiffusionXLImg2ImgPipeline
+            Img2ImgCls = StableDiffusionXLImg2ImgPipeline if is_xl else StableDiffusionImg2ImgPipeline
+            task_pipe = Img2ImgCls.from_pipe(pipe)
+            call = dict(image=init_img, **common)
+        try:
+            image = task_pipe(**call, callback_on_step_end=on_step).images[0]
+        except TypeError:
+            image = task_pipe(**call).images[0]
+    else:
+        kwargs = dict(
+            prompt=str(job.get("prompt", "")),
+            negative_prompt=str(job.get("negativePrompt", "")) or None,
+            num_inference_steps=steps,
+            guidance_scale=guidance,
+            width=width,
+            height=height,
+            generator=generator,
+        )
+        try:
+            image = pipe(**kwargs, callback_on_step_end=on_step).images[0]
+        except TypeError:
+            image = pipe(**kwargs).images[0]
+
     report({"phase": "done", "step": steps, "steps": steps})
     buf = io.BytesIO()
     image.save(buf, format="PNG")
