@@ -8,6 +8,7 @@ export type HealthCode =
   | 'broken-link'
   | 'socket-mismatch'
   | 'bad-dimensions'
+  | 'video-budget'
   | 'vram-risk'
   | 'lora-compat'
   | 'disconnected';
@@ -34,6 +35,10 @@ export function estimateVramGB(
 }
 
 export const VRAM_BUDGET_GB = 8;
+
+function socketTypesCompatible(out: string, input: string): boolean {
+  return out === input || (input === 'media' && (out === 'image' || out === 'media'));
+}
 
 export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
   const issues: HealthIssue[] = [];
@@ -65,7 +70,7 @@ export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
       });
       continue;
     }
-    if (out.type !== inp.type) {
+    if (!socketTypesCompatible(out.type, inp.type)) {
       add({
         severity: 'error',
         code: 'socket-mismatch',
@@ -132,6 +137,7 @@ export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
 
   // Canvas dimensions
   const canvasNode = wf.nodes.find((node) => node.kind === 'canvas');
+  const videoNode = wf.nodes.find((node) => node.kind === 'video');
   if (canvasNode) {
     const width = Number(canvasNode.params.width) || 0;
     const height = Number(canvasNode.params.height) || 0;
@@ -170,6 +176,19 @@ export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
           nodeId: canvasNode.id,
         });
       }
+    }
+  }
+
+  if (videoNode && videoNode.params.enabled) {
+    const frames = Number(videoNode.params.frameCount) || 0;
+    const fps = Number(videoNode.params.fps) || 0;
+    if (frames > 72 || fps > 24) {
+      add({
+        severity: 'warning',
+        code: 'video-budget',
+        message: `Video render is ${frames} frames at ${fps} fps. Start smaller, then scale up once the motion works.`,
+        nodeId: videoNode.id,
+      });
     }
   }
 

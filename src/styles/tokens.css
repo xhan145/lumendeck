@@ -53,6 +53,7 @@
   --cap-lora: var(--md-success);
   --cap-control: var(--md-secondary);
   --cap-sampler: var(--ld-cyan);
+  --cap-video: #f472b6;
   --cap-canvas: #a78bfa;
   --cap-queue: #ffb27a;
   --cap-export: #7df0c0;
@@ -65,6 +66,7 @@
   --sock-control: var(--md-secondary);
   --sock-latent: var(--ld-cyan);
   --sock-image: #a78bfa;
+  --sock-media: #f472b6;
   --sock-manifest: #9fb0c7;
 
   /* Type — local Inter (offline); MD3 type scale */

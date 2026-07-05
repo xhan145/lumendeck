@@ -146,6 +146,9 @@ describe('store backend selection and manifests', () => {
   it('benchmarks the real bridge adapter instead of the placeholder Diffusers slot', async () => {
     const generate = vi.spyOn(httpAdapter, 'generate').mockResolvedValue({
       dataUrl: 'data:image/png;base64,abc',
+      mediaType: 'image',
+      mimeType: 'image/png',
+      extension: 'png',
       seed: 77,
       backendTimings: { totalRenderMs: 123, backendRequestMs: 123 },
     });

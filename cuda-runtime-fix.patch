@@ -1,0 +1,136 @@
+diff --git a/bridge/diffusers_backend.py b/bridge/diffusers_backend.py
+--- a/bridge/diffusers_backend.py
++++ b/bridge/diffusers_backend.py
+@@
+ def _runtime_dir() -> Path:
+-    return Path(os.environ.get("LUMENDECK_DIFFUSERS_RUNTIME", _app_data_dir() / "diffusers-runtime"))
++    # README used LUMENDECK_DIFFUSERS_VENV; keep it as a backwards-compatible alias.
++    configured = os.environ.get("LUMENDECK_DIFFUSERS_RUNTIME") or os.environ.get("LUMENDECK_DIFFUSERS_VENV")
++    return Path(configured) if configured else _app_data_dir() / "diffusers-runtime"
+@@
+ def _worker_path() -> Path:
+     return _runtime_dir() / "diffusers_worker.py"
++
++
++def _python_manifest_path() -> Path:
++    return _runtime_dir() / "python.json"
++
++
++def _read_python_manifest() -> dict[str, Any] | None:
++    try:
++        data = json.loads(_python_manifest_path().read_text(encoding="utf-8"))
++        cmd = data.get("cmd")
++        if isinstance(cmd, list) and all(isinstance(p, str) for p in cmd):
++            found = _probe_python(cmd)
++            if found:
++                return found
++    except Exception:
++        pass
++    return None
++
++
++def _write_python_manifest(python: dict[str, Any]) -> None:
++    try:
++        _runtime_dir().mkdir(parents=True, exist_ok=True)
++        _python_manifest_path().write_text(
++            json.dumps({"cmd": python["cmd"], "version": python["version"]}, indent=2),
++            encoding="utf-8",
++        )
++    except OSError:
++        pass
++
++
++def _python_major_minor(python: dict[str, Any]) -> str:
++    return ".".join(str(python.get("version", "")).split(".")[:2])
++
++
++def _managed_runtime_python_version() -> str | None:
++    site = _site_dir()
++    if not site.exists():
++        return None
++    for info in site.glob("torch-*.dist-info"):
++        wheel = info / "WHEEL"
++        if not wheel.exists():
++            continue
++        for line in wheel.read_text(encoding="utf-8", errors="ignore").splitlines():
++            if line.lower().startswith("tag:"):
++                match = re.search(r"cp3(\d+)", line)
++                if match:
++                    return f"3.{match.group(1)}"
++    return None
++
++
++def _managed_runtime_matches(python: dict[str, Any]) -> bool:
++    managed_version = _managed_runtime_python_version()
++    return bool(managed_version and _python_major_minor(python) == managed_version)
+@@
+ def _managed_runtime_python() -> dict[str, Any] | None:
+@@
+-    site = _site_dir()
++    manifest_python = _read_python_manifest()
++    if manifest_python and _managed_runtime_matches(manifest_python):
++        return manifest_python
++
++    site = _site_dir()
+@@
+     candidates: list[list[str]] = []
+     if os.name == "nt":
+         candidates.append(["py", f"-{ver}"])
+     candidates.append([f"python{ver}"])
++    candidates.extend([[str(path)] for path in _candidate_paths()])
+     for candidate in candidates:
+         found = _probe_python(candidate)
+-        if found:
++        if found and _managed_runtime_matches(found):
+             return found
+     return None
+@@
+ def _find_python() -> dict[str, Any] | None:
+@@
+     if _python_cache is not False:
+         return _python_cache
++    # Absolute override must win. This is the escape hatch for broken py-launcher
++    # setups and embedded Python installs.
++    env_python = os.environ.get("LUMENDECK_PYTHON")
++    if env_python:
++        found = _probe_python([env_python])
++        if found:
++            _python_cache = found
++            return found
++
+     # Highest priority: the interpreter that matches a managed CUDA runtime, so
+@@
+ def _worker_env(python: dict[str, Any]) -> dict[str, str]:
+     env = os.environ.copy()
+-    # Only inject the managed site-packages when the chosen Python lacks torch
+-    # natively. A Python that already has torch must use its own package set —
+-    # mixing in the managed runtime's pinned wheels (built for another Python
+-    # version) breaks imports like numpy.
+-    if _python_has_native_torch(python):
++    # Managed runtime wins once installed. Otherwise a CPU-only system torch can
++    # shadow the CUDA torch that LumenDeck installed into its app-local site dir.
++    # Only allow native torch by explicit opt-in.
++    if _managed_runtime_matches(python):
++        env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
++    elif os.environ.get("LUMENDECK_DIFFUSERS_USE_NATIVE", "").lower() in ("1", "true", "yes"):
+         env.pop("LUMENDECK_DIFFUSERS_SITE", None)
+-    else:
++    elif not _python_has_native_torch(python):
+         env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
++    else:
++        env.pop("LUMENDECK_DIFFUSERS_SITE", None)
+     env["LUMENDECK_DIFFUSERS_MODEL"] = _MODEL_ID
+     return env
+@@
+ def install_runtime() -> dict[str, Any]:
+     python = _find_python()
+@@
+     _reset_site_dir()
+     _pip_install(["torch"], index_url=_torch_index_url(), force_reinstall=True, timeout=2400)
+@@
+     _pip_install(["diffusers==0.30.3", "transformers==4.44.2", "accelerate", "kornia"], timeout=1200, no_deps=True)
++    _write_python_manifest(python)
++    global _python_cache
++    _python_cache = python
+     status = download_model()
+     return {**status, "message": "Managed Diffusers runtime installed; SD-Turbo is ready for real photo renders."}

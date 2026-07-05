@@ -17,6 +17,7 @@
   ('bisect', 'C:\\Python314\\Lib\\bisect.py', 'PYMODULE'),
   ('bz2', 'C:\\Python314\\Lib\\bz2.py', 'PYMODULE'),
   ('calendar', 'C:\\Python314\\Lib\\calendar.py', 'PYMODULE'),
+  ('civitai', 'C:\\Users\\xhan1\\lumendeck\\bridge\\civitai.py', 'PYMODULE'),
   ('codeop', 'C:\\Python314\\Lib\\codeop.py', 'PYMODULE'),
   ('compression', 'C:\\Python314\\Lib\\compression\\__init__.py', 'PYMODULE'),
   ('compression._common',

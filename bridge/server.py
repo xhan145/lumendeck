@@ -23,7 +23,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from renderer import RenderRequest, render_png_base64
+from renderer import RenderRequest, render_gif_base64, render_png_base64
 from scanner import (
     configured_model_dir,
     discover_model_dir,
@@ -319,7 +319,20 @@ def _procedural(job: dict) -> dict:
         steps=int(job.get("steps", 28)),
         cfg=float(job.get("cfg", 7.0)),
         loras=len(job.get("loras", []) or []),
+        frame_count=int(job.get("frameCount", 1)),
+        fps=int(job.get("fps", 8)),
+        motion_strength=float(job.get("motionStrength", 0.7)),
+        camera_motion=str(job.get("cameraMotion", "orbit")),
+        loop=bool(job.get("loop", True)),
     )
+    if str(job.get("output", "image")) == "video":
+        return {
+            "video_base64": render_gif_base64(req),
+            "seed": seed,
+            "mediaType": "video",
+            "mimeType": "image/gif",
+            "extension": "gif",
+        }
     return {"image_base64": render_png_base64(req), "seed": seed}
 
 
@@ -447,6 +460,11 @@ def build_response(method: str, path: str, body: bytes):
             job["progressPath"] = _progress_path(job_id)
             _write_progress(job_id, {"phase": "loading"})
         fallback_reason = None
+        if str(job.get("output", "image")) == "video":
+            result = _procedural(job)
+            if track:
+                _write_progress(job_id, {"phase": "done"})
+            return 200, headers, json.dumps(result).encode()
         if mode in ("diffusers", "auto") and _diffusers_available():
             try:
                 _resolve_render_targets(job, _shelf_with_real(), discover_model_dir())

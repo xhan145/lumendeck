@@ -359,7 +359,8 @@ def _app_data_dir() -> Path:
 
 
 def _runtime_dir() -> Path:
-    return Path(os.environ.get("LUMENDECK_DIFFUSERS_RUNTIME", _app_data_dir() / "diffusers-runtime"))
+    configured = os.environ.get("LUMENDECK_DIFFUSERS_RUNTIME") or os.environ.get("LUMENDECK_DIFFUSERS_VENV")
+    return Path(configured) if configured else _app_data_dir() / "diffusers-runtime"
 
 
 def _site_dir() -> Path:
@@ -368,6 +369,60 @@ def _site_dir() -> Path:
 
 def _worker_path() -> Path:
     return _runtime_dir() / "diffusers_worker.py"
+
+
+
+def _python_manifest_path() -> Path:
+    return _runtime_dir() / "python.json"
+
+
+def _read_python_manifest() -> dict[str, Any] | None:
+    try:
+        data = json.loads(_python_manifest_path().read_text(encoding="utf-8"))
+        cmd = data.get("cmd")
+        if isinstance(cmd, list) and all(isinstance(part, str) for part in cmd):
+            found = _probe_python(cmd)
+            if found:
+                return found
+    except Exception:
+        pass
+    return None
+
+
+def _write_python_manifest(python: dict[str, Any]) -> None:
+    try:
+        _runtime_dir().mkdir(parents=True, exist_ok=True)
+        _python_manifest_path().write_text(
+            json.dumps({"cmd": python["cmd"], "version": python["version"]}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _python_major_minor(python: dict[str, Any]) -> str:
+    return ".".join(str(python.get("version", "")).split(".")[:2])
+
+
+def _managed_runtime_python_version() -> str | None:
+    site = _site_dir()
+    if not site.exists():
+        return None
+    for info in site.glob("torch-*.dist-info"):
+        wheel = info / "WHEEL"
+        if not wheel.exists():
+            continue
+        for line in wheel.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.lower().startswith("tag:"):
+                match = re.search(r"cp3(\d+)", line)
+                if match:
+                    return f"3.{match.group(1)}"
+    return None
+
+
+def _managed_runtime_matches(python: dict[str, Any]) -> bool:
+    managed_version = _managed_runtime_python_version()
+    return bool(managed_version and _python_major_minor(python) == managed_version)
 
 
 def _write_worker() -> Path:
@@ -508,70 +563,70 @@ def _candidate_paths() -> list[Path]:
 
 
 def _managed_runtime_python() -> dict[str, Any] | None:
-    """Interpreter matching the managed CUDA runtime's ABI (e.g. cp312).
+    """Interpreter matching the managed CUDA runtime's ABI.
 
-    The managed runtime installs a CUDA torch built for one Python version. It only
-    imports under that exact version, so when the runtime exists we must run the
-    worker with a matching interpreter — otherwise we fall back to whatever torch is
-    installed system-wide, which is often CPU-only and can't run large models.
+    The managed runtime installs CUDA torch for one Python version. Prefer the
+    exact interpreter recorded at install time, then fall back to version-matched
+    Python candidates. This prevents CPU-only system torch from shadowing the
+    app-local CUDA torch.
     """
-    site = _site_dir()
-    if not site.exists():
+    manifest_python = _read_python_manifest()
+    if manifest_python and _managed_runtime_matches(manifest_python):
+        return manifest_python
+
+    ver = _managed_runtime_python_version()
+    if not ver:
         return None
-    tag = None
-    for info in site.glob("torch-*.dist-info"):
-        wheel = info / "WHEEL"
-        if wheel.exists():
-            for line in wheel.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if line.lower().startswith("tag:"):
-                    tag = line.split(":", 1)[1].strip()
-                    break
-        if tag:
-            break
-    if not tag:
-        return None
-    match = re.search(r"cp3(\d+)", tag)
-    if not match:
-        return None
-    ver = f"3.{match.group(1)}"
+
     candidates: list[list[str]] = []
     if os.name == "nt":
         candidates.append(["py", f"-{ver}"])
     candidates.append([f"python{ver}"])
+    candidates.extend([[str(path)] for path in _candidate_paths()])
+
     for candidate in candidates:
         found = _probe_python(candidate)
-        if found:
+        if found and _managed_runtime_matches(found):
             return found
     return None
-
 
 def _find_python() -> dict[str, Any] | None:
     global _python_cache
     if _python_cache is not False:
         return _python_cache
-    # Highest priority: the interpreter that matches a managed CUDA runtime, so
-    # GPU rendering actually engages instead of silently using system CPU torch.
+
+    # Absolute override must win. This is the escape hatch for broken py-launcher
+    # setups and embedded Python installs.
+    env_python = os.environ.get("LUMENDECK_PYTHON")
+    if env_python:
+        found = _probe_python([env_python])
+        if found:
+            _python_cache = found
+            return found
+
+    # Highest priority after explicit override: the interpreter matching the
+    # managed CUDA runtime, so GPU rendering actually engages.
     managed = _managed_runtime_python()
     if managed:
         _python_cache = managed
         return managed
+
     candidates: list[list[str]] = []
-    # Then the interpreter running this bridge — proven importable here.
-    # (Skip when frozen: PyInstaller's sys.executable cannot run worker scripts.)
     if not getattr(sys, "frozen", False) and sys.executable:
         candidates.append([sys.executable])
     if os.name == "nt":
         candidates.extend([["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"], ["py", "-3"]])
     candidates.extend([["python"], ["python3"]])
     candidates.extend([[str(path)] for path in _candidate_paths()])
+
     for candidate in candidates:
         found = _probe_python(candidate)
         if found:
             _python_cache = found
             return found
+
     _python_cache = None
     return None
-
 
 def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
     """Extract a meaningful error from worker output.
@@ -595,17 +650,21 @@ def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
 
 def _worker_env(python: dict[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
-    # Only inject the managed site-packages when the chosen Python lacks torch
-    # natively. A Python that already has torch must use its own package set —
-    # mixing in the managed runtime's pinned wheels (built for another Python
-    # version) breaks imports like numpy.
-    if _python_has_native_torch(python):
-        env.pop("LUMENDECK_DIFFUSERS_SITE", None)
-    else:
+
+    # Managed runtime wins once installed. Otherwise a CPU-only system torch can
+    # shadow the CUDA torch that LumenDeck installed into its app-local site dir.
+    # Only use native torch by explicit opt-in.
+    if _managed_runtime_matches(python):
         env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
+    elif os.environ.get("LUMENDECK_DIFFUSERS_USE_NATIVE", "").lower() in ("1", "true", "yes"):
+        env.pop("LUMENDECK_DIFFUSERS_SITE", None)
+    elif not _python_has_native_torch(python):
+        env["LUMENDECK_DIFFUSERS_SITE"] = str(_site_dir())
+    else:
+        env.pop("LUMENDECK_DIFFUSERS_SITE", None)
+
     env["LUMENDECK_DIFFUSERS_MODEL"] = _MODEL_ID
     return env
-
 
 def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
     python = _find_python()
@@ -784,6 +843,7 @@ def is_available() -> bool:
 
 
 def install_runtime() -> dict[str, Any]:
+    global _python_cache
     python = _find_python()
     if not python:
         raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
@@ -795,6 +855,8 @@ def install_runtime() -> dict[str, Any]:
         timeout=1200,
     )
     _pip_install(["diffusers==0.30.3", "transformers==4.44.2", "accelerate", "kornia"], timeout=1200, no_deps=True)
+    _write_python_manifest(python)
+    _python_cache = python
     status = download_model()
     return {**status, "message": "Managed Diffusers runtime installed; SD-Turbo is ready for real photo renders."}
 
@@ -812,7 +874,12 @@ def generate(job: dict) -> dict:
         raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
     # Persistent worker: the model stays resident, so only the first render pays the
     # multi-GB load cost; later renders reuse it (reloading only on a model switch).
-    out = _persistent_worker.request("generate", job, timeout=1800)
+    try:
+        out = _persistent_worker.request("generate", job, timeout=1800)
+    except RuntimeError as exc:
+        if "worker exited unexpectedly" not in str(exc).lower():
+            raise
+        out = _worker("generate", job, timeout=1800)
     if isinstance(out, dict) and out.get("error"):
         raise RuntimeError(out["error"])
     return out

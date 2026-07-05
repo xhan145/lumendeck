@@ -9,10 +9,12 @@ import type { ModelAsset } from '../core/shelf';
 import type { CapsuleKind, LoraSlot, RackPreset, SocketRef, Workflow } from '../core/types';
 import {
   addNode,
+  autoLayout,
   connect,
   createDefaultWorkflow,
   createNode,
   disconnect,
+  duplicateNode,
   findNode,
   moveNode,
   removeNode,
@@ -45,6 +47,9 @@ export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery';
 export interface GalleryItem {
   id: string;
   dataUrl: string;
+  mediaType?: 'image' | 'video';
+  mimeType?: string;
+  extension?: string;
   createdAt: string;
   manifest: ExportManifest;
 }
@@ -92,6 +97,8 @@ interface StudioState {
   connectSockets(from: SocketRef, to: SocketRef): void;
   disconnectEdge(edgeId: string): void;
   addCapsule(kind: CapsuleKind, x: number, y: number): void;
+  duplicateCapsule(nodeId: string): void;
+  autoLayoutGraph(): void;
   removeCapsule(nodeId: string): void;
   resetWorkflow(): void;
 
@@ -229,6 +236,14 @@ export const useStudio = create<StudioState>((set, get) => {
       commit(addNode(get().workflow, node));
       set({ selectedNodeId: node.id });
     },
+    duplicateCapsule: (nodeId) => {
+      const before = get().workflow;
+      const next = duplicateNode(before, nodeId);
+      commit(next);
+      const copy = next.nodes.find((node) => !before.nodes.some((old) => old.id === node.id));
+      if (copy) set({ selectedNodeId: copy.id });
+    },
+    autoLayoutGraph: () => commit(autoLayout(get().workflow)),
     removeCapsule: (nodeId) => {
       commit(removeNode(get().workflow, nodeId));
       if (get().selectedNodeId === nodeId) set({ selectedNodeId: null });
@@ -529,7 +544,7 @@ export const useStudio = create<StudioState>((set, get) => {
         id: uid('job'),
         status: 'running',
         progress: 0,
-        label: job.prompt.slice(0, 48) || 'Untitled render',
+        label: `${job.output === 'video' ? 'Video' : 'Image'}: ${job.prompt.slice(0, 48) || 'Untitled render'}`,
       };
       set({ queue: [queueJob, ...get().queue].slice(0, 20) });
       const patch = (p: Partial<QueueJob>) =>
@@ -632,6 +647,9 @@ export const useStudio = create<StudioState>((set, get) => {
         const item: GalleryItem = {
           id: uid('render'),
           dataUrl: result.dataUrl,
+          mediaType: result.mediaType,
+          mimeType: result.mimeType,
+          extension: result.extension,
           createdAt: manifest.createdAt,
           manifest,
         };

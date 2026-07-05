@@ -7,6 +7,17 @@ import { Icon } from '../icons';
 
 type ManifestWithTurbo = ExportManifest & { turboForge?: TurboForgeManifestData };
 
+function mediaExtension(item: GalleryItem): string {
+  return item.extension ?? (item.mimeType === 'image/gif' ? 'gif' : 'png');
+}
+
+function MediaPreview({ item, alt }: { item: GalleryItem; alt: string }) {
+  if (item.mimeType?.startsWith('video/')) {
+    return <video src={item.dataUrl} controls loop muted playsInline />;
+  }
+  return <img src={item.dataUrl} alt={alt} />;
+}
+
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
@@ -20,6 +31,7 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const restoreSnapshot = useStudio((s) => s.restoreSnapshot);
   const m = item.manifest as ManifestWithTurbo;
   const base = slugify(m.prompt);
+  const ext = mediaExtension(item);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -36,10 +48,10 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
           <button className="btn icon" type="button" aria-label="Close details" onClick={onClose}>{Icon.close()}</button>
         </div>
         <div className="drawer-body">
-          <img src={item.dataUrl} alt={m.prompt || 'Generated render'} />
+          <MediaPreview item={item} alt={m.prompt || 'Generated render'} />
           <div className="drawer-actions">
-            <button className="btn" type="button" onClick={() => downloadDataUrl(item.dataUrl, `${base}-${m.seed}.png`)}>
-              {Icon.download()} PNG
+            <button className="btn" type="button" onClick={() => downloadDataUrl(item.dataUrl, `${base}-${m.seed}.${ext}`)}>
+              {Icon.download()} {ext.toUpperCase()}
             </button>
             <button className="btn" type="button" onClick={() => downloadJson(m, `${base}-${m.seed}.manifest.json`)}>
               {Icon.download()} Manifest JSON
@@ -54,6 +66,10 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
             <DetailRow label="Seed"><span className="mono">{m.seed}</span></DetailRow>
             <DetailRow label="Sampler">{m.sampler.name} · {m.sampler.steps} steps · cfg {m.sampler.cfg}</DetailRow>
             <DetailRow label="Canvas">{m.canvas.width}×{m.canvas.height}</DetailRow>
+            <DetailRow label="Media">
+              {m.media?.type ?? item.mediaType ?? 'image'} | {m.media?.format ?? ext}
+              {m.media?.type === 'video' ? ` | ${m.media.frameCount} frames @ ${m.media.fps} fps` : ''}
+            </DetailRow>
             <DetailRow label="Model">
               {m.model ? <>{m.model.name} <span className="chip">{m.model.family}</span> <span className="mono">{m.model.hash}</span></> : '—'}
             </DetailRow>
@@ -97,10 +113,13 @@ export function Gallery() {
               return (
                 <article key={item.id} className="card render-card">
                   <button type="button" className="render-card" onClick={() => setOpenId(item.id)} aria-label={`Open details for ${m.prompt || 'render'}`}>
-                    <img src={item.dataUrl} alt={m.prompt || 'Generated render'} />
+                    <MediaPreview item={item} alt={m.prompt || 'Generated render'} />
                     <div className="meta">
                       <span className="p" title={m.prompt}>{m.prompt || 'Untitled render'}</span>
-                      <span className="s"><span className="mono">seed {m.seed}</span><span>{new Date(item.createdAt).toLocaleTimeString()}</span></span>
+                      <span className="s">
+                        <span className="mono">{m.media?.type === 'video' || item.mediaType === 'video' ? 'video' : 'seed'} {m.seed}</span>
+                        <span>{new Date(item.createdAt).toLocaleTimeString()}</span>
+                      </span>
                     </div>
                   </button>
                   <div className="meta">

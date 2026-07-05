@@ -21,6 +21,25 @@ describe('buildRenderJob', () => {
     expect(job.loras).toEqual([{ id: 'lora-retro-grain', weight: 0.9 }]);
     expect(job.steps).toBe(28);
     expect(job.sampler).toBe('euler_a');
+    expect(job.output).toBe('image');
+    expect(job.fps).toBe(8);
+  });
+
+  it('assembles video job fields from the video capsule', () => {
+    let wf = createDefaultWorkflow();
+    const video = findNode(wf, 'video')!;
+    wf = updateNodeParam(wf, video.id, 'enabled', true);
+    wf = updateNodeParam(wf, video.id, 'frameCount', 18);
+    wf = updateNodeParam(wf, video.id, 'fps', 12);
+    wf = updateNodeParam(wf, video.id, 'cameraMotion', 'pan');
+
+    const job = buildRenderJob(wf);
+
+    expect(job.output).toBe('video');
+    expect(job.frameCount).toBe(18);
+    expect(job.fps).toBe(12);
+    expect(job.cameraMotion).toBe('pan');
+    expect(job.format).toBe('gif');
   });
 });
 

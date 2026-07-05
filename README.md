@@ -5,11 +5,12 @@ Disco Diffusion. It includes Recipe View, Graph View, Model Shelf, LoRA Rack, Ga
 performance planning.
 
 **Two synchronized editors, one workflow object.** The **Recipe View** (beginner-friendly cards) and
-the **Graph View** (a real, editable SVG node graph: drag nodes, wire typed ports, click a wire to
-disconnect, keyboard-move/delete) operate on the same underlying workflow, so an edit in either shows
-up in the other immediately. Every capsule is edited through a shared, accessible **Inspector**.
+the **Graph View** (a real, editable SVG node graph: searchable node palette, typed ports, duplicate,
+delete, auto-layout, fit/reset view, keyboard move/delete) operate on the same underlying workflow, so
+an edit in either shows up in the other immediately. Every capsule is edited through a shared,
+accessible **Inspector**.
 
-**Nine Capsules:** Prompt, Model, LoRA Rack, Control, Sampler, Canvas, Queue, Export, Manifest.
+**Core Capsules:** Prompt, Model, LoRA Rack, Control, Sampler, Video, Canvas, Queue, Export, Manifest.
 
 **Recipe portability (v0.2):** save the current workflow as a `.lumen` file and re-open it later, or
 start from a built-in **template** (Neon Poster, Ink Sketch, Portrait Studio) from the Recipe View
@@ -94,9 +95,16 @@ The produced `.exe` is at `src-tauri/target/release/lumendeck.exe`. App icons ar
 
 ## Backends
 
+### Video Renders
+
+Enable the **Video** capsule in Recipe or Graph view to render a short animated loop. The built-in
+bridge returns deterministic animated GIF output (`mediaType: video`, `mimeType: image/gif`) with
+frame count, FPS, motion strength, camera motion, and loop settings recorded in the manifest.
+
 ### Mock Backend
 
-The Mock backend is built in and needs no GPU. It creates deterministic procedural images so you can
+The Mock backend is built in and needs no GPU. It creates deterministic procedural images and SVG
+animation previews so you can
 test prompts, manifests, gallery restore, TurboForge planning, benchmark storage, and UI flow.
 
 Use it when:
@@ -131,7 +139,8 @@ the fallback in the manifest warning data.
 A tiny local HTTP backend that gives LumenDeck a real generation path plus a local model scanner,
 with **no GPU or heavy dependencies** required for the default path. The desktop app bundles the
 pure-stdlib server as a sidecar and starts it automatically. Its default generator is a
-pure-standard-library procedural renderer that produces deterministic, reproducible PNGs from a seed:
+pure-standard-library procedural renderer that produces deterministic, reproducible PNGs and animated
+GIFs from a seed:
 the reference implementation of the `BackendAdapter` contract.
 
 ```bash

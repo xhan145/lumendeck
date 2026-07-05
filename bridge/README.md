@@ -10,7 +10,7 @@ two servers that share the same route contract:
   favor of `server.py`; kept for convenience. Needs `pip install -r requirements.txt`.
 
 The default generator is a **pure-stdlib procedural renderer** (`renderer.py`): no GPU, no Pillow, no
-numpy, deterministic and reproducible from a seed, so it runs anywhere. An optional **real** path
+numpy, deterministic PNG stills and animated GIF loops from a seed, so it runs anywhere. An optional **real** path
 (`diffusers_backend.py`, SD-Turbo) activates only if `torch` and `diffusers` are importable.
 
 ## Endpoints
@@ -24,10 +24,12 @@ numpy, deterministic and reproducible from a seed, so it runs anywhere. An optio
 | GET    | `/diffusers/status`   | Diffusers dependency, cache, device, and model readiness                  |
 | POST   | `/diffusers/install`  | Creates managed runtime, installs CUDA-or-CPU PyTorch/Diffusers, downloads model |
 | POST   | `/diffusers/download` | Downloads/loads the configured Diffusers model into the HF cache          |
-| POST   | `/generate`           | `{ image_base64, seed }` - body may set `renderer` (see below)            |
+| POST   | `/generate`           | `{ image_base64, seed }` or `{ video_base64, seed }` - body may set `renderer`/`output` |
 
 `POST /generate` accepts a `renderer` field: `"procedural"` (always), `"diffusers"` (real SD-Turbo;
 503 if torch/diffusers are absent), or `"auto"` (diffusers if available, else procedural).
+Set `output:"video"` with `frameCount`, `fps`, `motionStrength`, and `cameraMotion` to produce an
+animated GIF (`mediaType:"video"`, `mimeType:"image/gif"`).
 
 Front-end client: `src/bridge/httpAdapter.ts` (default `http://127.0.0.1:8787`). In the desktop app
 the sidecar starts automatically; select **Diffusers bridge** in the Backend panel to use it, and pick

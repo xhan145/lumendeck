@@ -1,5 +1,5 @@
 import { CAPSULES, defaultParams } from './capsules';
-import type { CapsuleKind, SocketRef, Workflow, WorkflowEdge, WorkflowNode } from './types';
+import type { CapsuleKind, SocketRef, SocketType, Workflow, WorkflowEdge, WorkflowNode } from './types';
 
 let counter = 0;
 /** Collision-free enough for a local document; stable across reloads via persistence. */
@@ -18,6 +18,43 @@ function bump(wf: Workflow, patch: Partial<Workflow>): Workflow {
 
 export function addNode(wf: Workflow, node: WorkflowNode): Workflow {
   return bump(wf, { nodes: [...wf.nodes, node] });
+}
+
+export function duplicateNode(wf: Workflow, nodeId: string, dx = 32, dy = 32): Workflow {
+  const node = wf.nodes.find((n) => n.id === nodeId);
+  if (!node) return wf;
+  const copy: WorkflowNode = {
+    ...node,
+    id: uid(node.kind),
+    x: node.x + dx,
+    y: node.y + dy,
+    params: JSON.parse(JSON.stringify(node.params)),
+  };
+  return addNode(wf, copy);
+}
+
+export function autoLayout(wf: Workflow): Workflow {
+  const lanes: Record<CapsuleKind, { x: number; y: number }> = {
+    prompt: { x: 40, y: 60 },
+    model: { x: 40, y: 320 },
+    loraRack: { x: 330, y: 320 },
+    control: { x: 40, y: 580 },
+    canvas: { x: 330, y: 580 },
+    sampler: { x: 620, y: 240 },
+    video: { x: 910, y: 240 },
+    queue: { x: 1200, y: 240 },
+    export: { x: 1490, y: 240 },
+    manifest: { x: 1490, y: 500 },
+  };
+  const seen = new Map<CapsuleKind, number>();
+  return bump(wf, {
+    nodes: wf.nodes.map((node) => {
+      const base = lanes[node.kind];
+      const count = seen.get(node.kind) ?? 0;
+      seen.set(node.kind, count + 1);
+      return { ...node, x: base.x, y: base.y + count * 150 };
+    }),
+  });
 }
 
 export function removeNode(wf: Workflow, nodeId: string): Workflow {
@@ -49,6 +86,10 @@ function socketDef(wf: Workflow, ref: SocketRef, dir: 'in' | 'out') {
   return list.find((s) => s.id === ref.socket);
 }
 
+function socketTypesCompatible(out: SocketType, input: SocketType): boolean {
+  return out === input || (input === 'media' && (out === 'image' || out === 'media'));
+}
+
 /** Would adding an edge from→to create a cycle? */
 function createsCycle(wf: Workflow, from: SocketRef, to: SocketRef): boolean {
   const adj = new Map<string, string[]>();
@@ -74,7 +115,7 @@ export function canConnect(wf: Workflow, from: SocketRef, to: SocketRef): { ok: 
   const out = socketDef(wf, from, 'out');
   const inp = socketDef(wf, to, 'in');
   if (!out || !inp) return { ok: false, reason: 'Socket not found.' };
-  if (out.type !== inp.type) {
+  if (!socketTypesCompatible(out.type, inp.type)) {
     return { ok: false, reason: `Type mismatch: ${out.type} output cannot feed a ${inp.type} input.` };
   }
   if (createsCycle(wf, from, to)) return { ok: false, reason: 'Connection would create a cycle.' };
@@ -99,7 +140,7 @@ export function findNode(wf: Workflow, kind: CapsuleKind): WorkflowNode | undefi
   return wf.nodes.find((n) => n.kind === kind);
 }
 
-/** Default studio workflow: all nine capsules pre-wired left to right. */
+/** Default studio workflow: all core capsules pre-wired left to right. */
 export function createDefaultWorkflow(): Workflow {
   const prompt = createNode('prompt', 40, 60);
   const model = createNode('model', 40, 320);
@@ -107,16 +148,17 @@ export function createDefaultWorkflow(): Workflow {
   const control = createNode('control', 40, 560);
   const canvas = createNode('canvas', 330, 560);
   const sampler = createNode('sampler', 620, 220);
-  const queue = createNode('queue', 910, 220);
-  const exportN = createNode('export', 1200, 220);
-  const manifest = createNode('manifest', 1200, 470);
+  const video = createNode('video', 910, 220);
+  const queue = createNode('queue', 1200, 220);
+  const exportN = createNode('export', 1490, 220);
+  const manifest = createNode('manifest', 1490, 470);
 
   let wf: Workflow = {
     id: uid('wf'),
     name: 'Untitled recipe',
     version: 0,
     schemaVersion: 1,
-    nodes: [prompt, model, rack, control, canvas, sampler, queue, exportN, manifest],
+    nodes: [prompt, model, rack, control, canvas, sampler, video, queue, exportN, manifest],
     edges: [],
   };
   wf = connect(wf, { node: prompt.id, socket: 'conditioning' }, { node: sampler.id, socket: 'conditioning' });
@@ -124,8 +166,9 @@ export function createDefaultWorkflow(): Workflow {
   wf = connect(wf, { node: rack.id, socket: 'model_out' }, { node: sampler.id, socket: 'model' });
   wf = connect(wf, { node: control.id, socket: 'control' }, { node: sampler.id, socket: 'control' });
   wf = connect(wf, { node: canvas.id, socket: 'latent' }, { node: sampler.id, socket: 'latent' });
-  wf = connect(wf, { node: sampler.id, socket: 'image' }, { node: queue.id, socket: 'image' });
-  wf = connect(wf, { node: queue.id, socket: 'image_out' }, { node: exportN.id, socket: 'image' });
+  wf = connect(wf, { node: sampler.id, socket: 'image' }, { node: video.id, socket: 'image' });
+  wf = connect(wf, { node: video.id, socket: 'media' }, { node: queue.id, socket: 'media' });
+  wf = connect(wf, { node: queue.id, socket: 'media_out' }, { node: exportN.id, socket: 'media' });
   wf = connect(wf, { node: exportN.id, socket: 'manifest_out' }, { node: manifest.id, socket: 'manifest_in' });
   return { ...wf, version: 1 };
 }

@@ -13,6 +13,14 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
+function svgDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function escapeSvgText(text: string): string {
+  return text.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]!));
+}
+
 function hashString(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -85,6 +93,24 @@ export class MockAdapter implements BackendAdapter {
     });
 
     onProgress?.(1);
-    return { dataUrl: canvas.toDataURL('image/png'), seed };
+    if (job.output === 'video') {
+      const duration = Math.max(0.5, job.frameCount / Math.max(1, job.fps));
+      const hueA = Math.floor(rng() * 360);
+      const hueB = (hueA + 140) % 360;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+        <defs>
+          <radialGradient id="g"><stop offset="0%" stop-color="hsl(${hueA},90%,68%)"/><stop offset="100%" stop-color="hsl(${hueB},80%,16%)"/></radialGradient>
+        </defs>
+        <rect width="100%" height="100%" fill="hsl(${hueB},65%,12%)"/>
+        <circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) * 0.24}" fill="url(#g)" opacity="0.85">
+          <animate attributeName="cx" values="${w * 0.35};${w * 0.65};${w * 0.35}" dur="${duration}s" repeatCount="indefinite"/>
+          <animate attributeName="r" values="${Math.min(w, h) * 0.18};${Math.min(w, h) * 0.32};${Math.min(w, h) * 0.18}" dur="${duration}s" repeatCount="indefinite"/>
+        </circle>
+        <text x="24" y="${h - 28}" font-family="system-ui" font-size="18" fill="white" opacity="0.7">${escapeSvgText(job.prompt.slice(0, 80))}</text>
+      </svg>`;
+      return { dataUrl: svgDataUrl(svg), seed, mediaType: 'video', mimeType: 'image/svg+xml', extension: 'svg' };
+    }
+
+    return { dataUrl: canvas.toDataURL('image/png'), seed, mediaType: 'image', mimeType: 'image/png', extension: 'png' };
   }
 }

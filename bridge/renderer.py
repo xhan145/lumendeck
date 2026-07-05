@@ -8,6 +8,7 @@ are reproducible from a manifest.
 from __future__ import annotations
 
 import base64
+import math
 import struct
 import zlib
 from dataclasses import dataclass
@@ -90,6 +91,11 @@ class RenderRequest:
     steps: int = 28
     cfg: float = 7.0
     loras: int = 0
+    frame_count: int = 1
+    fps: int = 8
+    motion_strength: float = 0.7
+    camera_motion: str = "orbit"
+    loop: bool = True
 
 
 def render_png_base64(req: RenderRequest) -> str:
@@ -137,3 +143,138 @@ def render_png_base64(req: RenderRequest) -> str:
                 pixels[idx + 2] = min(255, int(pixels[idx + 2] + oc[2] * a))
 
     return base64.b64encode(_png_bytes(w, h, pixels)).decode("ascii")
+
+
+def _gif_lzw_encode(indices: bytes, min_code_size: int = 8) -> bytes:
+    clear = 1 << min_code_size
+    end = clear + 1
+    code_size = min_code_size + 1
+    next_code = end + 1
+    dictionary = {(i,): i for i in range(clear)}
+    bit_buffer = 0
+    bit_count = 0
+    out = bytearray()
+
+    def emit(code: int) -> None:
+        nonlocal bit_buffer, bit_count
+        bit_buffer |= code << bit_count
+        bit_count += code_size
+        while bit_count >= 8:
+            out.append(bit_buffer & 0xFF)
+            bit_buffer >>= 8
+            bit_count -= 8
+
+    emit(clear)
+    w: tuple[int, ...] = ()
+    for raw in indices:
+        k = (raw,)
+        wk = w + k
+        if wk in dictionary:
+            w = wk
+            continue
+        emit(dictionary[w])
+        if next_code < 4096:
+            dictionary[wk] = next_code
+            next_code += 1
+            if next_code == (1 << code_size) and code_size < 12:
+                code_size += 1
+        else:
+            emit(clear)
+            dictionary = {(i,): i for i in range(clear)}
+            code_size = min_code_size + 1
+            next_code = end + 1
+        w = k
+    if w:
+        emit(dictionary[w])
+    emit(end)
+    if bit_count:
+        out.append(bit_buffer & 0xFF)
+    return bytes(out)
+
+
+def _gif_subblocks(data: bytes) -> bytes:
+    out = bytearray()
+    for i in range(0, len(data), 255):
+        chunk = data[i:i + 255]
+        out.append(len(chunk))
+        out.extend(chunk)
+    out.append(0)
+    return bytes(out)
+
+
+def _video_palette(hue_a: float, hue_b: float) -> bytes:
+    palette = bytearray()
+    for i in range(256):
+        t = i / 255
+        hue = (hue_a + (hue_b - hue_a) * t) % 360
+        sat = 0.55 + 0.35 * math.sin(t * math.pi)
+        light = 0.10 + 0.58 * t
+        palette.extend(_hsl_to_rgb(hue, sat, light))
+    return bytes(palette)
+
+
+def _gif_frame_indices(req: RenderRequest, width: int, height: int, frame: int, total: int, hue_a: float, hue_b: float) -> bytes:
+    phase = frame / max(1, total)
+    strength = max(0.0, min(2.0, req.motion_strength))
+    motion = req.camera_motion
+    cx = width * (0.5 + 0.24 * strength * math.sin(phase * math.tau))
+    cy = height * (0.5 + 0.18 * strength * math.cos(phase * math.tau))
+    if motion == "push":
+        cx, cy = width * 0.5, height * 0.5
+    elif motion == "pan":
+        cx = width * (0.25 + 0.5 * phase)
+        cy = height * 0.5
+    elif motion == "pulse":
+        cx, cy = width * 0.5, height * 0.5
+    radius = min(width, height) * (0.16 + 0.08 * strength + (0.08 * math.sin(phase * math.tau) if motion in ("push", "pulse") else 0))
+    radius = max(8, radius)
+    prompt_hash = _fnv1a(req.prompt)
+    pixels = bytearray(width * height)
+    for y in range(height):
+        yy = y / max(1, height - 1)
+        for x in range(width):
+            xx = x / max(1, width - 1)
+            wave = math.sin((xx * 4.0 + yy * 2.5 + phase * 2.0) * math.tau + (prompt_hash % 31))
+            swirl = math.sin((xx - yy + phase * strength) * math.tau * 2.0)
+            base = (xx * 0.45 + yy * 0.35 + 0.10 * wave + 0.06 * swirl + phase * 0.25) % 1.0
+            dx, dy = x - cx, y - cy
+            orb = max(0.0, 1.0 - ((dx * dx + dy * dy) / (radius * radius)))
+            idx = int(max(0.0, min(1.0, base * 0.72 + orb * 0.42)) * 255)
+            pixels[y * width + x] = idx
+    return bytes(pixels)
+
+
+def _gif_bytes(req: RenderRequest) -> bytes:
+    width = max(64, min(512, req.width))
+    height = max(64, min(512, req.height))
+    frame_count = max(2, min(96, req.frame_count))
+    fps = max(1, min(30, req.fps))
+    rng = _mulberry32(req.seed ^ _fnv1a(req.prompt))
+    hue_a = rng() * 360
+    hue_b = (hue_a + 120 + rng() * 90) % 360
+    delay = max(2, round(100 / fps))
+
+    out = bytearray()
+    out.extend(b"GIF89a")
+    out.extend(struct.pack("<HH", width, height))
+    out.extend(bytes([0xF7, 0, 0]))
+    out.extend(_video_palette(hue_a, hue_b))
+    if req.loop:
+        out.extend(b"\x21\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00")
+    for frame in range(frame_count):
+        indices = _gif_frame_indices(req, width, height, frame, frame_count, hue_a, hue_b)
+        out.extend(b"\x21\xF9\x04\x04")
+        out.extend(struct.pack("<H", delay))
+        out.extend(b"\x00\x00")
+        out.extend(b"\x2C")
+        out.extend(struct.pack("<HHHH", 0, 0, width, height))
+        out.append(0)
+        out.append(8)
+        out.extend(_gif_subblocks(_gif_lzw_encode(indices, 8)))
+    out.append(0x3B)
+    return bytes(out)
+
+
+def render_gif_base64(req: RenderRequest) -> str:
+    """Render a deterministic procedural animated GIF and return base64."""
+    return base64.b64encode(_gif_bytes(req)).decode("ascii")

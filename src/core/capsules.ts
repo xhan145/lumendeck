@@ -38,6 +38,20 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     outputs: [{ id: 'model', label: 'Model', type: 'model' }],
     params: [
       { id: 'assetId', label: 'Checkpoint', kind: 'select', options: [], default: '' },
+      {
+        id: 'precision',
+        label: 'Precision',
+        kind: 'select',
+        options: [
+          { value: 'auto', label: 'Auto' },
+          { value: 'fp16', label: 'FP16' },
+          { value: 'bf16', label: 'BF16' },
+          { value: 'fp32', label: 'FP32' },
+        ],
+        default: 'auto',
+      },
+      { id: 'clipSkip', label: 'CLIP skip', kind: 'number', min: 0, max: 12, step: 1, default: 0 },
+      { id: 'vae', label: 'VAE override', kind: 'text', default: '', help: 'Optional VAE file or backend alias.' },
     ],
   },
   loraRack: {
@@ -61,6 +75,20 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     params: [
       { id: 'enabled', label: 'Enabled', kind: 'toggle', default: false },
       {
+        id: 'preprocessor',
+        label: 'Preprocessor',
+        kind: 'select',
+        options: [
+          { value: 'none', label: 'None' },
+          { value: 'canny', label: 'Canny' },
+          { value: 'depth_midas', label: 'Depth MiDaS' },
+          { value: 'openpose', label: 'OpenPose' },
+          { value: 'lineart', label: 'Lineart' },
+          { value: 'tile', label: 'Tile' },
+        ],
+        default: 'none',
+      },
+      {
         id: 'mode',
         label: 'Mode',
         kind: 'select',
@@ -73,6 +101,8 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
         default: 'none',
       },
       { id: 'strength', label: 'Strength', kind: 'number', min: 0, max: 2, step: 0.05, default: 1 },
+      { id: 'startPercent', label: 'Start %', kind: 'number', min: 0, max: 1, step: 0.05, default: 0 },
+      { id: 'endPercent', label: 'End %', kind: 'number', min: 0, max: 1, step: 0.05, default: 1 },
     ],
   },
   sampler: {
@@ -96,13 +126,58 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
           { value: 'euler', label: 'Euler' },
           { value: 'euler_a', label: 'Euler Ancestral' },
           { value: 'dpmpp_2m', label: 'DPM++ 2M' },
+          { value: 'dpmpp_2m_sde', label: 'DPM++ 2M SDE' },
+          { value: 'dpmpp_3m_sde', label: 'DPM++ 3M SDE' },
           { value: 'ddim', label: 'DDIM' },
+          { value: 'uni_pc', label: 'UniPC' },
         ],
         default: 'euler_a',
       },
+      {
+        id: 'scheduler',
+        label: 'Scheduler',
+        kind: 'select',
+        options: [
+          { value: 'normal', label: 'Normal' },
+          { value: 'karras', label: 'Karras' },
+          { value: 'exponential', label: 'Exponential' },
+          { value: 'sgm_uniform', label: 'SGM uniform' },
+          { value: 'simple', label: 'Simple' },
+        ],
+        default: 'karras',
+      },
       { id: 'steps', label: 'Steps', kind: 'number', min: 1, max: 150, step: 1, default: 28 },
       { id: 'cfg', label: 'Guidance (CFG)', kind: 'number', min: 1, max: 30, step: 0.5, default: 7 },
+      { id: 'denoise', label: 'Denoise', kind: 'number', min: 0, max: 1, step: 0.01, default: 1 },
+      { id: 'cfgRescale', label: 'CFG rescale', kind: 'number', min: 0, max: 1, step: 0.05, default: 0 },
       { id: 'seed', label: 'Seed', kind: 'seed', default: 1337, help: '-1 rolls a random seed per render.' },
+    ],
+  },
+  video: {
+    kind: 'video',
+    title: 'Video',
+    accent: 'var(--cap-video)',
+    description: 'Animates the sampled image stream into a short loop.',
+    inputs: [{ id: 'image', label: 'Image', type: 'image' }],
+    outputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    params: [
+      { id: 'enabled', label: 'Render video', kind: 'toggle', default: false },
+      { id: 'frameCount', label: 'Frames', kind: 'number', min: 2, max: 96, step: 1, default: 24 },
+      { id: 'fps', label: 'FPS', kind: 'number', min: 1, max: 30, step: 1, default: 8 },
+      { id: 'motionStrength', label: 'Motion strength', kind: 'number', min: 0, max: 2, step: 0.05, default: 0.7 },
+      {
+        id: 'cameraMotion',
+        label: 'Camera motion',
+        kind: 'select',
+        options: [
+          { value: 'orbit', label: 'Orbit' },
+          { value: 'push', label: 'Push in' },
+          { value: 'pan', label: 'Pan' },
+          { value: 'pulse', label: 'Pulse' },
+        ],
+        default: 'orbit',
+      },
+      { id: 'loop', label: 'Seamless loop', kind: 'toggle', default: true },
     ],
   },
   canvas: {
@@ -116,6 +191,7 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
       { id: 'width', label: 'Width', kind: 'number', min: 64, max: 8192, step: 8, default: 1024 },
       { id: 'height', label: 'Height', kind: 'number', min: 64, max: 8192, step: 8, default: 1024 },
       { id: 'batch', label: 'Batch size', kind: 'number', min: 1, max: 16, step: 1, default: 1 },
+      { id: 'tile', label: 'Tileable', kind: 'toggle', default: false },
     ],
   },
   queue: {
@@ -123,8 +199,8 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     title: 'Queue',
     accent: 'var(--cap-queue)',
     description: 'Collects render jobs and dispatches them to the active backend.',
-    inputs: [{ id: 'image', label: 'Image', type: 'image' }],
-    outputs: [{ id: 'image_out', label: 'Rendered', type: 'image' }],
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
+    outputs: [{ id: 'media_out', label: 'Rendered', type: 'media' }],
     params: [
       { id: 'autoRun', label: 'Auto-run on change', kind: 'toggle', default: false },
     ],
@@ -134,7 +210,7 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     title: 'Export',
     accent: 'var(--cap-export)',
     description: 'Saves renders to the gallery and to disk.',
-    inputs: [{ id: 'image', label: 'Image', type: 'image' }],
+    inputs: [{ id: 'media', label: 'Media', type: 'media' }],
     outputs: [{ id: 'manifest_out', label: 'Manifest', type: 'manifest' }],
     params: [
       {
@@ -144,6 +220,7 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
         options: [
           { value: 'png', label: 'PNG' },
           { value: 'webp', label: 'WebP' },
+          { value: 'gif', label: 'GIF' },
         ],
         default: 'png',
       },
