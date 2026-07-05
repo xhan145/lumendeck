@@ -3,9 +3,12 @@ import { CAPSULES, CAPSULE_KINDS, defaultParams } from '../src/core/capsules';
 
 describe('capsule registry', () => {
   it('defines all core capsules', () => {
-    expect(CAPSULE_KINDS.sort()).toEqual(
+    expect(CAPSULE_KINDS).toEqual(expect.arrayContaining(
       ['canvas', 'control', 'export', 'loraRack', 'manifest', 'model', 'prompt', 'queue', 'sampler', 'video'],
-    );
+    ));
+    expect(CAPSULE_KINDS.length).toBeGreaterThanOrEqual(40);
+    expect(CAPSULES.checkpointLoader.outputs.map((s) => s.type)).toEqual(['model', 'clip', 'vae']);
+    expect(CAPSULES.samplerAdvanced.inputs.map((s) => s.type)).toContain('noise');
   });
 
   it('every param has a default and unique id', () => {

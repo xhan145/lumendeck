@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildRenderJob } from '../src/bridge/adapter';
 import { ComfyAdapter } from '../src/bridge/comfyAdapter';
+import { buildStreamingPreview } from '../src/bridge/preview';
 import { buildManifest } from '../src/core/manifest';
 import { createDefaultWorkflow, findNode, updateNodeParam } from '../src/core/workflow';
 import { DEMO_SHELF } from '../src/data/demoShelf';
@@ -50,6 +51,15 @@ describe('ComfyUI backend adapter', () => {
     expect(health.ok).toBe(false);
     expect(health.status).toBe('unavailable');
     expect(health.message).toMatch(/Start ComfyUI/i);
+  });
+});
+
+describe('streaming render previews', () => {
+  it('builds an inline SVG preview for an in-flight job', () => {
+    const job = buildRenderJob(wfWithModel());
+    const preview = buildStreamingPreview(job, 0.42, 'rendering');
+    expect(preview).toMatch(/^data:image\/svg\+xml/);
+    expect(decodeURIComponent(preview)).toContain('rendering 42%');
   });
 });
 

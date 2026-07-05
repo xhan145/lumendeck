@@ -118,17 +118,17 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
       <div className="guide-inner">
         <header className="guide-head">
           <div>
-            <p className="guide-kicker">Real photos, step by step</p>
-            <h1>Generate your first real photo</h1>
+            <p className="guide-kicker">Render setup</p>
+            <h1>Get the local renderer working</h1>
             <p>
-              Work down this checklist — each item reflects live LumenDeck state, so the blocked one is
-              usually what's stopping generation. Real images come from the Diffusers bridge on your GPU;
+              Work down this checklist. Each item reflects live LumenDeck state, so the blocked one is
+              usually what's stopping generation. Model-backed output comes from the Diffusers bridge on your GPU;
               anything else is the procedural placeholder.
             </p>
           </div>
           <div className="guide-head-actions">
             <button className="btn primary" type="button" onClick={() => void enqueueRender()} disabled={!canRenderReal}>
-              {Icon.play()} Render real photo
+              {Icon.play()} Render
             </button>
             <button className="btn" type="button" onClick={onOpenControls}>
               {Icon.gear()} Controls
@@ -161,8 +161,8 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
             }
           >
             <p>
-              Real photos come from the bridge backend, not Mock. Launch LumenDeck with the desktop app,
-              <code> run.bat</code>, or <code>npm run dev</code> — the bridge starts automatically — then keep the
+              Model-backed renders come from the bridge backend, not Mock. Launch LumenDeck with the desktop app,
+              <code> run.bat</code>, or <code>npm run dev</code>. The bridge starts automatically; keep the
               backend on <strong>Diffusers bridge</strong> with renderer <strong>auto</strong> or <strong>diffusers</strong>.
             </p>
             {!bridgeOnline ? <p className="guide-note danger">The bridge isn't answering right now. Restart the app or dev server, then Check bridge.</p> : null}
@@ -175,14 +175,14 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
             actions={
               <>
                 <button className="btn primary" type="button" onClick={() => void installBridgeRuntime()} disabled={!canInstallRuntime}>
-                  {Icon.download()} {bridgeModelBusy ? 'Installing…' : 'Install GPU runtime'}
+                  {Icon.download()} {bridgeModelBusy ? 'Installing...' : 'Install GPU runtime'}
                 </button>
                 <button className="btn" type="button" onClick={() => void refreshBridgeModelStatus()}>{Icon.pulse()} Check device</button>
               </>
             }
           >
             <p>
-              SDXL/Pony checkpoints need a GPU — on CPU they run out of memory and fall back to a placeholder.
+              SDXL/Pony checkpoints need a GPU. On CPU they run out of memory and fall back to a placeholder.
               <strong> Install GPU runtime</strong> sets up an app-local Python with CUDA PyTorch and downloads SD-Turbo.
               On an NVIDIA card the device below should read <strong>GPU (CUDA)</strong>.
             </p>
@@ -208,12 +208,12 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
             }
           >
             <p>
-              Three ways to get real models, all on the <strong>Model Shelf</strong>:
+              Three ways to add models, all on the <strong>Model Shelf</strong>:
             </p>
             <ul className="guide-issue-list">
-              <li><strong>SD-Turbo</strong> — downloaded for you by the GPU runtime step above; great for fast tests.</li>
-              <li><strong>Civitai</strong> — search and download checkpoints or LoRAs straight into your model folder.</li>
-              <li><strong>Bring your own</strong> — point LumenDeck at an existing models folder (ComfyUI/A1111) to scan it.</li>
+              <li><strong>SD-Turbo</strong> is downloaded by the GPU runtime step above and is good for fast tests.</li>
+              <li><strong>Civitai</strong> can search and download checkpoints or LoRAs straight into your model folder.</li>
+              <li><strong>Bring your own</strong> points LumenDeck at an existing models folder (ComfyUI/A1111) to scan it.</li>
             </ul>
             <dl className="guide-mini-grid">
               <div><dt>Installed checkpoints</dt><dd>{installedCheckpoints.length}</dd></div>
@@ -251,14 +251,14 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
             }
           >
             <p>
-              In the Recipe view set your prompt, pick a checkpoint, and (optionally) stack LoRAs in the rack —
-              their weights apply to real renders. Keep the canvas moderate for fast first tests.
+              In the Recipe view set your prompt, pick a checkpoint, and optionally stack LoRAs in the rack.
+              Their weights apply to model-backed renders. Keep the canvas moderate for fast tests.
             </p>
             <dl className="guide-mini-grid">
               <div><dt>Prompt</dt><dd>{prompt || 'empty'}</dd></div>
               <div><dt>Checkpoint</dt><dd>{checkpoint?.name ?? 'not selected'}</dd></div>
               <div><dt>LoRAs</dt><dd>{enabledLoras.length ? `${enabledLoras.length} active` : 'none'}</dd></div>
-              <div><dt>Canvas</dt><dd>{width && height ? `${width} × ${height}` : 'unknown'}</dd></div>
+              <div><dt>Canvas</dt><dd>{width && height ? `${width} x ${height}` : 'unknown'}</dd></div>
             </dl>
           </Step>
 
@@ -269,16 +269,16 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
             actions={
               <>
                 <button className="btn primary" type="button" onClick={() => void enqueueRender()} disabled={!canRenderReal}>
-                  {Icon.play()} Render real photo
+                  {Icon.play()} Render
                 </button>
                 <button className="btn" type="button" onClick={() => setView('gallery')}>{Icon.image()} Gallery</button>
               </>
             }
           >
-            <p>After you press Render, watch the Queue in Controls. The first real render sits on “loading” while the model warms up, then steps advance live.</p>
+            <p>After you press Render, watch the Queue in Controls. Model loading appears first, then sampling progress and a live preview update as the job advances.</p>
             {latestJob ? (
               <p className={`guide-note ${latestJob.status === 'error' ? 'danger' : ''}`}>
-                Last job: {latestJob.status} at {Math.round(latestJob.progress * 100)}%{latestJob.error ? ` — ${latestJob.error}` : ''}
+                Last job: {latestJob.status} at {Math.round(latestJob.progress * 100)}%{latestJob.error ? ` - ${latestJob.error}` : ''}
               </p>
             ) : null}
           </Step>
@@ -287,9 +287,9 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
         <section className="guide-troubleshooting">
           <h2>Troubleshooting</h2>
           <div className="guide-help-grid">
-            <p><strong>It renders but looks fake.</strong> Backend must be Diffusers bridge, renderer auto/diffusers, and the device should read GPU (CUDA). A red “Real render failed…” note in the Queue shows the exact reason.</p>
+            <p><strong>It renders but looks fake.</strong> Backend must be Diffusers bridge, renderer auto/diffusers, and the device should read GPU (CUDA). A red fallback note in the Queue shows the exact reason.</p>
             <p><strong>SDXL/Pony crashes or is missing.</strong> Those need a GPU; on CPU they run out of memory. Install the GPU runtime, or use SD-Turbo / an SD1.5 model.</p>
-            <p><strong>Civitai download needs a token.</strong> Some models require one — add a Civitai API key in the browser's token field on the Model Shelf.</p>
+            <p><strong>Civitai download needs a token.</strong> Some models require one; add a Civitai API key in the browser's token field on the Model Shelf.</p>
             <p><strong>Connection fails.</strong> Restart from the repo with <code>run.bat</code> or <code>npm run dev</code>; the bridge answers on <code>/health</code> through the app.</p>
           </div>
           {latestError?.error ? <p className="guide-note danger">Most recent queue error: {latestError.error}</p> : null}

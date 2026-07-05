@@ -79,7 +79,7 @@ export function BackendSettingsPanel() {
           <div className="backend-model-panel">
             <div className="backend-model-head">
               <span>
-                <span className="field-label">Real photo model</span>
+                <span className="field-label">Diffusers model</span>
                 <span className="field-help">{bridgeModelStatus?.modelId ?? 'stabilityai/sd-turbo'}</span>
               </span>
               <span className={`chip status-${bridgeModelStatus?.dependenciesReady ? 'healthy' : 'degraded'}`}>
@@ -92,7 +92,7 @@ export function BackendSettingsPanel() {
               <span>Cache: {bridgeModelStatus?.cacheDir ?? 'unknown'}</span>
               <span>Runtime: {bridgeModelStatus?.managedRuntime?.path ?? 'not checked'}</span>
             </div>
-            <p className="field-help">{bridgeModelStatus?.message ?? 'Check the bridge to see whether SD-Turbo can render real photos.'}</p>
+            <p className="field-help">{bridgeModelStatus?.message ?? 'Check the bridge to see whether SD-Turbo can render with the local model backend.'}</p>
             {bridgeModelStatus && !bridgeModelStatus.dependenciesReady ? (
               <code className="backend-install-command">
                 {bridgeModelStatus.installable === false

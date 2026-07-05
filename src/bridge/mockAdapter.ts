@@ -1,5 +1,6 @@
-import type { BackendAdapter, RenderJob, RenderResult } from './adapter';
+import type { BackendAdapter, RenderJob, RenderProgressCallback, RenderResult } from './adapter';
 import { resolveSeed } from './adapter';
+import { buildStreamingPreview } from './preview';
 
 /** Deterministic 32-bit PRNG (mulberry32). */
 export function mulberry32(seed: number): () => number {
@@ -43,7 +44,7 @@ export class MockAdapter implements BackendAdapter {
     return true;
   }
 
-  async generate(job: RenderJob, onProgress?: (p: number) => void): Promise<RenderResult> {
+  async generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult> {
     const seed = resolveSeed(job.seed);
     const rng = mulberry32(seed ^ hashString(job.prompt));
     const w = Math.max(64, Math.min(2048, job.width));
@@ -78,7 +79,8 @@ export class MockAdapter implements BackendAdapter {
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
       if (onProgress && i % 10 === 0) {
-        onProgress(i / orbs);
+        const progress = i / orbs;
+        onProgress({ progress, phase: 'painting', previewDataUrl: buildStreamingPreview(job, progress, 'painting') });
         await new Promise((res) => setTimeout(res, 8));
       }
     }
@@ -92,7 +94,7 @@ export class MockAdapter implements BackendAdapter {
       ctx.stroke();
     });
 
-    onProgress?.(1);
+    onProgress?.({ progress: 1, phase: 'done', previewDataUrl: canvas.toDataURL('image/png') });
     if (job.output === 'video') {
       const duration = Math.max(0.5, job.frameCount / Math.max(1, job.fps));
       const hueA = Math.floor(rng() * 360);

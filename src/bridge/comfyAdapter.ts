@@ -1,5 +1,6 @@
-import type { BackendAdapter, RenderJob, RenderResult } from './adapter';
+import type { BackendAdapter, RenderJob, RenderProgressCallback, RenderResult } from './adapter';
 import { resolveSeed } from './adapter';
+import { buildStreamingPreview } from './preview';
 import { BASIC_TXT2IMG_TEMPLATE } from '../turboForge/workflows/comfyWorkflowTemplates';
 import { mapComfyTemplate } from '../turboForge/workflows/templateMapper';
 
@@ -84,11 +85,11 @@ export class ComfyAdapter implements BackendAdapter {
     return (await this.health()).ok;
   }
 
-  async generate(job: RenderJob, onProgress?: (p: number) => void): Promise<RenderResult> {
+  async generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult> {
     const seed = resolveSeed(job.seed);
     const resolvedJob = { ...job, seed };
     const backendStart = performance.now();
-    onProgress?.(0.05);
+    onProgress?.({ progress: 0.05, phase: 'submitting', previewDataUrl: buildStreamingPreview(resolvedJob, 0.05, 'submitting') });
     const prompt = mapComfyTemplate(BASIC_TXT2IMG_TEMPLATE, resolvedJob);
     const submitStarted = performance.now();
     const submit = await fetchWithTimeout(`${this.getBaseUrl()}/prompt`, {
@@ -102,14 +103,17 @@ export class ComfyAdapter implements BackendAdapter {
     }
     const queued = (await submit.json()) as { prompt_id?: string };
     if (!queued.prompt_id) throw new Error('ComfyUI did not return a prompt_id.');
-    onProgress?.(0.18);
+    onProgress?.({ progress: 0.18, phase: 'queued', previewDataUrl: buildStreamingPreview(resolvedJob, 0.18, 'queued') });
 
     const queueStart = performance.now();
-    const history = await this.pollHistory(queued.prompt_id, (progress) => onProgress?.(0.18 + progress * 0.62));
+    const history = await this.pollHistory(queued.prompt_id, (progress) => {
+      const overall = 0.18 + progress * 0.62;
+      onProgress?.({ progress: overall, phase: 'rendering', previewDataUrl: buildStreamingPreview(resolvedJob, overall, 'rendering') });
+    });
     const renderQueueMs = performance.now() - queueStart;
     const image = this.firstImage(history);
     if (!image) throw new Error('ComfyUI finished but no image output was found in history.');
-    onProgress?.(0.85);
+    onProgress?.({ progress: 0.85, phase: 'fetching output', previewDataUrl: buildStreamingPreview(resolvedJob, 0.85, 'fetching output') });
     const imageUrl = this.imageUrl(image);
     const outputFetchStart = performance.now();
     const imageResponse = await fetchWithTimeout(imageUrl, {}, 10000);
@@ -118,7 +122,7 @@ export class ComfyAdapter implements BackendAdapter {
     const dataUrl = await blobToDataUrl(blob);
     const outputFetchMs = performance.now() - outputFetchStart;
     const backendRequestMs = performance.now() - backendStart;
-    onProgress?.(1);
+    onProgress?.({ progress: 1, phase: 'done', previewDataUrl: dataUrl });
     console.info(`LumenDeck ComfyUI request completed in ${Math.round(performance.now() - submitStarted)} ms`);
     return {
       dataUrl,

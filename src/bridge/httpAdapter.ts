@@ -1,5 +1,6 @@
 import type { ModelAsset } from '../core/shelf';
-import type { BackendAdapter, RenderJob, RenderResult } from './adapter';
+import type { BackendAdapter, RenderJob, RenderProgressCallback, RenderResult } from './adapter';
+import { buildStreamingPreview } from './preview';
 
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8787';
 
@@ -198,8 +199,8 @@ export class HttpAdapter implements BackendAdapter {
     return (await res.json()) as BridgeModelStatus;
   }
 
-  async generate(job: RenderJob, onProgress?: (p: number) => void): Promise<RenderResult> {
-    onProgress?.(0.05);
+  async generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult> {
+    onProgress?.({ progress: 0.05, phase: 'queued', previewDataUrl: buildStreamingPreview(job, 0.05, 'queued') });
     const jobId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
 
     // Live progress: poll the bridge's per-job endpoint while the POST is in flight.
@@ -213,9 +214,12 @@ export class HttpAdapter implements BackendAdapter {
           const res = await fetch(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1200) });
           if (!res.ok) continue;
           const p = (await res.json()) as { phase?: string; step?: number; steps?: number };
-          if (p.phase === 'loading') onProgress?.(0.1);
+          if (p.phase === 'loading') {
+            onProgress?.({ progress: 0.1, phase: 'loading', previewDataUrl: buildStreamingPreview(job, 0.1, 'loading') });
+          }
           else if (p.phase === 'rendering' && p.steps && p.steps > 0) {
-            onProgress?.(Math.min(0.95, 0.15 + 0.8 * ((p.step ?? 0) / p.steps)));
+            const progress = Math.min(0.95, 0.15 + 0.8 * ((p.step ?? 0) / p.steps));
+            onProgress?.({ progress, phase: 'rendering', previewDataUrl: buildStreamingPreview(job, progress, 'rendering') });
           }
         } catch {
           // ignore — progress is advisory
@@ -244,13 +248,14 @@ export class HttpAdapter implements BackendAdapter {
         fallback?: boolean;
         fallbackReason?: string;
       };
-      onProgress?.(1);
       const mediaType = data.mediaType ?? (data.video_base64 ? 'video' : 'image');
       const mimeType = data.mimeType ?? (mediaType === 'video' ? 'image/gif' : 'image/png');
       const payload = data.video_base64 ?? data.image_base64;
       if (!payload) throw new Error('Bridge /generate response did not include media data.');
+      const dataUrl = `data:${mimeType};base64,${payload}`;
+      onProgress?.({ progress: 1, phase: 'done', previewDataUrl: dataUrl });
       return {
-        dataUrl: `data:${mimeType};base64,${payload}`,
+        dataUrl,
         mediaType,
         mimeType,
         extension: data.extension ?? (mimeType === 'image/gif' ? 'gif' : 'png'),

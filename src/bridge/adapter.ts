@@ -37,6 +37,20 @@ export interface RenderResult {
   fallbackReason?: string;
 }
 
+export interface RenderProgress {
+  progress: number;
+  phase?: string;
+  detail?: string;
+  previewDataUrl?: string;
+}
+
+export type RenderProgressUpdate = number | RenderProgress;
+export type RenderProgressCallback = (update: RenderProgressUpdate) => void;
+
+export function normalizeProgress(update: RenderProgressUpdate): RenderProgress {
+  return typeof update === 'number' ? { progress: update } : update;
+}
+
 /**
  * Boundary between LumenDeck and any generation backend. Implementations:
  * MockAdapter (in-browser procedural), HttpAdapter (local FastAPI bridge),
@@ -46,7 +60,7 @@ export interface BackendAdapter {
   id: string;
   label: string;
   ping(): Promise<boolean>;
-  generate(job: RenderJob, onProgress?: (p: number) => void): Promise<RenderResult>;
+  generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult>;
 }
 
 export function buildRenderJob(wf: Workflow): RenderJob {
