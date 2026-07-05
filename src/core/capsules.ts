@@ -290,7 +290,16 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     description: 'Applies a ControlNet image to conditioning.',
     inputs: [s('conditioning', 'Conditioning', 'conditioning'), s('control', 'ControlNet', 'control'), s('image', 'Image', 'image')],
     outputs: [s('conditioning', 'Conditioning', 'conditioning')],
-    params: [num('strength', 'Strength', 0, 2, 0.05, 1), num('startPercent', 'Start %', 0, 1, 0.05, 0), num('endPercent', 'End %', 0, 1, 0.05, 1)],
+    params: [
+      select('type', 'Control type', [
+        { value: 'canny', label: 'Canny (edges)' },
+        { value: 'depth', label: 'Depth' },
+        { value: 'pose', label: 'Pose' },
+      ], 'canny', 'Canny is fully supported; depth/pose fall back to edge guidance.'),
+      num('strength', 'Strength', 0, 2, 0.05, 1),
+      num('startPercent', 'Start %', 0, 1, 0.05, 0),
+      num('endPercent', 'End %', 0, 1, 0.05, 1),
+    ],
   },
   cannyPreprocessor: {
     kind: 'cannyPreprocessor',
