@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { buildRenderJob, type BackendAdapter } from '../bridge/adapter';
+import { buildRenderJob, normalizeProgress, type BackendAdapter } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -59,6 +59,8 @@ export interface QueueJob {
   status: 'running' | 'done' | 'error';
   progress: number;
   label: string;
+  phase?: string;
+  previewDataUrl?: string;
   error?: string;
 }
 
@@ -559,12 +561,18 @@ export const useStudio = create<StudioState>((set, get) => {
         let result;
         let usedFallback = false;
         try {
-          result = await adapter.generate(job, (progress) => patch({ progress }));
+          result = await adapter.generate(job, (update) => {
+            const progress = normalizeProgress(update);
+            patch({ progress: progress.progress, phase: progress.phase, previewDataUrl: progress.previewDataUrl });
+          });
         } catch (error) {
           if (!backendSettings.fallbackToMock || backendSettings.selectedBackend === 'mock') throw error;
           usedFallback = true;
           patch({ error: `${error instanceof Error ? error.message : String(error)} Falling back to mock backend.` });
-          result = await mockAdapter.generate(job, (progress) => patch({ progress }));
+          result = await mockAdapter.generate(job, (update) => {
+            const progress = normalizeProgress(update);
+            patch({ progress: progress.progress, phase: progress.phase, previewDataUrl: progress.previewDataUrl });
+          });
         }
         // Bridge produced a procedural placeholder when a real render was expected —
         // surface it loudly instead of pretending the render succeeded.
@@ -658,7 +666,7 @@ export const useStudio = create<StudioState>((set, get) => {
           turboBenchmarks: saveBenchmark(enrichedBenchmark),
           turboLastBenchmark: enrichedBenchmark,
         });
-        patch({ status: 'done', progress: 1 });
+        patch({ status: 'done', progress: 1, phase: 'done', previewDataUrl: result.dataUrl });
       } catch (err) {
         patch({ status: 'error', error: err instanceof Error ? err.message : String(err) });
       }

@@ -34,7 +34,7 @@ export function duplicateNode(wf: Workflow, nodeId: string, dx = 32, dy = 32): W
 }
 
 export function autoLayout(wf: Workflow): Workflow {
-  const lanes: Record<CapsuleKind, { x: number; y: number }> = {
+  const coreLanes: Partial<Record<CapsuleKind, { x: number; y: number }>> = {
     prompt: { x: 40, y: 60 },
     model: { x: 40, y: 320 },
     loraRack: { x: 330, y: 320 },
@@ -46,10 +46,23 @@ export function autoLayout(wf: Workflow): Workflow {
     export: { x: 1490, y: 240 },
     manifest: { x: 1490, y: 500 },
   };
+  const categoryLanes: Record<string, { x: number; y: number }> = {
+    loaders: { x: 40, y: 760 },
+    conditioning: { x: 330, y: 60 },
+    latent: { x: 330, y: 760 },
+    control: { x: 40, y: 1120 },
+    image: { x: 910, y: 560 },
+    mask: { x: 620, y: 760 },
+    sampling: { x: 620, y: 60 },
+    video: { x: 910, y: 60 },
+    utility: { x: 1200, y: 560 },
+    output: { x: 1490, y: 60 },
+    core: { x: 40, y: 60 },
+  };
   const seen = new Map<CapsuleKind, number>();
   return bump(wf, {
     nodes: wf.nodes.map((node) => {
-      const base = lanes[node.kind];
+      const base = coreLanes[node.kind] ?? categoryLanes[CAPSULES[node.kind].category];
       const count = seen.get(node.kind) ?? 0;
       seen.set(node.kind, count + 1);
       return { ...node, x: base.x, y: base.y + count * 150 };
@@ -87,7 +100,9 @@ function socketDef(wf: Workflow, ref: SocketRef, dir: 'in' | 'out') {
 }
 
 function socketTypesCompatible(out: SocketType, input: SocketType): boolean {
-  return out === input || (input === 'media' && (out === 'image' || out === 'media'));
+  return out === input
+    || (input === 'media' && (out === 'image' || out === 'media'))
+    || (input === 'lora_stack' && out === 'model');
 }
 
 /** Would adding an edge from→to create a cycle? */

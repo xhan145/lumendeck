@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { CAPSULES, CAPSULE_KINDS } from '../../core/capsules';
+import { CAPSULES, CAPSULE_CATEGORY_LABELS, CAPSULE_KINDS } from '../../core/capsules';
 import { canConnect } from '../../core/workflow';
-import type { CapsuleKind, SocketDef } from '../../core/types';
+import type { CapsuleCategory, CapsuleKind, SocketDef } from '../../core/types';
 import { useStudio } from '../../state/store';
 import { CapsuleIcon } from '../icons';
 import { GraphNode } from './GraphNode';
@@ -24,13 +24,32 @@ function nodeSummary(kind: CapsuleKind, params: Record<string, unknown>): string
     case 'prompt': return String(params.positive ?? '').slice(0, 60) || 'No prompt';
     case 'model': return params.assetId ? String(params.assetId) : 'No checkpoint';
     case 'loraRack': return `${Array.isArray(params.slots) ? params.slots.length : 0} LoRA slots`;
+    case 'checkpointLoader': return String(params.checkpoint ?? 'model.safetensors');
+    case 'clipTextEncode': return String(params.text ?? '').slice(0, 60) || 'No text';
     case 'sampler': return `${params.sampler} | ${params.steps} steps | cfg ${params.cfg}`;
+    case 'samplerAdvanced': return `${params.startStep}-${params.endStep} steps | noise ${params.addNoise ? 'on' : 'off'}`;
     case 'video': return params.enabled ? `${params.frameCount} frames @ ${params.fps} fps | ${params.cameraMotion}` : 'Disabled';
     case 'canvas': return `${params.width}x${params.height} x${params.batch}`;
     case 'control': return params.enabled ? `${params.mode} @ ${params.strength}` : 'Disabled';
+    case 'note': return String(params.body ?? '').slice(0, 60) || 'Empty note';
     default: return CAPSULES[kind].description;
   }
 }
+
+const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [
+  'all',
+  'core',
+  'loaders',
+  'conditioning',
+  'latent',
+  'control',
+  'image',
+  'mask',
+  'sampling',
+  'video',
+  'utility',
+  'output',
+];
 
 export function GraphView() {
   const workflow = useStudio((s) => s.workflow);
@@ -47,6 +66,7 @@ export function GraphView() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ tx: 24, ty: 16, scale: 0.85 });
   const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<'all' | CapsuleCategory>('all');
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
   const [wire, setWire] = useState<WireDraft | null>(null);
@@ -168,9 +188,13 @@ export function GraphView() {
 
   const paletteKinds = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return CAPSULE_KINDS;
-    return CAPSULE_KINDS.filter((kind) => `${CAPSULES[kind].title} ${CAPSULES[kind].description}`.toLowerCase().includes(q));
-  }, [query]);
+    return CAPSULE_KINDS.filter((kind) => {
+      const def = CAPSULES[kind];
+      if (category !== 'all' && def.category !== category) return false;
+      if (!q) return true;
+      return `${def.title} ${def.description} ${def.category} ${kind}`.toLowerCase().includes(q);
+    });
+  }, [category, query]);
 
   const selectedNode = workflow.nodes.find((node) => node.id === selectedNodeId);
 
@@ -189,19 +213,35 @@ export function GraphView() {
       {/* Parallax ambience: drifts slower than nodes for depth + bloom. */}
       <div className="graph-glow" style={{ transform: `translate(${view.tx * 0.3}px, ${view.ty * 0.3}px)` }} />
       <div className="graph-toolbar" role="toolbar" aria-label="Add capsule">
-        <input
-          className="graph-palette-search"
-          value={query}
-          placeholder="Search nodes"
-          aria-label="Search nodes"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        {paletteKinds.map((kind) => (
-          <button key={kind} className="btn" type="button" onClick={() => addAtCenter(kind)} title={`Add ${CAPSULES[kind].title}`}>
-            <CapsuleIcon kind={kind} size={14} /> {CAPSULES[kind].title}
-          </button>
-        ))}
-        <span className="graph-toolbar-sep" />
+        <div className="graph-palette-head">
+          <strong>Nodes</strong>
+          <span>{paletteKinds.length}/{CAPSULE_KINDS.length}</span>
+        </div>
+        <div className="graph-palette-controls">
+          <input
+            className="graph-palette-search"
+            value={query}
+            placeholder="Search nodes"
+            aria-label="Search nodes"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <select className="graph-category-select" value={category} aria-label="Node category"
+            onChange={(event) => setCategory(event.target.value as 'all' | CapsuleCategory)}>
+            {CATEGORY_FILTERS.map((item) => (
+              <option key={item} value={item}>{item === 'all' ? 'All' : CAPSULE_CATEGORY_LABELS[item]}</option>
+            ))}
+          </select>
+        </div>
+        <div className="graph-palette-list" aria-label="Node palette">
+          {paletteKinds.map((kind) => (
+            <button key={kind} className="btn graph-node-option" type="button" onClick={() => addAtCenter(kind)} title={`Add ${CAPSULES[kind].title}`}>
+              <CapsuleIcon kind={kind} size={14} />
+              <span>{CAPSULES[kind].title}</span>
+              <small>{CAPSULE_CATEGORY_LABELS[CAPSULES[kind].category]}</small>
+            </button>
+          ))}
+        </div>
+        <div className="graph-toolbar-sep" />
         <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
           Duplicate
         </button>

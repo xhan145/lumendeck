@@ -209,6 +209,134 @@ def _ref_key(ref):
     return "hub:" + str(ref.get("id") or MODEL_ID)
 
 
+_MOTION_ADAPTERS = {
+    "SD1.5": "guoyww/animatediff-motion-adapter-v1-5-2",
+    "SDXL": "guoyww/animatediff-motion-adapter-sdxl-beta",
+}
+
+
+def _model_family(model_ref):
+    if model_ref.get("kind") == "file":
+        det = detect_single_file_family(str(model_ref.get("path", "")))
+        if det:
+            return det
+        return "SDXL" if "xl" in str(model_ref.get("family", "")).lower() else "SD1.5"
+    return "SDXL" if "xl" in str(model_ref.get("id") or MODEL_ID).lower() else "SD1.5"
+
+
+def load_animate_pipe(model_ref):
+    """Build an AnimateDiff pipeline on the SELECTED checkpoint + a motion adapter,
+    so video animates the real model. SD1.5 is the primary path; SDXL is beta."""
+    import torch
+    from diffusers import MotionAdapter
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    family = _model_family(model_ref)
+    adapter = MotionAdapter.from_pretrained(_MOTION_ADAPTERS[family], torch_dtype=dtype)
+    if family == "SDXL":
+        from diffusers import AnimateDiffSDXLPipeline, StableDiffusionXLPipeline
+        if model_ref.get("kind") == "file":
+            base = StableDiffusionXLPipeline.from_single_file(str(model_ref["path"]), torch_dtype=dtype)
+            pipe = AnimateDiffSDXLPipeline.from_pipe(base, motion_adapter=adapter)
+        else:
+            pipe = AnimateDiffSDXLPipeline.from_pretrained(model_ref.get("id") or MODEL_ID, motion_adapter=adapter, torch_dtype=dtype)
+    else:
+        from diffusers import AnimateDiffPipeline, DDIMScheduler, StableDiffusionPipeline
+        if model_ref.get("kind") == "file":
+            base = StableDiffusionPipeline.from_single_file(str(model_ref["path"]), torch_dtype=dtype)
+            pipe = AnimateDiffPipeline.from_pipe(base, motion_adapter=adapter)
+        else:
+            pipe = AnimateDiffPipeline.from_pretrained(model_ref.get("id") or MODEL_ID, motion_adapter=adapter, torch_dtype=dtype)
+        # AnimateDiff needs a linear-beta DDIM scheduler for coherent motion.
+        pipe.scheduler = DDIMScheduler.from_config(
+            pipe.scheduler.config, beta_schedule="linear", timestep_spacing="linspace", clip_sample=False,
+        )
+    for enable in ("enable_vae_slicing", "enable_vae_tiling", "enable_attention_slicing"):
+        try:
+            getattr(pipe, enable)()
+        except Exception:
+            pass
+    # AnimateDiff's temporal UNet is VRAM-heavy; CPU offload keeps only the active
+    # module on the GPU so it fits ~8 GB cards (slower, but it actually finishes).
+    if device == "cuda":
+        try:
+            pipe.enable_model_cpu_offload()
+        except Exception:
+            pipe = pipe.to(device)
+    else:
+        pipe = pipe.to(device)
+    return pipe
+
+
+def _animate(job, state, report):
+    """Real text->video via AnimateDiff, exported as an animated GIF (Pillow)."""
+    import torch
+    model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}
+    key = "anim:" + _ref_key(model_ref)
+    if state.get("anim_key") != key or state.get("anim_pipe") is None:
+        report({"phase": "loading"})
+        # Free the still-image pipe (and any old animate pipe) to conserve VRAM.
+        state["pipe"] = None
+        state["key"] = None
+        state["anim_pipe"] = None
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        state["anim_pipe"] = load_animate_pipe(model_ref)
+        state["anim_key"] = key
+    pipe = state["anim_pipe"]
+
+    seed = int(job.get("seed", 0))
+    if seed < 0:
+        seed = 0
+    # With CPU offload the pipe's device is managed dynamically; pin the generator
+    # to the real compute device rather than pipe.device (which may be 'cpu'/'meta').
+    gen_device = "cuda" if torch.cuda.is_available() else "cpu"
+    generator = torch.Generator(device=gen_device).manual_seed(seed)
+    frames_n = max(8, min(32, int(job.get("frameCount", 16))))
+    steps = max(1, min(40, int(job.get("steps", 25))))
+    guidance = float(job.get("cfg", 7.5))
+    fps = max(1, min(30, int(job.get("fps", 8))))
+    report({"phase": "rendering", "step": 0, "steps": steps})
+
+    def on_step(_pipe, step, _timestep, callback_kwargs):
+        report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
+        return callback_kwargs
+
+    kwargs = dict(
+        prompt=str(job.get("prompt", "")),
+        negative_prompt=str(job.get("negativePrompt", "")) or None,
+        num_frames=frames_n,
+        num_inference_steps=steps,
+        guidance_scale=guidance,
+        width=int(job.get("width", 512)),
+        height=int(job.get("height", 512)),
+        generator=generator,
+    )
+    try:
+        result = pipe(**kwargs, callback_on_step_end=on_step)
+    except TypeError:
+        result = pipe(**kwargs)
+    frames = result.frames[0]
+    report({"phase": "done", "step": steps, "steps": steps})
+    buf = io.BytesIO()
+    loop = 0 if job.get("loop", True) else 1
+    frames[0].save(
+        buf, format="GIF", save_all=True, append_images=frames[1:],
+        duration=int(1000 / fps), loop=loop, disposal=2,
+    )
+    return {
+        "video_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "seed": seed,
+        "mediaType": "video",
+        "mimeType": "image/gif",
+        "extension": "gif",
+        "engine": "animatediff",
+    }
+
+
 def do_generate(job, state):
     """Render one image, reusing state['pipe'] when the model hasn't changed.
 
@@ -225,6 +353,9 @@ def do_generate(job, state):
                 json.dump(data, fh)
         except OSError:
             pass
+
+    if str(job.get("output", "image")) == "video":
+        return _animate(job, state, report)
 
     import torch
     model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}

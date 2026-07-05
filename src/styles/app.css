@@ -526,15 +526,38 @@
   position: absolute;
   top: var(--sp-3);
   left: var(--sp-3);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  gap: 8px;
   z-index: 5;
-  max-width: calc(100% - 24px);
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 72px);
+  overflow: hidden;
 }
 .graph-toolbar .btn { font-size: 12px; padding: 5px 10px; min-height: 30px; background: rgba(12, 29, 51, 0.9); }
+.graph-palette-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  color: var(--ld-text);
+  background: rgba(12, 29, 51, 0.92);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  box-shadow: var(--shadow-1);
+  font-size: 12px;
+}
+.graph-palette-head span {
+  color: var(--ld-text-faint);
+  font-family: var(--ld-font-mono);
+}
+.graph-palette-controls {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  gap: 8px;
+}
 .graph-palette-search {
-  width: 150px;
+  width: 100%;
   min-height: 30px;
   padding: 5px 9px;
   border-radius: var(--rad-1);
@@ -543,11 +566,45 @@
   color: var(--ld-text);
   font-size: 12px;
 }
+.graph-category-select {
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: var(--rad-1);
+  border: 1px solid var(--ld-border);
+  background: rgba(12, 29, 51, 0.92);
+  color: var(--ld-text);
+  font-size: 12px;
+}
+.graph-palette-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-height: min(48vh, 460px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.graph-node-option {
+  justify-content: flex-start;
+  gap: 7px;
+  min-width: 0;
+}
+.graph-node-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-node-option small {
+  margin-left: auto;
+  color: var(--ld-text-faint);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .graph-toolbar-sep {
-  width: 1px;
-  min-height: 28px;
+  height: 1px;
   background: var(--ld-border);
-  margin: 0 3px;
+  margin: 2px 0;
 }
 .graph-hint {
   position: absolute;
@@ -585,13 +642,30 @@
 .health-empty { display: flex; align-items: center; gap: 8px; color: var(--ld-ok); font-size: 13px; }
 
 /* ===== Queue ===== */
-.queue-item { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px dashed var(--ld-border); font-size: 12.5px; }
+.queue-item { display: grid; gap: 6px; padding: 9px 0; border-bottom: 1px dashed var(--ld-border); font-size: 12.5px; }
 .queue-item:last-child { border-bottom: none; }
+.queue-row { display: grid; grid-template-columns: 74px 1fr; gap: 9px; align-items: start; }
+.queue-preview {
+  width: 74px;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-1);
+  background: var(--ld-surface-2);
+}
+.queue-preview.empty {
+  background:
+    linear-gradient(135deg, rgba(52, 214, 244, 0.14), rgba(167, 139, 250, 0.08)),
+    var(--ld-surface-2);
+}
+.queue-main { min-width: 0; display: grid; gap: 4px; }
 .queue-label { display: flex; justify-content: space-between; gap: 8px; color: var(--ld-text-dim); }
+.queue-label span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-label .status-done { color: var(--ld-ok); }
 .queue-label .status-error { color: var(--ld-danger); }
 .progress { height: 4px; border-radius: 2px; background: var(--ld-surface-3); overflow: hidden; }
 .progress > div { height: 100%; background: linear-gradient(90deg, var(--ld-cyan), var(--ld-violet-soft)); transition: width var(--dur-med) var(--ease-out); }
+.queue-phase { color: var(--ld-text-faint); font-size: 11px; text-transform: lowercase; }
 .queue-error { color: var(--ld-danger); font-size: 12px; }
 
 /* ===== Shelf ===== */

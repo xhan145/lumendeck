@@ -109,6 +109,14 @@ describe('canConnect', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('allows plain model outputs to feed sampler model inputs', () => {
+    const wf = createDefaultWorkflow();
+    const model = findNode(wf, 'model')!;
+    const sampler = findNode(wf, 'sampler')!;
+    const res = canConnect(wf, { node: model.id, socket: 'model' }, { node: sampler.id, socket: 'model' });
+    expect(res.ok).toBe(true);
+  });
+
   it('connect replaces the existing edge on an input socket', () => {
     let wf = createDefaultWorkflow();
     const sampler = findNode(wf, 'sampler')!;

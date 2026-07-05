@@ -52,6 +52,11 @@
   --cap-model: #b794f6;
   --cap-lora: var(--md-success);
   --cap-control: var(--md-secondary);
+  --cap-conditioning: #60a5fa;
+  --cap-latent: #22d3ee;
+  --cap-image: #a78bfa;
+  --cap-mask: #94a3b8;
+  --cap-utility: #cbd5e1;
   --cap-sampler: var(--ld-cyan);
   --cap-video: #f472b6;
   --cap-canvas: #a78bfa;
@@ -62,11 +67,18 @@
   /* Socket type colors (align to capsule tones) */
   --sock-conditioning: var(--md-primary);
   --sock-model: #b794f6;
+  --sock-clip: #60a5fa;
+  --sock-vae: #22d3ee;
   --sock-lora_stack: var(--md-success);
   --sock-control: var(--md-secondary);
   --sock-latent: var(--ld-cyan);
+  --sock-noise: #facc15;
+  --sock-mask: #94a3b8;
   --sock-image: #a78bfa;
   --sock-media: #f472b6;
+  --sock-number: #f59e0b;
+  --sock-string: #38bdf8;
+  --sock-upscale_model: #c084fc;
   --sock-manifest: #9fb0c7;
 
   /* Type — local Inter (offline); MD3 type scale */

@@ -461,7 +461,24 @@ def build_response(method: str, path: str, body: bytes):
             _write_progress(job_id, {"phase": "loading"})
         fallback_reason = None
         if str(job.get("output", "image")) == "video":
+            # Real video (AnimateDiff on the selected model) when the bridge can;
+            # otherwise a procedural GIF, never a silent placeholder.
+            if mode in ("diffusers", "auto") and _diffusers_available():
+                try:
+                    _resolve_render_targets(job, _shelf_with_real(), discover_model_dir())
+                    result = diffusers_backend.generate(job)
+                    if track:
+                        _write_progress(job_id, {"phase": "done"})
+                    return 200, headers, json.dumps(result).encode()
+                except Exception as exc:
+                    import traceback
+                    print(f"[animatediff] video failed, falling back to procedural GIF: {exc}", flush=True)
+                    traceback.print_exc()
+                    fallback_reason = str(exc)
             result = _procedural(job)
+            if fallback_reason:
+                result["fallback"] = True
+                result["fallbackReason"] = fallback_reason
             if track:
                 _write_progress(job_id, {"phase": "done"})
             return 200, headers, json.dumps(result).encode()

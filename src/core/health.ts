@@ -37,7 +37,9 @@ export function estimateVramGB(
 export const VRAM_BUDGET_GB = 8;
 
 function socketTypesCompatible(out: string, input: string): boolean {
-  return out === input || (input === 'media' && (out === 'image' || out === 'media'));
+  return out === input
+    || (input === 'media' && (out === 'image' || out === 'media'))
+    || (input === 'lora_stack' && out === 'model');
 }
 
 export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
