@@ -28,6 +28,7 @@ export interface RenderJob {
   hiresScale: number;
   hiresDenoise: number;
   hiresSteps: number;
+  controlNet?: { model: string; strength: number; image: string };
 }
 
 export interface RenderResult {
@@ -77,6 +78,7 @@ export function buildRenderJob(wf: Workflow): RenderJob {
   const rack = findNode(wf, 'loraRack');
   const video = findNode(wf, 'video');
   const imageInput = findNode(wf, 'imageLoader');
+  const controlNet = findNode(wf, 'controlNetApply');
   const hires = findNode(wf, 'hiresFix');
   const exportNode = findNode(wf, 'export');
   const slots = ((rack?.params.slots as LoraSlot[] | undefined) ?? []).filter((s) => s.enabled);
@@ -111,6 +113,15 @@ export function buildRenderJob(wf: Workflow): RenderJob {
     hiresScale: Number(hires?.params.scale ?? 1),
     hiresDenoise: Number(hires?.params.denoise ?? 0.35),
     hiresSteps: Number(hires?.params.steps ?? 14),
+    // ControlNet: structural guidance using the Load Image capsule's image as the
+    // control source when a ControlNet Apply capsule is present.
+    controlNet: controlNet && imageInput?.params.image
+      ? {
+          model: String(controlNet.params.type ?? 'canny'),
+          strength: Number(controlNet.params.strength ?? 1),
+          image: String(imageInput.params.image),
+        }
+      : undefined,
   };
 }
 

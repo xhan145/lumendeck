@@ -403,10 +403,58 @@ def do_generate(job, state):
         return callback_kwargs
 
     width, height = int(job.get("width", 512)), int(job.get("height", 512))
+    control = job.get("controlNet")
     init_b64 = job.get("initImage")
     mask_b64 = job.get("maskImage")
 
-    if init_b64:
+    if control and control.get("image"):
+        # ControlNet: structural guidance from a control image (canny by default).
+        from PIL import Image
+        raw = base64.b64decode(str(control["image"]).split(",")[-1])
+        ctrl_img = Image.open(io.BytesIO(raw)).convert("RGB").resize((width, height))
+        try:
+            from controlnet_aux import CannyDetector
+            ctrl_img = CannyDetector()(ctrl_img).resize((width, height))
+        except Exception as exc:
+            print(f"[controlnet] preprocess skipped ({exc}); using raw image", file=sys.stderr, flush=True)
+        # Pick the ControlNet by the base UNet's cross-attention dim so it matches
+        # the loaded checkpoint: 768=SD1.5, 1024=SD2.1, 2048=SDXL.
+        try:
+            cross_dim = int(pipe.unet.config.cross_attention_dim)
+        except Exception:
+            cross_dim = 768
+        from diffusers import ControlNetModel
+        if cross_dim >= 2048:
+            cn_id, is_xl = "diffusers/controlnet-canny-sdxl-1.0", True
+        elif cross_dim >= 1024:
+            cn_id, is_xl = "thibaud/controlnet-sd21-canny-diffusers", False
+        else:
+            cn_id, is_xl = "lllyasviel/sd-controlnet-canny", False
+        cn_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        cn_model = ControlNetModel.from_pretrained(cn_id, torch_dtype=cn_dtype)
+        if is_xl:
+            from diffusers import StableDiffusionXLControlNetPipeline as CNPipe
+        else:
+            from diffusers import StableDiffusionControlNetPipeline as CNPipe
+        cnp = CNPipe.from_pipe(pipe, controlnet=cn_model)
+        try:
+            cnp.enable_model_cpu_offload()
+        except Exception:
+            pass
+        cn_call = dict(
+            prompt=str(job.get("prompt", "")),
+            negative_prompt=str(job.get("negativePrompt", "")) or None,
+            image=ctrl_img,
+            controlnet_conditioning_scale=float(control.get("strength", 1.0)),
+            num_inference_steps=steps,
+            guidance_scale=guidance,
+            generator=generator,
+        )
+        try:
+            image = cnp(**cn_call, callback_on_step_end=on_step).images[0]
+        except TypeError:
+            image = cnp(**cn_call).images[0]
+    elif init_b64:
         # img2img / inpaint: reuse the loaded checkpoint's weights via from_pipe
         # (no reload), just a different pipeline class.
         from PIL import Image
