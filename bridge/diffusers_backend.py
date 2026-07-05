@@ -417,7 +417,7 @@ def do_generate(job, state):
             return Image.open(io.BytesIO(raw)).convert("RGB").resize((width, height))
 
         init_img = _decode(init_b64)
-        strength = max(0.05, min(1.0, float(job.get("denoise", 0.6))))
+        strength = max(0.05, min(1.0, float(job.get("denoiseStrength", 0.6))))
         common = dict(
             prompt=str(job.get("prompt", "")),
             negative_prompt=str(job.get("negativePrompt", "")) or None,
@@ -454,6 +454,24 @@ def do_generate(job, state):
             image = pipe(**kwargs, callback_on_step_end=on_step).images[0]
         except TypeError:
             image = pipe(**kwargs).images[0]
+
+    # Hires fix: optional second img2img pass at a larger size for sharper detail.
+    hires_scale = float(job.get("hiresScale", 1) or 1)
+    if hires_scale > 1.01:
+        from diffusers import StableDiffusionImg2ImgPipeline, StableDiffusionXLImg2ImgPipeline
+        is_xl = _model_family(model_ref) == "SDXL"
+        HCls = StableDiffusionXLImg2ImgPipeline if is_xl else StableDiffusionImg2ImgPipeline
+        hp = HCls.from_pipe(pipe)
+        up = image.resize((int(width * hires_scale), int(height * hires_scale)))
+        image = hp(
+            prompt=str(job.get("prompt", "")),
+            negative_prompt=str(job.get("negativePrompt", "")) or None,
+            image=up,
+            strength=max(0.05, min(1.0, float(job.get("hiresDenoise", 0.35)))),
+            num_inference_steps=max(1, min(60, int(job.get("hiresSteps", 14)))),
+            guidance_scale=guidance,
+            generator=generator,
+        ).images[0]
 
     report({"phase": "done", "step": steps, "steps": steps})
     buf = io.BytesIO()

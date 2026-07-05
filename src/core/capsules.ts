@@ -330,7 +330,12 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     description: 'Loads an image for img2img, masks, or ControlNet.',
     inputs: [],
     outputs: [s('image', 'Image', 'image'), s('mask', 'Mask', 'mask')],
-    params: [text('path', 'Image path', ''), toggle('alphaToMask', 'Alpha to mask', true)],
+    params: [
+      { id: 'image', label: 'Image (img2img)', kind: 'image', default: '' },
+      { id: 'mask', label: 'Mask (inpaint)', kind: 'image', default: '' },
+      num('strength', 'Denoise strength', 0, 1, 0.05, 0.6),
+      toggle('alphaToMask', 'Alpha to mask', true),
+    ],
   },
   imageScale: {
     kind: 'imageScale',

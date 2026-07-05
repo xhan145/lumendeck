@@ -14,6 +14,32 @@ export function ParamField({ def, value, onChange }: Props) {
   const help = def.help ? <span className="field-help" id={`${id}-help`}>{def.help}</span> : null;
   const describedBy = def.help ? `${id}-help` : undefined;
 
+  if (def.kind === 'image') {
+    const dataUrl = String(value ?? '');
+    const onFile = (file: File | undefined) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => onChange(String(reader.result));
+      reader.readAsDataURL(file);
+    };
+    return (
+      <div className="field">
+        <label className="field-label" htmlFor={id}>{def.label}</label>
+        <input id={id} type="file" accept="image/*" aria-describedby={describedBy}
+          onChange={(e) => onFile(e.target.files?.[0])} />
+        {dataUrl ? (
+          <div className="field-row" style={{ marginTop: 6 }}>
+            <img src={dataUrl} alt={`${def.label} preview`} style={{ height: 48, borderRadius: 6, border: '1px solid var(--ld-border)' }} />
+            <button type="button" className="btn icon" aria-label={`Clear ${def.label}`} onClick={() => onChange('')}>
+              {Icon.close({ size: 14 })}
+            </button>
+          </div>
+        ) : null}
+        {help}
+      </div>
+    );
+  }
+
   if (def.kind === 'toggle') {
     const checked = Boolean(value);
     return (

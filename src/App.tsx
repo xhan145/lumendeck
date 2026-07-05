@@ -53,13 +53,20 @@ function BridgeStatus() {
 function RenderButton() {
   const health = useStudio((s) => s.health);
   const enqueueRender = useStudio((s) => s.enqueueRender);
+  const enqueueBatch = useStudio((s) => s.enqueueBatch);
+  const [batch, setBatch] = useState(1);
   const errors = health.filter((i) => i.severity === 'error');
   const blocked = errors.length > 0;
   return (
     <section className="rail-section">
-      <button className="btn primary" type="button" disabled={blocked} onClick={() => void enqueueRender()} style={{ width: '100%', justifyContent: 'center' }}>
-        {Icon.play()} Render
+      <button className="btn primary" type="button" disabled={blocked} onClick={() => (batch > 1 ? void enqueueBatch(batch) : void enqueueRender())} style={{ width: '100%', justifyContent: 'center' }}>
+        {Icon.play()} {batch > 1 ? `Render ×${batch}` : 'Render'}
       </button>
+      <label className="field-inline" style={{ marginTop: 8 }}>
+        <span className="field-label">Batch (seed grid)</span>
+        <input type="number" min={1} max={16} value={batch} style={{ width: 64 }}
+          onChange={(e) => setBatch(Math.max(1, Math.min(16, Number(e.target.value) || 1)))} />
+      </label>
       {blocked ? (
         <p className="field-help" style={{ color: 'var(--ld-danger)', marginTop: 8 }}>
           Fix {errors.length} graph error{errors.length === 1 ? '' : 's'} before rendering.
