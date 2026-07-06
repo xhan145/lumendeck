@@ -3,7 +3,7 @@ import { useStudio, type ViewId } from './state/store';
 import { APP_VERSION } from './state/storeConstants';
 import { Gallery } from './components/gallery/Gallery';
 import { GuideView } from './components/guide/GuideView';
-import { GraphView } from './components/graph/GraphView';
+import { GraphWorkspace } from './components/graph/GraphWorkspace';
 import { BrandMark, Icon } from './components/icons';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
@@ -63,7 +63,7 @@ export function App() {
   const page =
     view === 'guide' ? <GuideView onOpenControls={() => setView('controls')} />
       : view === 'recipe' ? <RecipeView />
-      : view === 'graph' ? <GraphView />
+      : view === 'graph' ? <GraphWorkspace />
       : view === 'shelf' ? <ModelShelf />
       : view === 'gallery' ? <Gallery />
       : view === 'controls' ? <ControlsPage />

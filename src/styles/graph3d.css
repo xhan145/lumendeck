@@ -1,0 +1,102 @@
+/* Graph 3D workspace — every 3D-mode style lives here (imported by GraphWorkspace.tsx).
+   The 2D editor's styles in app.css are untouched; shared chrome (.graph-toolbar,
+   .graph-hint, .gnode, .btn) is reused from there so both modes look identical. */
+
+.graph-workspace {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* 2D ⇄ 3D segmented toggle (top-right, above both editors). */
+.graph-mode-toggle {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  z-index: 7;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--ld-surface) 84%, transparent);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-pill);
+  backdrop-filter: blur(6px);
+}
+.graph-mode-toggle .btn {
+  border: 0;
+  border-radius: var(--rad-pill);
+  padding: 4px 14px;
+  background: transparent;
+}
+.graph-mode-toggle .btn[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--ld-cyan) 20%, transparent);
+  color: var(--ld-cyan);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ld-cyan) 55%, transparent);
+}
+.graph-mode-toggle .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Inline fallback note shown when 3D is wanted but WebGL is unavailable. */
+.graph3d-note {
+  position: absolute;
+  top: 54px;
+  right: var(--sp-3);
+  z-index: 7;
+  max-width: 300px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--ld-text-dim);
+  background: var(--ld-surface-2);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+}
+
+/* The 3D stage: midnight backdrop with faint brand glows behind the
+   transparent WebGL canvas (fog + grid provide the depth cues). */
+.graph3d-wrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background:
+    radial-gradient(1100px 620px at 30% 12%, rgba(52, 214, 244, 0.07), transparent 62%),
+    radial-gradient(950px 640px at 76% 86%, rgba(124, 58, 237, 0.10), transparent 60%),
+    linear-gradient(180deg, #0b1220 0%, #071426 100%);
+}
+.graph3d-wrap:active { cursor: grabbing; }
+
+.graph3d-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* WebGL layer: draws the world (grid, fog, wires) and never takes events. */
+.graph3d-viewport canvas.graph3d-gl {
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+}
+
+/* CSS3D layer: hosts the live DOM node cards. The layer itself is transparent
+   to events so empty-space drags orbit the camera; the cards re-enable them. */
+.graph3d-css3d {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.graph3d-css3d .gnode { pointer-events: auto; }
+
+/* Zero-size portal anchor: the CSS3DObject positions this at the workflow
+   canvas origin on the node's z-plane; the card inside offsets itself via its
+   own left/top (workflow coords), keeping GraphNode's contract untouched. */
+.graph3d-node-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+}

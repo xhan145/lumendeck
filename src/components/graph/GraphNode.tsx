@@ -1,7 +1,8 @@
 import type React from 'react';
 import { CAPSULES } from '../../core/capsules';
 import type { SocketDef, WorkflowNode } from '../../core/types';
-import { CapsuleIcon } from '../icons';
+import { useStudio } from '../../state/store';
+import { CapsuleIcon, Icon } from '../icons';
 import { NODE_WIDTH, socketColor } from './wires';
 
 interface Props {
@@ -81,7 +82,59 @@ export function GraphNode({
           );
         })}
       </div>
+      {node.kind === 'imageLoader' ? <ImageThumb node={node} title={def.title} /> : null}
       <div className="gnode-summary" title={summary}>{summary}</div>
     </article>
+  );
+}
+
+/**
+ * Inline img2img thumbnail body for the Load Image capsule. Internal to
+ * GraphNode — the component's external props contract is unchanged.
+ * stopPropagation keeps pointer/keyboard interaction inside the tile from
+ * triggering node drag or the card's move/delete key handling.
+ */
+function ImageThumb({ node, title }: { node: WorkflowNode; title: string }) {
+  const updateParam = useStudio((s) => s.updateParam);
+  const image = typeof node.params.image === 'string' ? node.params.image : '';
+
+  const onFile = (file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => updateParam(node.id, 'image', String(reader.result));
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div
+      className="gnode-thumb"
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      {image ? (
+        <div className="gnode-thumb-preview">
+          <img src={image} alt={`${title} preview`} />
+          <button
+            type="button"
+            className="gnode-thumb-clear"
+            aria-label="Clear image"
+            title="Clear image"
+            onClick={(e) => { e.stopPropagation(); updateParam(node.id, 'image', ''); }}
+          >
+            {Icon.close({ size: 12 })}
+          </button>
+        </div>
+      ) : (
+        <label className="gnode-thumb-drop">
+          <input
+            type="file"
+            accept="image/*"
+            aria-label={`Upload image for ${title}`}
+            onChange={(e) => { onFile(e.target.files?.[0]); e.currentTarget.value = ''; }}
+          />
+          <span>Drop image here</span>
+        </label>
+      )}
+    </div>
   );
 }

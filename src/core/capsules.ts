@@ -452,7 +452,19 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
     title: 'Sampler',
     accent: 'var(--cap-sampler)',
     description: 'How the image is denoised: algorithm, steps, guidance, seed.',
-    inputs: [s('conditioning', 'Conditioning', 'conditioning'), s('model', 'Model', 'lora_stack'), s('control', 'Control', 'control'), s('latent', 'Canvas', 'latent')],
+    inputs: [
+      s('conditioning', 'Conditioning', 'conditioning'),
+      s('model', 'Model', 'lora_stack'),
+      s('control', 'Control', 'control'),
+      s('latent', 'Canvas', 'latent'),
+      // Optional img2img source. NOTE: activation stays PRESENCE-BASED — an
+      // uploaded image on the Load Image capsule turns on img2img whether or
+      // not this wire exists (Recipe-view users never draw edges, so gating on
+      // the edge would silently break their img2img). The wire is the graph's
+      // visual/semantic expression of the relationship, not a new gate.
+      // See buildRenderJob in src/bridge/adapter.ts.
+      s('image', 'Image (img2img)', 'image'),
+    ],
     outputs: [s('image', 'Image', 'image')],
     params: [
       select('sampler', 'Sampler', [
