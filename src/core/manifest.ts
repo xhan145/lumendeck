@@ -16,6 +16,14 @@ export interface ExportManifest {
   loras: { id: string; name: string; weight: number; hash: string }[];
   graphVersion: number;
   graph: Workflow;
+  render?: {
+    selectedBackend: string;
+    actualBackend: string;
+    mode: 'real' | 'mock' | 'procedural' | 'fallback' | 'unknown';
+    fallback: boolean;
+    fallbackReason?: string;
+    bridgeRenderer?: string;
+  };
 }
 
 export function buildManifest(

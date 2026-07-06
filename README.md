@@ -1,8 +1,8 @@
 # LumenDeck
 
 LumenDeck is a local-first, node-native generative image studio shell: a spiritual successor to
-Disco Diffusion. It includes Recipe View, Graph View, Model Shelf, LoRA Rack, Gallery, and TurboForge
-performance planning.
+Disco Diffusion. It includes Guide, Recipe, Graph, Model Shelf, Gallery, Controls, Settings,
+Diagnostics, Performance, LoRA Rack, and TurboForge performance planning.
 
 **Two synchronized editors, one workflow object.** The **Recipe View** (beginner-friendly cards) and
 the **Graph View** (a real, editable SVG node graph: searchable node palette, typed ports, duplicate,
@@ -26,6 +26,22 @@ external ComfyUI server.
 **Graph Health** runs before every render and flags missing/uninstalled models, broken links,
 incompatible sockets, bad dimensions (non-multiple-of-8, too small/large), LoRA family conflicts, and
 likely VRAM over-budget. Render is blocked with a reason while any error is present.
+
+## Page map and first run
+
+- **Guide**: first-run paths for Quick demo, built-in Diffusers, ComfyUI, and scanning your own models.
+- **Recipe**: card-based workflow editing, `.lumen` save/load, and starter templates.
+- **Graph**: editable node graph with health checks and a shared Inspector.
+- **Model Shelf**: bundled demo catalog, Civitai search/download, and bring-your-own model folder scan.
+- **Gallery**: local render history, export, restore graph, and fallback warnings.
+- **Controls**: render button, batch/seed grid, queue, Inspector, LoRA Rack, and Health panel.
+- **Settings**: backend URLs, bridge renderer mode, fallback toggle, runtime/model actions, storage/privacy, and reset controls.
+- **Diagnostics**: copyable troubleshooting report for CUDA, Python/Torch, bridge, ComfyUI, folder scan, queue, and fallback state.
+- **Performance**: TurboForge plan, presets, cache/compile flags, benchmark history, and measured-only speedup display.
+
+Recommended first action: open **Diagnostics**, check the Diffusers bridge/model state, then use
+**Install runtime + model** if CUDA/Torch/SD-Turbo are missing. Use **Quick demo** only to validate UI
+flow; it is not a real model render.
 
 The design spec and implementation plan live in [`docs/superpowers/`](docs/superpowers/). Brand:
 Midnight `#071426`, Ion Cyan `#34D6F4`, Voltage Violet `#7C3AED`, Mango Fuse `#FF8A3D`, Signal Mint
@@ -95,6 +111,28 @@ The produced `.exe` is at `src-tauri/target/release/lumendeck.exe`. App icons ar
 
 ## Backends
 
+## Fallback render honesty
+
+LumenDeck marks non-real output explicitly. If the selected backend fails and LumenDeck uses Mock, or
+if the bridge returns a procedural placeholder while Diffusers was expected, the queue shows
+`done + warning`, the Gallery card gets a **Fallback** badge, and the detail drawer records the
+fallback reason. Exported manifests include selected backend, actual backend, render mode, fallback
+flag, fallback reason, and TurboForge warnings.
+
+Mock and procedural output are useful for smoke tests, previews, and app development. They should not
+be treated as clean real model renders.
+
+## Storage limitations
+
+In dev/web mode the Gallery uses browser/localStorage persistence with base64 media. This is limited
+and can be cleared by browser profile cleanup. Export important renders and manifests from Gallery.
+The desktop filesystem gallery storage path is scaffolded as `%LOCALAPPDATA%\LumenDeck\gallery` with
+planned `renders`, `manifests`, and `thumbnails` subfolders.
+
+Generated media, model weights, caches, Python runtimes, build output, and Tauri targets are ignored
+by git. Do not commit `.safetensors`, `.ckpt`, `.pt`, `.pth`, `.onnx`, generated videos, or runtime
+caches.
+
 ### Video Renders
 
 Enable the **Video** capsule in Recipe or Graph view to render a short animated loop. The built-in
@@ -134,6 +172,9 @@ If ComfyUI is offline, blocked by CORS, or rejects the sample workflow, LumenDec
 plain-English error. If `Fallback to mock` is enabled, the app renders with Mock instead and records
 the fallback in the manifest warning data.
 
+Workflow import/export placeholders are visible in Diagnostics for future ComfyUI workflow JSON
+support. They are disabled until the mapping engine is implemented.
+
 ### Diffusers Bridge
 
 A tiny local HTTP backend that gives LumenDeck a real generation path plus a local model scanner,
@@ -167,6 +208,12 @@ python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2
 
 Then use **Check model** and **Download model** in the Backend panel. Full details:
 [bridge/README.md](bridge/README.md).
+
+Runtime repair status: full in-app runtime repair is not implemented yet. To repair manually, close
+LumenDeck, delete `%LOCALAPPDATA%\LumenDeck\diffusers-runtime`, relaunch, then run **Install runtime +
+model** again.
+
+For common failure modes, see [docs/diagnostics.md](docs/diagnostics.md).
 
 ### Workflow Templates
 

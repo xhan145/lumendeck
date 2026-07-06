@@ -144,6 +144,52 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
           <StatusTile label="Graph" value={graphReady ? 'Healthy' : `${errors.length} error${errors.length === 1 ? '' : 's'}`} state={graphState} />
         </section>
 
+        <section className="guide-paths" aria-label="First run paths">
+          <article className="guide-path">
+            <h3>A. Quick demo</h3>
+            <p>Use Mock/procedural to verify the app flow immediately. This is a placeholder, not a real AI model render.</p>
+            <button className="btn" type="button" onClick={() => { setAdapter('mock'); updateBackendSettings({ selectedBackend: 'mock', fallbackToMock: true }); void enqueueRender(); }}>
+              {Icon.play()} Demo render
+            </button>
+          </article>
+          <article className="guide-path recommended">
+            <h3>B. Built-in Diffusers</h3>
+            <p>Check Python, Torch, CUDA, cache, and SD-Turbo readiness, then install the managed runtime/model if needed.</p>
+            <button className="btn primary" type="button" onClick={() => setView('diagnostics')}>
+              {Icon.pulse()} Open Diagnostics
+            </button>
+          </article>
+          <article className="guide-path">
+            <h3>C. Use ComfyUI</h3>
+            <p>Start ComfyUI separately, keep the default URL at <code>http://127.0.0.1:8188</code>, then test it in Settings.</p>
+            <button className="btn" type="button" onClick={() => { setAdapter('comfyui'); updateBackendSettings({ selectedBackend: 'comfyui' }); setView('settings'); }}>
+              {Icon.plug()} Comfy settings
+            </button>
+          </article>
+          <article className="guide-path">
+            <h3>D. Scan my models</h3>
+            <p>Use a ComfyUI/A1111-style folder with <code>.safetensors</code>, <code>.ckpt</code>, <code>.pt</code>, or <code>.pth</code> files.</p>
+            <button className="btn" type="button" onClick={() => setView('shelf')}>
+              {Icon.folder()} Model Shelf
+            </button>
+          </article>
+        </section>
+
+        <section className="recommended-action">
+          <strong>Recommended first action:</strong>
+          <span>
+            {!usingBridge || backendSettings.selectedBackend === 'mock'
+              ? 'Open Diagnostics and switch from demo rendering to the Diffusers bridge.'
+              : bridgeOnline && !realModelReady
+                ? 'Install or check the Diffusers runtime/model in Diagnostics.'
+                : !modelsReady
+                  ? 'Scan a model folder or download SD-Turbo from the Model Shelf.'
+                  : !graphReady
+                    ? 'Open Graph Health or Controls to clear render-blocking errors.'
+                    : 'Render from Controls and watch the queue for live progress.'}
+          </span>
+        </section>
+
         <section className="guide-steps" aria-label="Generation checklist">
           <Step
             number={1}

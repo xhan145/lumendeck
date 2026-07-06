@@ -59,7 +59,7 @@ export class ComfyAdapter implements BackendAdapter {
         return {
           ok: false,
           status: 'degraded',
-          message: `ComfyUI answered /system_stats with HTTP ${res.status}. Check the URL and ComfyUI logs.`,
+          message: `ComfyUI answered /system_stats with HTTP ${res.status}. Confirm the URL, API server, and ComfyUI logs, then open Diagnostics in LumenDeck.`,
           elapsedMs,
         };
       }
@@ -75,7 +75,7 @@ export class ComfyAdapter implements BackendAdapter {
       return {
         ok: false,
         status: 'unavailable',
-        message: `ComfyUI ${reason}. Start ComfyUI with API access, then check the URL and browser CORS/network permissions.`,
+        message: `ComfyUI ${reason} at ${this.getBaseUrl()}. Start ComfyUI with API access; LumenDeck needs /system_stats, /prompt, /history/{prompt_id}, and /view. Check firewall/CORS, then open Diagnostics.`,
         elapsedMs,
       };
     }
@@ -99,10 +99,10 @@ export class ComfyAdapter implements BackendAdapter {
     }, 6000);
     if (!submit.ok) {
       const detail = await submit.text().catch(() => '');
-      throw new Error(`ComfyUI rejected the workflow (${submit.status}). ${detail.slice(0, 180)}`);
+      throw new Error(`ComfyUI rejected /prompt (${submit.status}). ${detail.slice(0, 180)} Open Diagnostics and confirm the ComfyUI URL and workflow support.`);
     }
     const queued = (await submit.json()) as { prompt_id?: string };
-    if (!queued.prompt_id) throw new Error('ComfyUI did not return a prompt_id.');
+    if (!queued.prompt_id) throw new Error('ComfyUI /prompt did not return a prompt_id. Check ComfyUI API output and open Diagnostics.');
     onProgress?.({ progress: 0.18, phase: 'queued', previewDataUrl: buildStreamingPreview(resolvedJob, 0.18, 'queued') });
 
     const queueStart = performance.now();
@@ -112,12 +112,12 @@ export class ComfyAdapter implements BackendAdapter {
     });
     const renderQueueMs = performance.now() - queueStart;
     const image = this.firstImage(history);
-    if (!image) throw new Error('ComfyUI finished but no image output was found in history.');
+    if (!image) throw new Error('ComfyUI /history finished but no image output was found. Check the workflow output node in ComfyUI.');
     onProgress?.({ progress: 0.85, phase: 'fetching output', previewDataUrl: buildStreamingPreview(resolvedJob, 0.85, 'fetching output') });
     const imageUrl = this.imageUrl(image);
     const outputFetchStart = performance.now();
     const imageResponse = await fetchWithTimeout(imageUrl, {}, 10000);
-    if (!imageResponse.ok) throw new Error(`ComfyUI output fetch failed with HTTP ${imageResponse.status}.`);
+    if (!imageResponse.ok) throw new Error(`ComfyUI /view output fetch failed with HTTP ${imageResponse.status}. Check output permissions and the ComfyUI URL.`);
     const blob = await imageResponse.blob();
     const dataUrl = await blobToDataUrl(blob);
     const outputFetchMs = performance.now() - outputFetchStart;
@@ -153,7 +153,7 @@ export class ComfyAdapter implements BackendAdapter {
       if (entry?.outputs && Object.keys(entry.outputs).length > 0) return entry;
       onProgress?.(Math.min(0.95, attempts / 60));
     }
-    throw new Error('Timed out waiting for ComfyUI history. The render may still be running in ComfyUI.');
+    throw new Error('Timed out waiting for ComfyUI /history/{prompt_id}. The render may still be running in ComfyUI; open Diagnostics and check the ComfyUI server.');
   }
 
   private firstImage(history: ComfyHistoryEntry): { filename: string; subfolder?: string; type?: string } | null {
