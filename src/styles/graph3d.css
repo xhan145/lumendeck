@@ -100,3 +100,67 @@
   width: 0;
   height: 0;
 }
+
+/* ===== Orb label chips (the 'orbs' 3D style) ================================
+   A small CSS3D chip below each orb: capsule icon + title + summary + mini
+   port dots. Clicking (or Enter/Space) expands the orb into the full editor
+   card; the port dots reuse the existing wire handlers so orb-to-orb wiring
+   works without expanding. */
+.graph3d-css3d .orb-chip { pointer-events: auto; }
+.orb-chip {
+  position: absolute;
+  display: grid;
+  gap: 4px;
+  padding: 7px 10px 8px;
+  background: rgba(12, 29, 51, 0.88);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  box-shadow: var(--shadow-1), 0 0 14px -8px color-mix(in srgb, var(--accent) 70%, transparent);
+  cursor: pointer;
+  user-select: none;
+}
+.orb-chip:hover { border-color: var(--ld-border-strong); }
+.orb-chip:focus-visible { box-shadow: var(--focus-ring), var(--shadow-1); outline: none; }
+.orb-chip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ld-text);
+}
+.orb-chip-icon { display: inline-flex; color: var(--accent); }
+.orb-chip-summary {
+  font-size: 11px;
+  color: var(--ld-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orb-chip-ports {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.orb-chip-ports-in,
+.orb-chip-ports-out {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.orb-port {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--port-color, #8fa3bf);
+  background: var(--ld-bg);
+  cursor: crosshair;
+}
+.orb-port:hover,
+.orb-port.candidate { background: var(--port-color); box-shadow: 0 0 8px var(--port-color); }
+.orb-port.invalid {
+  border-color: var(--ld-danger);
+  background: rgba(255, 107, 107, 0.3);
+  cursor: not-allowed;
+}

@@ -1,5 +1,5 @@
 import type { WorkflowNode } from '../../../core/types';
-import { socketPoint, type Point } from '../wires';
+import { NODE_WIDTH, socketPoint, type Point } from '../wires';
 
 /**
  * Pure projection math for the 3D graph. No DOM, no WebGL — fully unit-testable.
@@ -69,6 +69,37 @@ export function worldFromNode(node: WorkflowNode, selected: boolean): WorldPoint
  */
 export function socketWorldPoint(node: WorkflowNode, socketId: string, dir: 'in' | 'out', selected: boolean): WorldPoint {
   return worldFromCanvas(socketPoint(node, socketId, dir), zFromNode(node.x) + (selected ? LIFT : 0));
+}
+
+/** Radius (world units) of an orb node sphere in the 3D 'orbs' style. */
+export const ORB_RADIUS = 55;
+
+/**
+ * World center of a node's orb: horizontally centered on the card footprint,
+ * one radius below the card's top edge (so the orb occupies the space the
+ * card's header would), on the node's z-plane. Orbs never lift — the selected
+ * node renders as the full DOM card instead.
+ */
+export function orbWorldCenter(node: WorkflowNode): WorldPoint {
+  return worldFromCanvas({ x: node.x + NODE_WIDTH / 2, y: node.y + ORB_RADIUS }, zFromNode(node.x));
+}
+
+const SURFACE_EPS = 1e-9;
+
+/**
+ * Point on the surface of an orb centered at `center`, at `radius` along the
+ * direction toward `towards` — where a wire should terminate so it kisses the
+ * sphere instead of piercing it. Degenerate (towards == center) returns the
+ * center itself.
+ */
+export function orbSurfacePoint(center: WorldPoint, towards: WorldPoint, radius: number): WorldPoint {
+  const dx = towards.x - center.x;
+  const dy = towards.y - center.y;
+  const dz = towards.z - center.z;
+  const len = Math.hypot(dx, dy, dz);
+  if (len < SURFACE_EPS) return { ...center };
+  const k = radius / len;
+  return { x: center.x + dx * k, y: center.y + dy * k, z: center.z + dz * k };
 }
 
 const PARALLEL_EPS = 1e-6;

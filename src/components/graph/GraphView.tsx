@@ -5,6 +5,7 @@ import { canConnect } from '../../core/workflow';
 import type { CapsuleCategory, CapsuleKind, SocketDef } from '../../core/types';
 import { useStudio } from '../../state/store';
 import { CapsuleIcon } from '../icons';
+import { CollapsiblePalette } from './CollapsiblePalette';
 import { GraphNode } from './GraphNode';
 import { nodeSummary } from './nodeSummary';
 import { edgeEndpoints, socketColor, socketPoint, wirePath, type Point } from './wires';
@@ -196,7 +197,7 @@ export function GraphView() {
     >
       {/* Parallax ambience: drifts slower than nodes for depth + bloom. */}
       <div className="graph-glow" style={{ transform: `translate(${view.tx * 0.3}px, ${view.ty * 0.3}px)` }} />
-      <div className="graph-toolbar" role="toolbar" aria-label="Add capsule">
+      <CollapsiblePalette>
         <div className="graph-palette-head">
           <strong>Nodes</strong>
           <span>{paletteKinds.length}/{CAPSULE_KINDS.length}</span>
@@ -241,7 +242,7 @@ export function GraphView() {
         <button className="btn" type="button" onClick={fitView} title="Fit graph">
           Fit
         </button>
-      </div>
+      </CollapsiblePalette>
 
       <div className="graph-stage" style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})` }}>
         <svg className="graph-edges" width="4000" height="3000">

@@ -8,19 +8,36 @@ import { canConnect } from '../../core/workflow';
 import type { CapsuleCategory, CapsuleKind, SocketDef, SocketType } from '../../core/types';
 import { useStudio } from '../../state/store';
 import { CapsuleIcon } from '../icons';
+import { CollapsiblePalette } from './CollapsiblePalette';
 import { GraphNode } from './GraphNode';
+import { OrbChip } from './OrbChip';
 import { nodeSummary } from './nodeSummary';
 import { NODE_WIDTH, socketColor, socketPoint, type Point } from './wires';
 import {
   LIFT,
+  ORB_RADIUS,
   canvasFromWorld,
+  orbSurfacePoint,
+  orbWorldCenter,
   pointerRayToPlane,
   socketWorldPoint,
   worldFromCanvas,
   zFromNode,
   type Vec3,
+  type WorldPoint,
 } from './graph3d/projection';
-import { buildNeonGrid, disposeObject3D, makeWireLine, resolveCssColor, updateWireLine } from './graph3d/scene';
+import { gradientStops, weightT } from './graph3d/orbWeight';
+import {
+  buildNeonGrid,
+  disposeObject3D,
+  makeOrbGeometry,
+  makeOrbMaterial,
+  makeOrbRing,
+  makeWireLine,
+  resolveCssColor,
+  updateOrbMaterial,
+  updateWireLine,
+} from './graph3d/scene';
 
 interface Props {
   /** Called when the WebGL context cannot be created (workspace falls back to 2D). */
@@ -57,10 +74,36 @@ interface ThreeCtx {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   wireGroup: THREE.Group;
+  orbGroup: THREE.Group;
+  /** Shared smooth-shaded sphere geometry for every orb (disposed on unmount). */
+  orbGeometry: THREE.SphereGeometry;
   nodeObjects: Map<string, CSS3DObject>;
   draftLine: THREE.Line | null;
   raycaster: THREE.Raycaster;
 }
+
+/** Per-node orb scene entry (sphere + value ring), keyed by node id. */
+interface OrbEntry {
+  group: THREE.Group;
+  material: THREE.ShaderMaterial;
+  ring: THREE.Mesh | null;
+  /** Normalized weight the current ring was built for (-1 = no ring). */
+  ringT: number;
+  /** Gradient+accent signature of the current material tint (skip no-op updates). */
+  tintKey: string;
+}
+
+/** Gradient stops for weightless kinds: a neutral slate orb. */
+const NEUTRAL_ORB_STOPS: [string, string, string] = ['#42526b', '#5c6d87', '#7b8ca6'];
+
+/**
+ * Every socket type any capsule can expose — used to pre-resolve ALL wire
+ * colors to concrete hex once per mount, so the render/sync path never hands
+ * THREE.Color a raw `var()` string and never touches getComputedStyle again.
+ */
+const ALL_SOCKET_TYPES: SocketType[] = Array.from(
+  new Set(Object.values(CAPSULES).flatMap((def) => [...def.inputs, ...def.outputs].map((s) => s.type))),
+);
 
 const DEFAULT_CAM: Omit<CamState, 'tx' | 'ty' | 'tz'> = { theta: 0, phi: 1.22, dist: 1500 };
 const PHI_MIN = 0.17;
@@ -91,12 +134,14 @@ const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [
 function isBackgroundTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || typeof el.closest !== 'function') return false;
-  return !el.closest('.gnode, .graph-toolbar, .graph-hint, .graph-mode-toggle, .graph3d-note');
+  return !el.closest('.gnode, .orb-chip, .collapsible-palette, .graph-toolbar, .graph-hint, .graph-mode-toggle, .graph3d-note');
 }
 
 export function Graph3DView({ onContextFailed }: Props) {
   const workflow = useStudio((s) => s.workflow);
   const selectedNodeId = useStudio((s) => s.selectedNodeId);
+  const graph3dStyle = useStudio((s) => s.appSettings.graph3dStyle ?? 'orbs');
+  const updateAppSettings = useStudio((s) => s.updateAppSettings);
   const selectNode = useStudio((s) => s.selectNode);
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
   const connectSockets = useStudio((s) => s.connectSockets);
@@ -111,7 +156,9 @@ export function Graph3DView({ onContextFailed }: Props) {
   const rafRef = useRef<number | null>(null);
   const camRef = useRef<CamState>({ tx: 0, ty: 0, tz: 0, ...DEFAULT_CAM });
   const anchorsRef = useRef(new Map<string, HTMLDivElement>());
+  const orbsRef = useRef(new Map<string, OrbEntry>());
   const colorCacheRef = useRef(new Map<SocketType, string>());
+  const accentCacheRef = useRef(new Map<CapsuleKind, string>());
   const dragRef = useRef<DragState | null>(null);
   const interactionRef = useRef<{ mode: 'orbit' | 'pan'; x: number; y: number; moved: number } | null>(null);
   const onContextFailedRef = useRef(onContextFailed);
@@ -180,12 +227,22 @@ export function Graph3DView({ onContextFailed }: Props) {
     return pointerRayToPlane(ray.origin, ray.dir, planeZ);
   }, [pointerRay]);
 
+  // Design tokens live on :root, so both caches resolve once against the
+  // documentElement and then never call getComputedStyle again — sync effects
+  // stay allocation-light and THREE.Color only ever sees concrete colors.
   const wireColor = useCallback((type: SocketType): string => {
     const cached = colorCacheRef.current.get(type);
     if (cached) return cached;
-    const host = viewportRef.current ?? document.documentElement;
-    const resolved = resolveCssColor(socketColor(type), host);
+    const resolved = resolveCssColor(socketColor(type), document.documentElement);
     colorCacheRef.current.set(type, resolved);
+    return resolved;
+  }, []);
+
+  const capsuleAccent = useCallback((kind: CapsuleKind): string => {
+    const cached = accentCacheRef.current.get(kind);
+    if (cached) return cached;
+    const resolved = resolveCssColor(CAPSULES[kind].accent, document.documentElement);
+    accentCacheRef.current.set(kind, resolved);
     return resolved;
   }, []);
 
@@ -201,76 +258,106 @@ export function Graph3DView({ onContextFailed }: Props) {
       onContextFailedRef.current?.();
       return;
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setClearColor(0x000000, 0); // transparent over the app background
-    renderer.domElement.classList.add('graph3d-gl');
+    // Any throw past this point must degrade to the 2D editor, NOT escape the
+    // effect: an uncaught passive-effect error would tear down the whole React
+    // tree (blank app) since there is no error boundary above this view.
+    let cssRenderer: CSS3DRenderer | null = null;
+    let ro: ResizeObserver | null = null;
+    try {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setClearColor(0x000000, 0); // transparent over the app background
+      renderer.domElement.classList.add('graph3d-gl');
 
-    const cssRenderer = new CSS3DRenderer();
-    cssRenderer.domElement.classList.add('graph3d-css3d');
+      cssRenderer = new CSS3DRenderer();
+      cssRenderer.domElement.classList.add('graph3d-css3d');
 
-    const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(new THREE.Color('#071426'), 2200, 7000);
-    const camera = new THREE.PerspectiveCamera(45, 1, 10, 20000);
+      const scene = new THREE.Scene();
+      scene.fog = new THREE.Fog(new THREE.Color('#071426'), 2200, 7000);
+      const camera = new THREE.PerspectiveCamera(45, 1, 10, 20000);
 
-    scene.add(buildNeonGrid(resolveCssColor('var(--ld-cyan)', host), resolveCssColor('var(--ld-violet)', host)));
-    const wireGroup = new THREE.Group();
-    scene.add(wireGroup);
+      scene.add(buildNeonGrid(resolveCssColor('var(--ld-cyan)', host), resolveCssColor('var(--ld-violet)', host)));
+      const wireGroup = new THREE.Group();
+      scene.add(wireGroup);
+      const orbGroup = new THREE.Group();
+      scene.add(orbGroup);
+      const orbGeometry = makeOrbGeometry(ORB_RADIUS);
 
-    const raycaster = new THREE.Raycaster();
-    raycaster.params.Line = { threshold: 6 };
+      const raycaster = new THREE.Raycaster();
+      raycaster.params.Line = { threshold: 6 };
 
-    host.appendChild(renderer.domElement);
-    host.appendChild(cssRenderer.domElement);
-    threeRef.current = { renderer, cssRenderer, scene, camera, wireGroup, nodeObjects: new Map(), draftLine: null, raycaster };
+      host.appendChild(renderer.domElement);
+      host.appendChild(cssRenderer.domElement);
+      threeRef.current = { renderer, cssRenderer, scene, camera, wireGroup, orbGroup, orbGeometry, nodeObjects: new Map(), draftLine: null, raycaster };
 
-    const resize = () => {
-      const w = host.clientWidth;
-      const h = host.clientHeight;
-      if (w < 1 || h < 1) return;
-      renderer.setSize(w, h);
-      cssRenderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      requestRender();
-    };
-    const ro = new ResizeObserver(resize);
-    ro.observe(host);
-    resize();
-    applyCamera();
+      // Pre-resolve every socket color once (bug guard: THREE.Color must never
+      // see a raw var() token, and sync effects must not hit getComputedStyle).
+      for (const type of ALL_SOCKET_TYPES) wireColor(type);
 
-    // Wheel dolly — native non-passive listener so preventDefault sticks.
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const cam = camRef.current;
-      cam.dist = Math.min(DIST_MAX, Math.max(DIST_MIN, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+      const resize = () => {
+        const w = host.clientWidth;
+        const h = host.clientHeight;
+        if (w < 1 || h < 1) return;
+        renderer.setSize(w, h);
+        cssRenderer!.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        requestRender();
+      };
+      ro = new ResizeObserver(resize);
+      ro.observe(host);
+      resize();
       applyCamera();
-    };
-    host.addEventListener('wheel', onWheel, { passive: false });
 
-    // Focus-scroll guard: focusing an off-screen card must never scroll the
-    // overflow-hidden 3D layers out of sync with the camera transform.
-    const resetScroll = () => {
-      host.scrollLeft = 0;
-      host.scrollTop = 0;
-      cssRenderer.domElement.scrollLeft = 0;
-      cssRenderer.domElement.scrollTop = 0;
-    };
-    host.addEventListener('scroll', resetScroll, true);
+      // Wheel dolly — native non-passive listener so preventDefault sticks.
+      const onWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        const cam = camRef.current;
+        cam.dist = Math.min(DIST_MAX, Math.max(DIST_MIN, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+        applyCamera();
+      };
+      host.addEventListener('wheel', onWheel, { passive: false });
 
-    setReady(true);
-    return () => {
-      ro.disconnect();
-      host.removeEventListener('wheel', onWheel);
-      host.removeEventListener('scroll', resetScroll, true);
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-      disposeObject3D(scene);
-      renderer.dispose();
-      renderer.domElement.remove();
-      cssRenderer.domElement.remove();
+      // Focus-scroll guard: focusing an off-screen card must never scroll the
+      // overflow-hidden 3D layers out of sync with the camera transform.
+      const resetScroll = () => {
+        host.scrollLeft = 0;
+        host.scrollTop = 0;
+        cssRenderer!.domElement.scrollLeft = 0;
+        cssRenderer!.domElement.scrollTop = 0;
+      };
+      host.addEventListener('scroll', resetScroll, true);
+
+      setReady(true);
+      return () => {
+        ro?.disconnect();
+        host.removeEventListener('wheel', onWheel);
+        host.removeEventListener('scroll', resetScroll, true);
+        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        orbsRef.current.clear();
+        disposeObject3D(scene); // also disposes orb materials/rings still in the scene
+        orbGeometry.dispose();
+        renderer.dispose();
+        // Release the GL context NOW: browsers cap live WebGL contexts, and
+        // dispose() alone keeps the context alive until GC — leaking one per
+        // view remount would eventually evict/fail the active context.
+        renderer.forceContextLoss();
+        renderer.domElement.remove();
+        cssRenderer!.domElement.remove();
+        threeRef.current = null;
+        setReady(false);
+      };
+    } catch (err) {
+      console.warn('LumenDeck: 3D graph scene setup failed, falling back to the 2D graph.', err);
+      ro?.disconnect();
       threeRef.current = null;
-      setReady(false);
-    };
+      renderer.dispose();
+      renderer.forceContextLoss();
+      renderer.domElement.remove();
+      cssRenderer?.domElement.remove();
+      onContextFailedRef.current?.();
+      return;
+    }
     // Mount-once: helpers above are stable useCallbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -304,28 +391,117 @@ export function Graph3DView({ onContextFailed }: Props) {
     requestRender();
   }, [ready, workflow, selectedNodeId, requestRender]);
 
-  // ---- sync wires (3D bezier lines) with the workflow edges ----------------
+  /** In 'orbs' style every non-selected node renders as a gradient orb. */
+  const isOrbNode = useCallback((node: { id: string }): boolean => {
+    return graph3dStyle === 'orbs' && node.id !== selectedNodeId;
+  }, [graph3dStyle, selectedNodeId]);
+
+  // ---- sync orbs (gradient spheres + value rings) with the workflow --------
+  // Rebuilds are minimal: the shared sphere geometry is cached, materials are
+  // re-tinted in place, and the ring is only rebuilt when its arc changes
+  // (params live-update through this effect via the dirty-flag render loop).
   useEffect(() => {
     if (!ready) return;
     const t = threeRef.current;
     if (!t) return;
-    for (const child of [...t.wireGroup.children]) {
-      t.wireGroup.remove(child);
-      disposeObject3D(child);
+    const orbs = orbsRef.current;
+    const seen = new Set<string>();
+    if (graph3dStyle === 'orbs') {
+      for (const node of workflow.nodes) {
+        if (node.id === selectedNodeId) continue; // its card is expanded in place
+        seen.add(node.id);
+        const tw = weightT(node.kind, node.params);
+        const stops = tw == null ? NEUTRAL_ORB_STOPS : gradientStops(tw);
+        const accent = capsuleAccent(node.kind);
+        const tintKey = `${stops[0]}|${stops[1]}|${stops[2]}|${accent}`;
+        let entry = orbs.get(node.id);
+        if (!entry) {
+          const group = new THREE.Group();
+          const material = makeOrbMaterial(stops, accent, ORB_RADIUS);
+          const sphere = new THREE.Mesh(t.orbGeometry, material);
+          sphere.userData.nodeId = node.id;
+          group.add(sphere);
+          t.orbGroup.add(group);
+          entry = { group, material, ring: null, ringT: -1, tintKey };
+          orbs.set(node.id, entry);
+        } else if (entry.tintKey !== tintKey) {
+          updateOrbMaterial(entry.material, stops, accent);
+          entry.tintKey = tintKey;
+        }
+        const ringT = tw ?? -1;
+        if (entry.ringT !== ringT) {
+          if (entry.ring) {
+            entry.group.remove(entry.ring);
+            disposeObject3D(entry.ring);
+            entry.ring = null;
+          }
+          if (tw != null) {
+            entry.ring = makeOrbRing(ORB_RADIUS, tw, stops[1]); // ramp(t) — the exact weight color
+            if (entry.ring) entry.group.add(entry.ring);
+          }
+          entry.ringT = ringT;
+        }
+        const c = orbWorldCenter(node);
+        entry.group.position.set(c.x, c.y, c.z);
+      }
     }
+    // Remove stale orbs: deleted nodes, the selected node, or 'cards' style.
+    for (const [id, entry] of orbs) {
+      if (seen.has(id)) continue;
+      t.orbGroup.remove(entry.group);
+      entry.material.dispose();
+      if (entry.ring) disposeObject3D(entry.ring); // shared sphere geometry survives
+      orbs.delete(id);
+    }
+    requestRender();
+  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender]);
+
+  // ---- sync wires (3D bezier lines) with the workflow edges ----------------
+  // Lines are keyed by edge id and REUSED across commits: routine changes
+  // (node drags, param edits) only re-route existing geometry in place — no
+  // new materials, colors, or geometries — so nothing churns per change and
+  // the dirty-flag loop stays idle between actual mutations.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    const existing = new Map<string, THREE.Line>();
+    for (const child of t.wireGroup.children) {
+      if (typeof child.userData.edgeId === 'string') existing.set(child.userData.edgeId as string, child as THREE.Line);
+    }
+    const seen = new Set<string>();
     for (const edge of workflow.edges) {
       const fromNode = workflow.nodes.find((n) => n.id === edge.from.node);
       const toNode = workflow.nodes.find((n) => n.id === edge.to.node);
       if (!fromNode || !toNode) continue;
-      const type = CAPSULES[fromNode.kind].outputs.find((s) => s.id === edge.from.socket)?.type ?? 'image';
-      const a = socketWorldPoint(fromNode, edge.from.socket, 'out', fromNode.id === selectedNodeId);
-      const b = socketWorldPoint(toNode, edge.to.socket, 'in', toNode.id === selectedNodeId);
-      const line = makeWireLine(a, b, wireColor(type));
-      line.userData.edgeId = edge.id;
-      t.wireGroup.add(line);
+      // Anchor at the socket for expanded cards, at the orb center for orbs;
+      // then pull orb endpoints out to the sphere surface toward the far end.
+      const aAnchor: WorldPoint = isOrbNode(fromNode)
+        ? orbWorldCenter(fromNode)
+        : socketWorldPoint(fromNode, edge.from.socket, 'out', fromNode.id === selectedNodeId);
+      const bAnchor: WorldPoint = isOrbNode(toNode)
+        ? orbWorldCenter(toNode)
+        : socketWorldPoint(toNode, edge.to.socket, 'in', toNode.id === selectedNodeId);
+      const a = isOrbNode(fromNode) ? orbSurfacePoint(aAnchor, bAnchor, ORB_RADIUS) : aAnchor;
+      const b = isOrbNode(toNode) ? orbSurfacePoint(bAnchor, aAnchor, ORB_RADIUS) : bAnchor;
+      const line = existing.get(edge.id);
+      if (line) {
+        updateWireLine(line, a, b); // an edge's socket (and thus color) never changes
+      } else {
+        const type = CAPSULES[fromNode.kind].outputs.find((s) => s.id === edge.from.socket)?.type ?? 'image';
+        const created = makeWireLine(a, b, wireColor(type));
+        created.userData.edgeId = edge.id;
+        t.wireGroup.add(created);
+      }
+      seen.add(edge.id);
+    }
+    for (const [id, line] of existing) {
+      if (seen.has(id)) continue;
+      t.wireGroup.remove(line);
+      disposeObject3D(line);
     }
     requestRender();
-  }, [ready, workflow, selectedNodeId, wireColor, requestRender]);
+  }, [ready, workflow, selectedNodeId, isOrbNode, wireColor, requestRender]);
 
   // ---- in-progress (draft) wire, dashed -----------------------------------
   useEffect(() => {
@@ -344,8 +520,10 @@ export function Graph3DView({ onContextFailed }: Props) {
     const fromNode = workflow.nodes.find((n) => n.id === wire.fromNode);
     if (!fromNode) return;
     const selectedFrom = fromNode.id === selectedNodeId;
-    const a = socketWorldPoint(fromNode, wire.fromSocket.id, 'out', selectedFrom);
     const b = worldFromCanvas(wire.cursor, zFromNode(fromNode.x) + (selectedFrom ? LIFT : 0));
+    const a = isOrbNode(fromNode)
+      ? orbSurfacePoint(orbWorldCenter(fromNode), b, ORB_RADIUS)
+      : socketWorldPoint(fromNode, wire.fromSocket.id, 'out', selectedFrom);
     if (t.draftLine) {
       updateWireLine(t.draftLine, a, b);
     } else {
@@ -353,7 +531,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       t.scene.add(t.draftLine);
     }
     requestRender();
-  }, [ready, wire, workflow, selectedNodeId, wireColor, requestRender]);
+  }, [ready, wire, workflow, selectedNodeId, isOrbNode, wireColor, requestRender]);
 
   // ---- camera actions ------------------------------------------------------
   const resetCamera = () => {
@@ -444,7 +622,31 @@ export function Graph3DView({ onContextFailed }: Props) {
     return { ok, bad };
   };
 
-  // ---- background interactions: orbit / pan / click-to-disconnect ----------
+  /**
+   * Expand a node and move keyboard focus onto its editor card once React has
+   * swapped the chip/orb for the card (next frame). Focusing the card keeps
+   * the existing keyboard contract flowing after an orb click.
+   */
+  const expandNode = useCallback((nodeId: string) => {
+    selectNode(nodeId);
+    requestAnimationFrame(() => {
+      anchorsRef.current.get(nodeId)?.querySelector<HTMLElement>('.gnode')?.focus();
+    });
+  }, [selectNode]);
+
+  // ---- background interactions: orbit / pan / click-to-select/disconnect ---
+  /** Raycast the orb spheres; returns the hit node id (click = expand). */
+  const tryPickOrbAt = (clientX: number, clientY: number): string | null => {
+    const t = threeRef.current;
+    if (!t || t.orbGroup.children.length === 0) return null;
+    const ray = pointerRay(clientX, clientY);
+    if (!ray) return null;
+    t.raycaster.setFromCamera(ray.ndc, t.camera);
+    const hits = t.raycaster.intersectObjects(t.orbGroup.children, true);
+    const hit = hits.find((h) => typeof h.object.userData.nodeId === 'string');
+    return hit ? (hit.object.userData.nodeId as string) : null;
+  };
+
   const tryDisconnectAt = (clientX: number, clientY: number) => {
     const t = threeRef.current;
     if (!t) return;
@@ -510,10 +712,15 @@ export function Graph3DView({ onContextFailed }: Props) {
 
   const onBgPointerUp = (e: React.PointerEvent) => {
     const act = interactionRef.current;
-    // A press+release on empty space without movement is a click: raycast the
+    // A press+release on empty space without movement is a click: first try
+    // the orbs (click = expand into the editor card), then fall back to the
     // wire lines (forgiving threshold) and disconnect a hit, exactly like the
     // 2D editor's click-on-wire behavior.
-    if (act && act.moved < CLICK_SLOP) tryDisconnectAt(e.clientX, e.clientY);
+    if (act && act.moved < CLICK_SLOP) {
+      const orbNodeId = tryPickOrbAt(e.clientX, e.clientY);
+      if (orbNodeId) expandNode(orbNodeId);
+      else tryDisconnectAt(e.clientX, e.clientY);
+    }
     if (act) {
       const el = e.currentTarget as HTMLElement;
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
@@ -559,7 +766,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     >
       <div ref={viewportRef} className="graph3d-viewport" />
 
-      <div className="graph-toolbar" role="toolbar" aria-label="Add capsule">
+      <CollapsiblePalette>
         <div className="graph-palette-head">
           <strong>Nodes</strong>
           <span>{paletteKinds.length}/{CAPSULE_KINDS.length}</span>
@@ -589,6 +796,17 @@ export function Graph3DView({ onContextFailed }: Props) {
           ))}
         </div>
         <div className="graph-toolbar-sep" />
+        <button
+          className="btn"
+          type="button"
+          aria-pressed={graph3dStyle === 'orbs'}
+          onClick={() => updateAppSettings({ graph3dStyle: graph3dStyle === 'orbs' ? 'cards' : 'orbs' })}
+          title={graph3dStyle === 'orbs'
+            ? 'Showing gradient orbs — switch to full cards'
+            : 'Showing full cards — switch to gradient orbs'}
+        >
+          Orbs ⇄ Cards
+        </button>
         <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
           Duplicate
         </button>
@@ -604,7 +822,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         <button className="btn" type="button" onClick={fitCamera} title="Frame all nodes">
           Fit
         </button>
-      </div>
+      </CollapsiblePalette>
 
       <div className="graph-hint">
         Drag headers to move | drag space to orbit | shift-drag to pan | scroll to dolly | click a wire to remove |
@@ -613,19 +831,35 @@ export function Graph3DView({ onContextFailed }: Props) {
 
       {workflow.nodes.map((node) => {
         const { ok, bad } = candidateFor(node.id);
+        // 'orbs' style: non-selected nodes are gradient spheres (WebGL) with a
+        // small label chip; the SELECTED node keeps the full v0.12 editor card
+        // (CSS3D, in place) — that IS the expand-on-focus behavior.
         return createPortal(
-          <GraphNode
-            node={node}
-            selected={selectedNodeId === node.id}
-            summary={nodeSummary(node.kind, node.params)}
-            onPointerDownHead={onHeadDown(node.id)}
-            onSelect={() => selectNode(node.id)}
-            onKeyDown={onNodeKey(node.id)}
-            onPortDown={onPortDown(node.id)}
-            onPortUp={onPortUp(node.id)}
-            candidatePorts={ok}
-            invalidPorts={bad}
-          />,
+          isOrbNode(node) ? (
+            <OrbChip
+              node={node}
+              summary={nodeSummary(node.kind, node.params)}
+              onSelect={() => expandNode(node.id)}
+              onKeyDown={onNodeKey(node.id)}
+              onPortDown={onPortDown(node.id)}
+              onPortUp={onPortUp(node.id)}
+              candidatePorts={ok}
+              invalidPorts={bad}
+            />
+          ) : (
+            <GraphNode
+              node={node}
+              selected={selectedNodeId === node.id}
+              summary={nodeSummary(node.kind, node.params)}
+              onPointerDownHead={onHeadDown(node.id)}
+              onSelect={() => selectNode(node.id)}
+              onKeyDown={onNodeKey(node.id)}
+              onPortDown={onPortDown(node.id)}
+              onPortUp={onPortUp(node.id)}
+              candidatePorts={ok}
+              invalidPorts={bad}
+            />
+          ),
           getAnchor(node.id),
           node.id,
         );
