@@ -7,6 +7,7 @@ import { Inspector } from '../components/inspector/Inspector';
 import { QueuePanel } from '../components/queue/QueuePanel';
 import { ControlNetRack } from '../components/rack/ControlNetRack';
 import { LoraRack } from '../components/rack/LoraRack';
+import { PromptStudio } from '../components/prompt/PromptStudio';
 import { TURBO_PRESETS } from '../turboForge/presets';
 import type { RenderBackendId } from '../turboForge/backends/backendSettings';
 import type { TurboPresetId } from '../turboForge/types';
@@ -272,6 +273,10 @@ export function ControlsPage() {
               <span className="chip">selected capsule</span>
             </div>
             <Inspector />
+          </article>
+
+          <article className="card page-card wide">
+            <PromptStudio />
           </article>
 
           <article className="card page-card wide">

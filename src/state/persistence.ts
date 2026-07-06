@@ -2,6 +2,7 @@ import type { RackPreset, Workflow } from '../core/types';
 import type { AppSettings } from './appSettings';
 import type { BackendSettings } from '../turboForge/backends/backendSettings';
 import type { GalleryItem } from './store';
+import type { PromptToolsState } from './promptTools';
 
 const KEY = 'lumendeck.v1';
 
@@ -11,6 +12,12 @@ export interface PersistedState {
   gallery: GalleryItem[];
   backendSettings: BackendSettings;
   appSettings?: AppSettings;
+  /**
+   * Prompt & Creative Tooling slice (presets / wildcards / history). Optional so
+   * state saved before this feature still loads: a missing slice falls back to the
+   * seeded defaults in the store (additive, backward-compatible migration).
+   */
+  promptTools?: PromptToolsState;
 }
 
 export function loadPersisted(): Partial<PersistedState> {

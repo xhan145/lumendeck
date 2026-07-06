@@ -5,6 +5,7 @@ import { findNode } from '../../core/workflow';
 import { useStudio } from '../../state/store';
 import { CapsuleIcon, Icon } from '../icons';
 import { CapsuleParams } from '../inspector/CapsuleParams';
+import { PromptStudio } from '../prompt/PromptStudio';
 import { RecipeActions } from './RecipeActions';
 
 /** Beginner-friendly ordering of the workflow as a top-to-bottom recipe. */
@@ -56,6 +57,7 @@ export function RecipeView() {
               ) : (
                 <CapsuleParams nodeId={node.id} />
               )}
+              {kind === 'prompt' ? <PromptStudio /> : null}
             </section>
           );
         })}

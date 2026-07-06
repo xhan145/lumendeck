@@ -42,6 +42,11 @@ import {
 import { loadPersisted, savePersisted } from './persistence';
 import { APP_VERSION } from './storeConstants';
 import { DEFAULT_APP_SETTINGS, sanitizeAppSettings, type AppSettings } from './appSettings';
+import { hydratePromptTools, type PromptToolsState } from './promptTools';
+import { deletePreset as deletePresetPure, savePreset as savePresetPure, findPreset, type PromptPreset } from '../core/prompt/presets';
+import type { WildcardSet } from '../core/prompt/wildcards';
+import { record as recordHistoryPure, toggleFavorite as toggleFavoritePure, type PromptHistoryEntry } from '../core/prompt/history';
+import { planVariations, type VariationAxis } from '../core/prompt/variations';
 
 export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance';
 
@@ -83,6 +88,7 @@ interface StudioState {
   view: ViewId;
   selectedNodeId: string | null;
   rackPresets: RackPreset[];
+  promptTools: PromptToolsState;
   gallery: GalleryItem[];
   queue: QueueJob[];
   adapterId: RenderBackendId;
@@ -125,6 +131,17 @@ interface StudioState {
   saveRackPreset(name: string): void;
   applyRackPreset(id: string): void;
   deleteRackPreset(id: string): void;
+
+  // Prompt & Creative Tooling
+  savePreset(preset: PromptPreset): void;
+  applyPreset(id: string): void;
+  deletePreset(id: string): void;
+  upsertWildcardSet(set: WildcardSet): void;
+  deleteWildcardSet(name: string): void;
+  recordHistory(entry: PromptHistoryEntry): void;
+  toggleFavorite(id: string): void;
+  loadHistoryEntry(id: string): void;
+  enqueueVariations(axis: VariationAxis, count: number): Promise<void>;
 
   setAdapter(id: RenderBackendId): void;
   updateBackendSettings(settings: Partial<BackendSettings>): void;
@@ -208,6 +225,7 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
 }
 
 const persisted = loadPersisted();
+const initialPromptTools = hydratePromptTools(persisted.promptTools);
 const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
@@ -229,6 +247,7 @@ export const useStudio = create<StudioState>((set, get) => {
     view: initialView,
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
+    promptTools: initialPromptTools,
     gallery: persisted.gallery ?? [],
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
@@ -304,6 +323,123 @@ export const useStudio = create<StudioState>((set, get) => {
     },
     deleteRackPreset: (id) =>
       set({ rackPresets: get().rackPresets.filter((p) => p.id !== id) }),
+
+    // ---- Prompt & Creative Tooling ----
+    savePreset: (preset) =>
+      set({ promptTools: { ...get().promptTools, presets: savePresetPure(get().promptTools.presets, preset) } }),
+
+    applyPreset: (id) => {
+      const preset = findPreset(get().promptTools.presets, id);
+      if (!preset) return;
+      const wf = get().workflow;
+      const prompt = findNode(wf, 'prompt');
+      const sampler = findNode(wf, 'sampler');
+      let next = wf;
+      // Write prompt text into the prompt capsule via the existing node-update path.
+      if (prompt) {
+        next = updateNodeParam(next, prompt.id, 'positive', preset.positive);
+        next = updateNodeParam(next, prompt.id, 'negative', preset.negative);
+      }
+      // Optional sampler settings, only for fields the preset specifies.
+      if (sampler && preset.settings) {
+        const s = preset.settings;
+        if (s.steps !== undefined) next = updateNodeParam(next, sampler.id, 'steps', s.steps);
+        if (s.cfg !== undefined) next = updateNodeParam(next, sampler.id, 'cfg', s.cfg);
+        if (s.sampler !== undefined) next = updateNodeParam(next, sampler.id, 'sampler', s.sampler);
+        if (s.scheduler !== undefined) next = updateNodeParam(next, sampler.id, 'scheduler', s.scheduler);
+      }
+      commit(next);
+      set({ controlStatus: `Applied preset "${preset.name}".` });
+    },
+
+    deletePreset: (id) =>
+      set({ promptTools: { ...get().promptTools, presets: deletePresetPure(get().promptTools.presets, id) } }),
+
+    upsertWildcardSet: (setDef) => {
+      const sets = get().promptTools.wildcardSets;
+      const idx = sets.findIndex((s) => s.name.toLowerCase() === setDef.name.toLowerCase());
+      const nextSets = idx === -1 ? [...sets, setDef] : sets.map((s, i) => (i === idx ? setDef : s));
+      set({ promptTools: { ...get().promptTools, wildcardSets: nextSets } });
+    },
+
+    deleteWildcardSet: (name) =>
+      set({
+        promptTools: {
+          ...get().promptTools,
+          wildcardSets: get().promptTools.wildcardSets.filter((s) => s.name.toLowerCase() !== name.toLowerCase()),
+        },
+      }),
+
+    recordHistory: (entry) =>
+      set({ promptTools: { ...get().promptTools, history: recordHistoryPure(get().promptTools.history, entry) } }),
+
+    toggleFavorite: (id) =>
+      set({ promptTools: { ...get().promptTools, history: toggleFavoritePure(get().promptTools.history, id) } }),
+
+    loadHistoryEntry: (id) => {
+      const entry = get().promptTools.history.find((e) => e.id === id);
+      if (!entry) return;
+      const wf = get().workflow;
+      const prompt = findNode(wf, 'prompt');
+      const sampler = findNode(wf, 'sampler');
+      let next = wf;
+      if (prompt) {
+        next = updateNodeParam(next, prompt.id, 'positive', entry.positive);
+        next = updateNodeParam(next, prompt.id, 'negative', entry.negative);
+      }
+      if (sampler) next = updateNodeParam(next, sampler.id, 'seed', entry.seed);
+      commit(next);
+      set({ controlStatus: 'Loaded prompt from history.' });
+    },
+
+    enqueueVariations: async (axis, count) => {
+      const wf = get().workflow;
+      const sampler = findNode(wf, 'sampler');
+      const prompt = findNode(wf, 'prompt');
+      const base = {
+        seed: Number(sampler?.params.seed ?? 0),
+        cfg: Number(sampler?.params.cfg ?? 7),
+        steps: Number(sampler?.params.steps ?? 28),
+      };
+      // Wildcard axis sweeps a set's values if the prompt uses a single known token.
+      let wildcardValues: string[] | undefined;
+      if (axis === 'wildcard') {
+        const first = get().promptTools.wildcardSets[0];
+        wildcardValues = first?.values;
+      }
+      const patches = planVariations({ base, axis, count, wildcardValues });
+      // Snapshot original params to restore after the sweep (a non-destructive plan).
+      const original = {
+        seed: sampler ? sampler.params.seed : undefined,
+        cfg: sampler ? sampler.params.cfg : undefined,
+        steps: sampler ? sampler.params.steps : undefined,
+        positive: prompt ? prompt.params.positive : undefined,
+      };
+      for (const patch of patches) {
+        let next = get().workflow;
+        const s = findNode(next, 'sampler');
+        const p = findNode(next, 'prompt');
+        if (s && patch.seed !== undefined) next = updateNodeParam(next, s.id, 'seed', patch.seed);
+        if (s && patch.cfg !== undefined) next = updateNodeParam(next, s.id, 'cfg', patch.cfg);
+        if (s && patch.steps !== undefined) next = updateNodeParam(next, s.id, 'steps', patch.steps);
+        if (p && patch.wildcardValue) {
+          next = updateNodeParam(next, p.id, 'positive', `${String(original.positive ?? '')}, ${patch.wildcardValue}`);
+        }
+        commit(next);
+        await get().enqueueRender();
+      }
+      // Restore the original sampler/prompt params after the sweep.
+      let restored = get().workflow;
+      const s = findNode(restored, 'sampler');
+      const p = findNode(restored, 'prompt');
+      if (s) {
+        if (original.seed !== undefined) restored = updateNodeParam(restored, s.id, 'seed', original.seed);
+        if (original.cfg !== undefined) restored = updateNodeParam(restored, s.id, 'cfg', original.cfg);
+        if (original.steps !== undefined) restored = updateNodeParam(restored, s.id, 'steps', original.steps);
+      }
+      if (p && original.positive !== undefined) restored = updateNodeParam(restored, p.id, 'positive', original.positive);
+      commit(restored);
+    },
 
     setAdapter: (adapterId) => {
       userPinnedBackend = true;
@@ -382,7 +518,7 @@ export const useStudio = create<StudioState>((set, get) => {
         const state = get();
         const plan = get().createTurboPlan();
         const adapter = activeAdapter(state.backendSettings);
-        const job = buildRenderJob(state.workflow);
+        const job = buildRenderJob(state.workflow, state.promptTools.wildcardSets);
         const startedAt = performance.now();
         const result = await adapter.generate(job);
         const elapsedMs = performance.now() - startedAt;
@@ -579,7 +715,7 @@ export const useStudio = create<StudioState>((set, get) => {
       const errors = get().health.filter((i) => i.severity === 'error');
       if (errors.length > 0) return; // UI blocks this path; guard anyway.
 
-      const job = buildRenderJob(workflow);
+      const job = buildRenderJob(workflow, get().promptTools.wildcardSets);
       const plan = get().createTurboPlan();
       const queueJob: QueueJob = {
         id: uid('job'),
@@ -650,8 +786,19 @@ export const useStudio = create<StudioState>((set, get) => {
         profiler.set('saveExportMs', 0);
         profiler.measure('totalRenderMs', 'total-start');
         // Freeze the manifest with the *resolved* seed.
-        const baseManifest = buildManifest(workflow, shelf, APP_VERSION, new Date());
+        const baseManifest = buildManifest(workflow, shelf, APP_VERSION, new Date(), get().promptTools.wildcardSets);
         baseManifest.seed = result.seed;
+        // Record this render in prompt history (original + resolved prompt, actual seed, model).
+        get().recordHistory({
+          id: uid('hist'),
+          positive: String(findNode(workflow, 'prompt')?.params.positive ?? job.prompt),
+          negative: job.negativePrompt,
+          resolved: job.resolvedPrompt,
+          seed: result.seed,
+          modelId: job.modelId ?? undefined,
+          at: baseManifest.createdAt,
+          favorite: false,
+        });
         const matrix = buildCapabilityMatrix(shelf);
         const modelCapability = findCapability(matrix, plan.selectedModel);
         const benchmark: BenchmarkResult = {
@@ -822,6 +969,7 @@ useStudio.subscribe((state) => {
       gallery: state.gallery.slice(0, 24),
       backendSettings: state.backendSettings,
       appSettings: state.appSettings,
+      promptTools: state.promptTools,
     });
   }, 300);
 });
