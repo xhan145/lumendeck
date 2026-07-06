@@ -6,6 +6,7 @@ import type { CapsuleCategory, CapsuleKind, SocketDef } from '../../core/types';
 import { useStudio } from '../../state/store';
 import { CapsuleIcon } from '../icons';
 import { GraphNode } from './GraphNode';
+import { nodeSummary } from './nodeSummary';
 import { edgeEndpoints, socketColor, socketPoint, wirePath, type Point } from './wires';
 
 interface DragState {
@@ -17,24 +18,6 @@ interface WireDraft {
   fromNode: string;
   fromSocket: SocketDef;
   cursor: Point;
-}
-
-function nodeSummary(kind: CapsuleKind, params: Record<string, unknown>): string {
-  switch (kind) {
-    case 'prompt': return String(params.positive ?? '').slice(0, 60) || 'No prompt';
-    case 'model': return params.assetId ? String(params.assetId) : 'No checkpoint';
-    case 'loraRack': return `${Array.isArray(params.slots) ? params.slots.length : 0} LoRA slots`;
-    case 'controlNetRack': return `${Array.isArray(params.slots) ? params.slots.length : 0} control slots`;
-    case 'checkpointLoader': return String(params.checkpoint ?? 'model.safetensors');
-    case 'clipTextEncode': return String(params.text ?? '').slice(0, 60) || 'No text';
-    case 'sampler': return `${params.sampler} | ${params.steps} steps | cfg ${params.cfg}`;
-    case 'samplerAdvanced': return `${params.startStep}-${params.endStep} steps | noise ${params.addNoise ? 'on' : 'off'}`;
-    case 'video': return params.enabled ? `${params.frameCount} frames @ ${params.fps} fps | ${params.cameraMotion}` : 'Disabled';
-    case 'canvas': return `${params.width}x${params.height} x${params.batch}`;
-    case 'control': return params.enabled ? `${params.mode} @ ${params.strength}` : 'Disabled';
-    case 'note': return String(params.body ?? '').slice(0, 60) || 'Empty note';
-    default: return CAPSULES[kind].description;
-  }
 }
 
 const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [

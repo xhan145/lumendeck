@@ -5,6 +5,7 @@ import type { RenderBackendId } from '../turboForge/backends/backendSettings';
 export type ThemeMode = 'dark' | 'system';
 export type StartupBehavior = 'guide' | 'last-view' | 'controls';
 export type VramSafetyMode = 'strict' | 'balanced' | 'off';
+export type GraphMode = '2d' | '3d';
 
 export interface AppSettings {
   themeMode: ThemeMode;
@@ -30,6 +31,12 @@ export interface AppSettings {
     customEndpoint: string;
   };
   lastView?: ViewId;
+  /**
+   * Graph editor renderer preference (2D ⇄ 3D toggle). Optional and additive:
+   * state persisted before the 3D graph existed still loads; when unset,
+   * GraphWorkspace defaults to '3d' ('2d' under prefers-reduced-motion).
+   */
+  graphMode?: GraphMode;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -81,5 +88,6 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
       huggingface: settings?.apiKeys?.huggingface ?? '',
       customEndpoint: settings?.apiKeys?.customEndpoint ?? '',
     },
+    graphMode: settings?.graphMode === '2d' || settings?.graphMode === '3d' ? settings.graphMode : undefined,
   };
 }

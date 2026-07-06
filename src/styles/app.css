@@ -726,6 +726,60 @@
   white-space: nowrap;
 }
 
+/* Inline img2img thumbnail body on the Load Image node card */
+.gnode-thumb {
+  padding: 6px 12px 8px;
+  border-top: 1px dashed var(--ld-border);
+}
+.gnode-thumb-preview { position: relative; }
+.gnode-thumb-preview img {
+  display: block;
+  width: 100%;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--ld-border);
+}
+.gnode-thumb-clear {
+  position: absolute;
+  top: 4px; right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--ld-border);
+  background: rgba(8, 18, 32, 0.85);
+  color: var(--ld-text-dim);
+  cursor: pointer;
+}
+.gnode-thumb-clear:hover { color: var(--ld-text); border-color: var(--ld-border-strong); }
+.gnode-thumb-clear:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.gnode-thumb-drop {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  border: 1px dashed var(--ld-border-strong);
+  border-radius: 8px;
+  color: var(--ld-text-faint);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.gnode-thumb-drop input[type='file'] {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.gnode-thumb-drop:hover, .gnode-thumb-drop:focus-within {
+  border-color: var(--ld-cyan);
+  color: var(--ld-text-dim);
+}
+
 .port {
   position: absolute;
   width: 12px; height: 12px;
