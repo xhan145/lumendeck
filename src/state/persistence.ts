@@ -9,7 +9,13 @@ const KEY = 'lumendeck.v1';
 export interface PersistedState {
   workflow: Workflow;
   rackPresets: RackPreset[];
-  gallery: GalleryItem[];
+  /**
+   * LEGACY gallery blob. Renders now live in IndexedDB (see galleryDb.ts).
+   * This field is only ever READ once on startup for the one-time migration and
+   * is never written again — savePersisted no longer serializes render images
+   * (they ballooned the blob and hit quota). Optional so new saves omit it.
+   */
+  gallery?: GalleryItem[];
   backendSettings: BackendSettings;
   appSettings?: AppSettings;
   /**
@@ -45,15 +51,46 @@ export function loadPersisted(): Partial<PersistedState> {
 
 export function savePersisted(state: PersistedState): void {
   if (typeof localStorage === 'undefined') return;
+  // Never serialize render images here anymore — the gallery lives in IndexedDB.
+  // Only light metadata (workflow, presets, settings, promptTools) is persisted,
+  // so the old quota-slice hack is gone.
+  const { gallery: _legacy, ...light } = state;
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    localStorage.setItem(KEY, JSON.stringify(light));
   } catch (err) {
-    // Quota exceeded (gallery images are data URLs) — drop oldest gallery items and retry once.
-    try {
-      const slim = { ...state, gallery: state.gallery.slice(0, 12) };
-      localStorage.setItem(KEY, JSON.stringify(slim));
-    } catch {
-      console.warn('LumenDeck: could not persist state.', err);
-    }
+    console.warn('LumenDeck: could not persist state.', err);
+  }
+}
+
+/**
+ * Read the legacy localStorage gallery (for the one-time IDB migration) and then
+ * strip it from the persisted blob so it is never read again. Safe to call when
+ * nothing is stored.
+ */
+export function takeLegacyGallery(): GalleryItem[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return [];
+    const data = JSON.parse(raw) as Partial<PersistedState>;
+    const gallery = Array.isArray(data.gallery) ? data.gallery : [];
+    return gallery;
+  } catch {
+    return [];
+  }
+}
+
+/** Remove only the legacy `gallery` field from the persisted blob, in place. */
+export function clearLegacyGallery(): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw) as Partial<PersistedState> & { gallery?: unknown };
+    if (data.gallery === undefined) return;
+    delete data.gallery;
+    localStorage.setItem(KEY, JSON.stringify(data));
+  } catch (err) {
+    console.warn('LumenDeck: could not clear legacy gallery blob.', err);
   }
 }

@@ -39,7 +39,19 @@ import {
   type BackendSettings,
   type RenderBackendId,
 } from '../turboForge/backends/backendSettings';
-import { loadPersisted, savePersisted } from './persistence';
+import { loadPersisted, savePersisted, takeLegacyGallery, clearLegacyGallery } from './persistence';
+import { resolveGalleryStore, type Collection } from './galleryDb';
+import {
+  addRender as addRenderOp,
+  removeRender as removeRenderOp,
+  createCollection as createCollectionOp,
+  renameCollection as renameCollectionOp,
+  deleteCollection as deleteCollectionOp,
+  assignToCollection as assignToCollectionOp,
+  addTag as addTagOp,
+  removeTag as removeTagOp,
+  migrateLegacyGallery,
+} from '../core/gallery/ops';
 import { APP_VERSION } from './storeConstants';
 import { DEFAULT_APP_SETTINGS, sanitizeAppSettings, type AppSettings } from './appSettings';
 import { hydratePromptTools, type PromptToolsState } from './promptTools';
@@ -63,7 +75,13 @@ export interface GalleryItem {
   renderMode?: 'real' | 'mock' | 'procedural' | 'fallback' | 'unknown';
   fallback?: boolean;
   fallbackReason?: string;
+  /** Collection this render belongs to; `null`/absent = uncategorized. */
+  collectionId?: string | null;
+  /** Free-form organization tags (deduped, case-insensitive). */
+  tags?: string[];
 }
+
+export type { Collection } from './galleryDb';
 
 export interface QueueJob {
   id: string;
@@ -90,6 +108,11 @@ interface StudioState {
   rackPresets: RackPreset[];
   promptTools: PromptToolsState;
   gallery: GalleryItem[];
+  collections: Collection[];
+  /** false until the gallery has been hydrated from IndexedDB at startup. */
+  galleryReady: boolean;
+  /** false when IndexedDB is unavailable and the gallery is memory-only this session. */
+  galleryDurable: boolean;
   queue: QueueJob[];
   adapterId: RenderBackendId;
   bridgeOnline: boolean;
@@ -166,6 +189,13 @@ interface StudioState {
   clearLocalHistory(): void;
   setControlStatus(message: string | null): void;
   removeGalleryItem(id: string): void;
+  hydrateGallery(): Promise<void>;
+  createCollection(name: string): Promise<void>;
+  renameCollection(id: string, name: string): Promise<void>;
+  deleteCollection(id: string): Promise<void>;
+  assignToCollection(itemId: string, collectionId: string | null): Promise<void>;
+  addTag(itemId: string, tag: string): Promise<void>;
+  removeTag(itemId: string, tag: string): Promise<void>;
   restoreSnapshot(item: GalleryItem): void;
   loadWorkflowFile(file: LumenFile): void;
   applyTemplate(id: string): void;
@@ -174,6 +204,10 @@ interface StudioState {
 export const mockAdapter = new MockAdapter();
 export const httpAdapter = new HttpAdapter();
 export const comfyAdapter = new ComfyAdapter();
+
+// Durable gallery store (IndexedDB when available, in-memory fallback otherwise).
+// Resolved once per session; `durable` is false in private-mode/unsupported envs.
+const { store: galleryStore, durable: galleryDurable } = resolveGalleryStore();
 
 // Set once the user explicitly picks a backend this session, so the auto-detect
 // in probeBridge never overrides a deliberate choice.
@@ -248,7 +282,10 @@ export const useStudio = create<StudioState>((set, get) => {
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
     promptTools: initialPromptTools,
-    gallery: persisted.gallery ?? [],
+    gallery: [],
+    collections: [],
+    galleryReady: false,
+    galleryDurable,
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
@@ -880,9 +917,13 @@ export const useStudio = create<StudioState>((set, get) => {
           renderMode,
           fallback,
           fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
+          collectionId: null,
+          tags: [],
         };
+        // Route the gallery insert through the durable (IDB-backed) write-through.
+        const nextGallery = await addRenderOp(galleryStore, get().gallery, item);
         set({
-          gallery: [item, ...get().gallery],
+          gallery: nextGallery,
           turboBenchmarks: saveBenchmark(enrichedBenchmark),
           turboLastBenchmark: enrichedBenchmark,
         });
@@ -925,6 +966,9 @@ export const useStudio = create<StudioState>((set, get) => {
     clearQueue: () => set({ queue: [], controlStatus: 'Queue cleared.' }),
     clearLocalHistory: () => {
       clearBenchmarks();
+      // Purge the durable gallery too so "clear" is honest (write-through).
+      const current = get().gallery;
+      void Promise.all(current.map((g) => galleryStore.deleteRender(g.id))).catch(() => {});
       set({
         gallery: [],
         turboBenchmarks: [],
@@ -935,7 +979,56 @@ export const useStudio = create<StudioState>((set, get) => {
     },
     setControlStatus: (message) => set({ controlStatus: message }),
 
-    removeGalleryItem: (id) => set({ gallery: get().gallery.filter((g) => g.id !== id) }),
+    removeGalleryItem: (id) => {
+      void removeRenderOp(galleryStore, get().gallery, id).then((gallery) => set({ gallery }));
+    },
+
+    hydrateGallery: async () => {
+      // One-time lossless migration: if IDB has no renders but a legacy
+      // localStorage gallery exists, copy it in, THEN clear the legacy blob.
+      try {
+        const legacy = takeLegacyGallery();
+        const result = await migrateLegacyGallery(galleryStore, legacy);
+        if (result.didMigrate) clearLegacyGallery();
+      } catch (err) {
+        console.warn('LumenDeck: gallery migration failed (continuing).', err);
+      }
+      try {
+        const [gallery, collections] = await Promise.all([
+          galleryStore.allRenders(),
+          galleryStore.allCollections(),
+        ]);
+        set({ gallery, collections, galleryReady: true });
+      } catch (err) {
+        console.warn('LumenDeck: gallery hydrate failed (in-memory this session).', err);
+        set({ galleryReady: true });
+      }
+    },
+
+    createCollection: async (name) => {
+      const { collections } = await createCollectionOp(galleryStore, get().collections, name);
+      set({ collections });
+    },
+    renameCollection: async (id, name) => {
+      const collections = await renameCollectionOp(galleryStore, get().collections, id, name);
+      set({ collections });
+    },
+    deleteCollection: async (id) => {
+      const { collections, gallery } = await deleteCollectionOp(galleryStore, get().collections, get().gallery, id);
+      set({ collections, gallery });
+    },
+    assignToCollection: async (itemId, collectionId) => {
+      const gallery = await assignToCollectionOp(galleryStore, get().gallery, itemId, collectionId);
+      set({ gallery });
+    },
+    addTag: async (itemId, tag) => {
+      const gallery = await addTagOp(galleryStore, get().gallery, itemId, tag);
+      set({ gallery });
+    },
+    removeTag: async (itemId, tag) => {
+      const gallery = await removeTagOp(galleryStore, get().gallery, itemId, tag);
+      set({ gallery });
+    },
 
     restoreSnapshot: (item) => {
       commit({ ...item.manifest.graph });
@@ -966,10 +1059,14 @@ useStudio.subscribe((state) => {
     savePersisted({
       workflow: state.workflow,
       rackPresets: state.rackPresets,
-      gallery: state.gallery.slice(0, 24),
+      // gallery is intentionally omitted — renders live in IndexedDB now.
       backendSettings: state.backendSettings,
       appSettings: state.appSettings,
       promptTools: state.promptTools,
     });
   }, 300);
 });
+
+// Kick off async gallery hydration from IndexedDB (runs the one-time migration
+// first). Guarded so a hydrate failure never blocks app startup.
+void useStudio.getState().hydrateGallery();
