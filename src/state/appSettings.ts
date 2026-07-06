@@ -6,6 +6,7 @@ export type ThemeMode = 'dark' | 'system';
 export type StartupBehavior = 'guide' | 'last-view' | 'controls';
 export type VramSafetyMode = 'strict' | 'balanced' | 'off';
 export type GraphMode = '2d' | '3d';
+export type Graph3DStyle = 'orbs' | 'cards';
 
 export interface AppSettings {
   themeMode: ThemeMode;
@@ -37,6 +38,17 @@ export interface AppSettings {
    * GraphWorkspace defaults to '3d' ('2d' under prefers-reduced-motion).
    */
   graphMode?: GraphMode;
+  /**
+   * Whether the graph node palette is pinned open (auto-collapse disabled).
+   * Optional and additive: state persisted before the collapsible palette
+   * existed still loads; when unset, CollapsiblePalette defaults to false.
+   */
+  palettePinned?: boolean;
+  /**
+   * 3D node rendering style (gradient orbs vs the v0.12 full cards). Optional
+   * and additive: when unset, Graph3DView defaults to 'orbs'.
+   */
+  graph3dStyle?: Graph3DStyle;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -89,5 +101,7 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
       customEndpoint: settings?.apiKeys?.customEndpoint ?? '',
     },
     graphMode: settings?.graphMode === '2d' || settings?.graphMode === '3d' ? settings.graphMode : undefined,
+    palettePinned: typeof settings?.palettePinned === 'boolean' ? settings.palettePinned : undefined,
+    graph3dStyle: settings?.graph3dStyle === 'orbs' || settings?.graph3dStyle === 'cards' ? settings.graph3dStyle : undefined,
   };
 }

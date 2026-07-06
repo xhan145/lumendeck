@@ -9,7 +9,16 @@ function detectWebGL(): boolean {
   if (typeof document === 'undefined') return false;
   try {
     const canvas = document.createElement('canvas');
-    return Boolean(canvas.getContext('webgl2') ?? canvas.getContext('webgl'));
+    const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as
+      | WebGLRenderingContext
+      | WebGL2RenderingContext
+      | null;
+    if (!gl) return false;
+    // Release the probe context immediately: browsers cap live WebGL contexts,
+    // and a leaked probe per workspace remount (doubled under StrictMode)
+    // would eventually evict — or fail — the real renderer's context.
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
   } catch {
     return false;
   }
