@@ -9,6 +9,7 @@ import {
 } from '../src/components/graph/graph3d/orbWeight';
 import { ORB_RADIUS, orbSurfacePoint, orbWorldCenter, worldFromCanvas, zFromNode } from '../src/components/graph/graph3d/projection';
 import { resolveCssColor } from '../src/components/graph/graph3d/scene';
+import { FLUSH_FALLBACK_MS, createFlushScheduler, type FlushHooks } from '../src/components/graph/graph3d/flushScheduler';
 import { NODE_WIDTH } from '../src/components/graph/wires';
 import { initialPaletteState, paletteReducer, type PaletteState } from '../src/components/graph/paletteState';
 import { sanitizeAppSettings, type AppSettings } from '../src/state/appSettings';
@@ -169,6 +170,81 @@ describe('orb wire endpoint math', () => {
     const node: WorkflowNode = { id: 'n1', kind: 'sampler', x: 300, y: 150, params: {} };
     const expected = worldFromCanvas({ x: 300 + NODE_WIDTH / 2, y: 150 + ORB_RADIUS }, zFromNode(300));
     expect(orbWorldCenter(node)).toEqual(expected);
+  });
+});
+
+/** Manual timing hooks: frames/timers fire only when the test says so. */
+function fakeHooks() {
+  let nextId = 1;
+  const frames = new Map<number, () => void>();
+  const timers = new Map<number, () => void>();
+  const hooks: FlushHooks = {
+    requestFrame: (cb) => { const id = nextId++; frames.set(id, cb); return id; },
+    cancelFrame: (id) => { frames.delete(id); },
+    setTimer: (cb) => { const id = nextId++; timers.set(id, cb); return id; },
+    clearTimer: (id) => { timers.delete(id); },
+  };
+  const fireFrame = () => { for (const [id, cb] of [...frames]) { frames.delete(id); cb(); } };
+  const fireTimer = () => { for (const [id, cb] of [...timers]) { timers.delete(id); cb(); } };
+  return { hooks, fireFrame, fireTimer, counts: () => ({ frames: frames.size, timers: timers.size }) };
+}
+
+describe('flushScheduler (frame-independent dirty-flag renders)', () => {
+  it('exposes a fallback long enough for a visible-tab rAF to win', () => {
+    expect(FLUSH_FALLBACK_MS).toBeGreaterThan(16);
+    expect(FLUSH_FALLBACK_MS).toBeLessThan(100);
+  });
+
+  it('flushes via the animation frame and cancels the fallback timer', () => {
+    const f = fakeHooks();
+    let flushes = 0;
+    const s = createFlushScheduler(() => { flushes += 1; }, f.hooks);
+    s.request();
+    expect(s.pending()).toBe(true);
+    f.fireFrame();
+    expect(flushes).toBe(1);
+    expect(s.pending()).toBe(false);
+    expect(f.counts()).toEqual({ frames: 0, timers: 0 }); // provably idle
+  });
+
+  it('REGRESSION: still flushes when rAF never fires (hidden/headless tab)', () => {
+    const f = fakeHooks();
+    let flushes = 0;
+    const s = createFlushScheduler(() => { flushes += 1; }, f.hooks);
+    s.request();
+    // The tab produces no frames — only the timer fallback can fire.
+    f.fireTimer();
+    expect(flushes).toBe(1);
+    expect(s.pending()).toBe(false);
+    expect(f.counts()).toEqual({ frames: 0, timers: 0 }); // frame was cancelled
+  });
+
+  it('coalesces bursts of requests into a single flush', () => {
+    const f = fakeHooks();
+    let flushes = 0;
+    const s = createFlushScheduler(() => { flushes += 1; }, f.hooks);
+    s.request();
+    s.request();
+    s.request();
+    f.fireFrame();
+    expect(flushes).toBe(1);
+    // and re-arms cleanly for the next invalidation
+    s.request();
+    f.fireTimer();
+    expect(flushes).toBe(2);
+  });
+
+  it('cancel() disarms everything without flushing (unmount)', () => {
+    const f = fakeHooks();
+    let flushes = 0;
+    const s = createFlushScheduler(() => { flushes += 1; }, f.hooks);
+    s.request();
+    s.cancel();
+    f.fireFrame();
+    f.fireTimer();
+    expect(flushes).toBe(0);
+    expect(s.pending()).toBe(false);
+    expect(f.counts()).toEqual({ frames: 0, timers: 0 });
   });
 });
 

@@ -27,6 +27,7 @@ import {
   type WorldPoint,
 } from './graph3d/projection';
 import { gradientStops, weightT } from './graph3d/orbWeight';
+import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
 import {
   buildNeonGrid,
   disposeObject3D,
@@ -153,7 +154,7 @@ export function Graph3DView({ onContextFailed }: Props) {
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeCtx | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const flushRef = useRef<FlushScheduler | null>(null);
   const camRef = useRef<CamState>({ tx: 0, ty: 0, tz: 0, ...DEFAULT_CAM });
   const anchorsRef = useRef(new Map<string, HTMLDivElement>());
   const orbsRef = useRef(new Map<string, OrbEntry>());
@@ -180,16 +181,31 @@ export function Graph3DView({ onContextFailed }: Props) {
     return el;
   };
 
-  /** Dirty-flag render: one rAF per invalidation, no continuous loop when idle. */
+  /**
+   * Dirty-flag render: one coalesced flush per invalidation, fully idle when
+   * nothing changes. The scheduler arms a rAF (fast path) PLUS a short timer
+   * fallback so the scene — including the CSS3D card/chip DOM — still syncs
+   * with the store when the tab is hidden or the browser only produces frames
+   * on demand (headless), where rAF alone would starve forever.
+   */
+  if (!flushRef.current) {
+    flushRef.current = createFlushScheduler(
+      () => {
+        const t = threeRef.current;
+        if (!t) return;
+        t.renderer.render(t.scene, t.camera);
+        t.cssRenderer.render(t.scene, t.camera);
+      },
+      {
+        requestFrame: (cb) => requestAnimationFrame(cb),
+        cancelFrame: (id) => cancelAnimationFrame(id),
+        setTimer: (cb, ms) => window.setTimeout(cb, ms),
+        clearTimer: (id) => window.clearTimeout(id),
+      },
+    );
+  }
   const requestRender = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      const t = threeRef.current;
-      if (!t) return;
-      t.renderer.render(t.scene, t.camera);
-      t.cssRenderer.render(t.scene, t.camera);
-    });
+    flushRef.current?.request();
   }, []);
 
   const applyCamera = useCallback(() => {
@@ -332,8 +348,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         ro?.disconnect();
         host.removeEventListener('wheel', onWheel);
         host.removeEventListener('scroll', resetScroll, true);
-        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
+        flushRef.current?.cancel();
         orbsRef.current.clear();
         disposeObject3D(scene); // also disposes orb materials/rings still in the scene
         orbGeometry.dispose();
@@ -350,6 +365,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     } catch (err) {
       console.warn('LumenDeck: 3D graph scene setup failed, falling back to the 2D graph.', err);
       ro?.disconnect();
+      flushRef.current?.cancel();
       threeRef.current = null;
       renderer.dispose();
       renderer.forceContextLoss();
