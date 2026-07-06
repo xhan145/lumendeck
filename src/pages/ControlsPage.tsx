@@ -5,6 +5,7 @@ import { Icon } from '../components/icons';
 import { HealthPanel } from '../components/health/HealthPanel';
 import { Inspector } from '../components/inspector/Inspector';
 import { QueuePanel } from '../components/queue/QueuePanel';
+import { ControlNetRack } from '../components/rack/ControlNetRack';
 import { LoraRack } from '../components/rack/LoraRack';
 import { TURBO_PRESETS } from '../turboForge/presets';
 import type { RenderBackendId } from '../turboForge/backends/backendSettings';
@@ -275,6 +276,10 @@ export function ControlsPage() {
 
           <article className="card page-card wide">
             <LoraRack />
+          </article>
+
+          <article className="card page-card wide">
+            <ControlNetRack />
           </article>
         </section>
       </div>

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import threading
@@ -24,6 +25,35 @@ _TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 _TORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 _INSTALL_COMMAND = "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch."
 _python_cache: dict[str, Any] | None | bool = False
+
+# ControlNet capability map: family -> control type -> Hugging Face repo.
+# Single source of truth. The worker never duplicates this table: generate()/
+# preprocess() pass it inside each job (job["controlnetMap"]) and the worker
+# indexes it by the family it detects from the loaded UNet at render time.
+# Mirrored in src/core/controlnet.ts so frontend health checks stay fetch-free.
+CONTROLNET_MODELS: dict[str, dict[str, str]] = {
+    "SD1.5": {
+        "canny": "lllyasviel/control_v11p_sd15_canny",
+        "depth": "lllyasviel/control_v11f1p_sd15_depth",
+        "pose": "lllyasviel/control_v11p_sd15_openpose",
+        "scribble": "lllyasviel/control_v11p_sd15_scribble",
+        "lineart": "lllyasviel/control_v11p_sd15_lineart",
+        "softedge": "lllyasviel/control_v11p_sd15_softedge",
+        "tile": "lllyasviel/control_v11f1e_sd15_tile",
+    },
+    "SD2.1": {
+        "canny": "thibaud/controlnet-sd21-canny-diffusers",
+        "depth": "thibaud/controlnet-sd21-depth-diffusers",
+        "pose": "thibaud/controlnet-sd21-openpose-diffusers",
+    },
+    "SDXL": {
+        "canny": "diffusers/controlnet-canny-sdxl-1.0",
+        "depth": "diffusers/controlnet-depth-sdxl-1.0",
+        "pose": "thibaud/controlnet-openpose-sdxl-1.0",
+        "scribble": "xinsir/controlnet-scribble-sdxl-1.0",
+        "tile": "xinsir/controlnet-tile-sdxl-1.0",
+    },
+}
 
 _WORKER_SOURCE = r'''
 from __future__ import annotations
@@ -278,6 +308,7 @@ def _animate(job, state, report):
         # Free the still-image pipe (and any old animate pipe) to conserve VRAM.
         state["pipe"] = None
         state["key"] = None
+        state["controlnets"] = {}
         state["anim_pipe"] = None
         try:
             if torch.cuda.is_available():
@@ -337,6 +368,108 @@ def _animate(job, state, report):
     }
 
 
+_CONTROL_TYPES = ("canny", "depth", "pose", "scribble", "lineart", "softedge", "tile")
+_DETECTOR_CACHE = {}
+
+
+def normalize_controls(job):
+    """Stacked list (controlNets) plus legacy single entry (controlNet) -> one list.
+
+    Only entries that actually carry a control image count. When both keys are
+    present the list wins: the frontend mirrors its first slot into controlNet
+    purely for old-sidecar compatibility, so honoring both would double-apply it."""
+    controls = job.get("controlNets") or ([job["controlNet"]] if job.get("controlNet") else [])
+    return [c for c in controls if isinstance(c, dict) and c.get("image")]
+
+
+def _aux_detector(kind):
+    """Load (and cache) a controlnet_aux detector, with a clear error if the
+    package is missing. canny/tile never come through here."""
+    if kind in _DETECTOR_CACHE:
+        return _DETECTOR_CACHE[kind]
+    try:
+        import controlnet_aux
+    except Exception as exc:
+        raise RuntimeError(
+            f"{kind} preprocessing needs the controlnet_aux package. "
+            f"Reinstall the runtime (Install runtime + model) to add it. ({exc})"
+        )
+    loaders = {
+        "depth": lambda: controlnet_aux.MidasDetector.from_pretrained("lllyasviel/Annotators"),
+        "pose": lambda: controlnet_aux.OpenposeDetector.from_pretrained("lllyasviel/Annotators"),
+        "scribble": lambda: controlnet_aux.HEDdetector.from_pretrained("lllyasviel/Annotators"),
+        "lineart": lambda: controlnet_aux.LineartDetector.from_pretrained("lllyasviel/Annotators"),
+        "softedge": lambda: controlnet_aux.PidiNetDetector.from_pretrained("lllyasviel/Annotators"),
+    }
+    if kind not in loaders:
+        raise RuntimeError(f"unknown control type: {kind}")
+    try:
+        detector = loaders[kind]()
+    except Exception as exc:
+        raise RuntimeError(f"loading the {kind} preprocessor (controlnet_aux) failed: {exc}")
+    _DETECTOR_CACHE[kind] = detector
+    return detector
+
+
+def preprocess_control(kind, image, width, height):
+    """Turn a source image into the control map for `kind`, sized (width, height).
+
+    canny and tile must never require controlnet_aux: tile is a passthrough
+    resize, and canny falls back to cv2.Canny, then PIL edge filtering."""
+    from PIL import Image
+    kind = str(kind or "canny").lower()
+    rgb = image.convert("RGB")
+    if kind == "tile":
+        return rgb.resize((width, height))
+    if kind == "canny":
+        detector = _DETECTOR_CACHE.get("canny")
+        if detector is None:
+            try:
+                from controlnet_aux import CannyDetector
+                detector = CannyDetector()
+                _DETECTOR_CACHE["canny"] = detector
+            except Exception:
+                detector = None
+        if detector is not None:
+            out = detector(rgb)
+        else:
+            try:
+                import numpy
+                import cv2
+                out = Image.fromarray(cv2.Canny(numpy.array(rgb), 100, 200))
+            except Exception as exc:
+                from PIL import ImageFilter
+                print(f"[controlnet] canny via PIL edge fallback ({exc})", file=sys.stderr, flush=True)
+                out = rgb.convert("L").filter(ImageFilter.FIND_EDGES)
+        return out.convert("RGB").resize((width, height))
+    if kind not in _CONTROL_TYPES:
+        raise RuntimeError(
+            f"unknown control type: {kind} (expected one of {', '.join(_CONTROL_TYPES)})"
+        )
+    detector = _aux_detector(kind)
+    if kind == "scribble":
+        out = detector(rgb, scribble=True)
+    else:
+        out = detector(rgb)
+    return out.convert("RGB").resize((width, height))
+
+
+def do_preprocess(job):
+    """Extract a control map on demand (the rack's Preview button, no render)."""
+    image_b64 = job.get("image")
+    if not image_b64:
+        raise RuntimeError("preprocess needs an 'image' (base64 or data URL)")
+    from PIL import Image
+    raw = base64.b64decode(str(image_b64).split(",")[-1])
+    src = Image.open(io.BytesIO(raw))
+    width = int(job.get("width") or src.width)
+    height = int(job.get("height") or src.height)
+    out = preprocess_control(job.get("type"), src, width, height)
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return {"map_base64": base64.b64encode(buf.getvalue()).decode("ascii")}
+
+
 def do_generate(job, state):
     """Render one image, reusing state['pipe'] when the model hasn't changed.
 
@@ -365,6 +498,7 @@ def do_generate(job, state):
         if state.get("pipe") is not None:
             state["pipe"] = None
             state["lora_key"] = None
+            state["controlnets"] = {}
             try:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -403,40 +537,60 @@ def do_generate(job, state):
         return callback_kwargs
 
     width, height = int(job.get("width", 512)), int(job.get("height", 512))
-    control = job.get("controlNet")
+    controls = normalize_controls(job)
     init_b64 = job.get("initImage")
     mask_b64 = job.get("maskImage")
 
-    if control and control.get("image"):
-        # ControlNet: structural guidance from a control image (canny by default).
+    dropped = []
+    cn_models, cn_images, cn_scales = [], [], []
+    is_xl = False
+    if controls:
+        # ControlNet: structural guidance from per-slot control images. Detect the
+        # family from the loaded UNet's cross-attention dim (768=SD1.5, 1024=SD2.1,
+        # 2048=SDXL) so the picked ControlNets always match the checkpoint. Types
+        # the family can't do are dropped (returned loudly), never fatal.
         from PIL import Image
-        raw = base64.b64decode(str(control["image"]).split(",")[-1])
-        ctrl_img = Image.open(io.BytesIO(raw)).convert("RGB").resize((width, height))
-        try:
-            from controlnet_aux import CannyDetector
-            ctrl_img = CannyDetector()(ctrl_img).resize((width, height))
-        except Exception as exc:
-            print(f"[controlnet] preprocess skipped ({exc}); using raw image", file=sys.stderr, flush=True)
-        # Pick the ControlNet by the base UNet's cross-attention dim so it matches
-        # the loaded checkpoint: 768=SD1.5, 1024=SD2.1, 2048=SDXL.
         try:
             cross_dim = int(pipe.unet.config.cross_attention_dim)
         except Exception:
             cross_dim = 768
-        from diffusers import ControlNetModel
         if cross_dim >= 2048:
-            cn_id, is_xl = "diffusers/controlnet-canny-sdxl-1.0", True
+            cn_family, is_xl = "SDXL", True
         elif cross_dim >= 1024:
-            cn_id, is_xl = "thibaud/controlnet-sd21-canny-diffusers", False
+            cn_family, is_xl = "SD2.1", False
         else:
-            cn_id, is_xl = "lllyasviel/sd-controlnet-canny", False
+            cn_family, is_xl = "SD1.5", False
+        cn_map = (job.get("controlnetMap") or {}).get(cn_family) or {}
+        cn_cache = state.setdefault("controlnets", {})
         cn_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        cn_model = ControlNetModel.from_pretrained(cn_id, torch_dtype=cn_dtype)
+        for control in controls:
+            cn_type = str(control.get("model") or "canny").lower()
+            cn_id = cn_map.get(cn_type)
+            if not cn_id:
+                dropped.append({
+                    "type": cn_type,
+                    "reason": f"no {cn_type} ControlNet is available for {cn_family} checkpoints",
+                })
+                continue
+            raw = base64.b64decode(str(control["image"]).split(",")[-1])
+            ctrl_img = preprocess_control(cn_type, Image.open(io.BytesIO(raw)), width, height)
+            cache_key = cn_family + ":" + cn_type
+            if cache_key not in cn_cache:
+                from diffusers import ControlNetModel
+                cn_cache[cache_key] = ControlNetModel.from_pretrained(cn_id, torch_dtype=cn_dtype)
+            cn_models.append(cn_cache[cache_key])
+            cn_images.append(ctrl_img)
+            cn_scales.append(float(control.get("strength", 1.0)))
+
+    if cn_models:
         if is_xl:
             from diffusers import StableDiffusionXLControlNetPipeline as CNPipe
         else:
             from diffusers import StableDiffusionControlNetPipeline as CNPipe
-        cnp = CNPipe.from_pipe(pipe, controlnet=cn_model)
+        # One control -> a single ControlNetModel; several -> pass the list so
+        # diffusers forms a MultiControlNet (images/scales become lists too).
+        one = len(cn_models) == 1
+        cnp = CNPipe.from_pipe(pipe, controlnet=cn_models[0] if one else cn_models)
         try:
             cnp.enable_model_cpu_offload()
         except Exception:
@@ -444,8 +598,8 @@ def do_generate(job, state):
         cn_call = dict(
             prompt=str(job.get("prompt", "")),
             negative_prompt=str(job.get("negativePrompt", "")) or None,
-            image=ctrl_img,
-            controlnet_conditioning_scale=float(control.get("strength", 1.0)),
+            image=cn_images[0] if one else cn_images,
+            controlnet_conditioning_scale=cn_scales[0] if one else cn_scales,
             num_inference_steps=steps,
             guidance_scale=guidance,
             generator=generator,
@@ -524,7 +678,10 @@ def do_generate(job, state):
     report({"phase": "done", "step": steps, "steps": steps})
     buf = io.BytesIO()
     image.save(buf, format="PNG")
-    return {"image_base64": base64.b64encode(buf.getvalue()).decode("ascii"), "seed": seed}
+    result = {"image_base64": base64.b64encode(buf.getvalue()).decode("ascii"), "seed": seed}
+    if dropped:
+        result["droppedControls"] = dropped
+    return result
 
 
 def serve():
@@ -546,6 +703,8 @@ def serve():
             payload = req.get("payload") or {}
             if command == "generate":
                 out = do_generate(payload, state)
+            elif command == "preprocess":
+                out = do_preprocess(payload)
             elif command == "ping":
                 out = {"ok": True}
             elif command == "status":
@@ -576,6 +735,9 @@ def main():
         out = do_generate(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
         print(json.dumps(out))
         return
+    if command == "preprocess":
+        print(json.dumps(do_preprocess(json.load(sys.stdin))))
+        return
     raise SystemExit(f"unknown command: {command}")
 
 
@@ -586,6 +748,46 @@ if __name__ == "__main__":
 
 def model_id() -> str:
     return _MODEL_ID
+
+
+def estimate_family(model_ref: dict[str, Any] | None) -> str:
+    """Best-effort 'SD1.5' | 'SD2.1' | 'SDXL' WITHOUT torch or loading weights.
+
+    Single-file checkpoints: read the safetensors JSON header (8-byte little-endian
+    length + JSON, tensor names/shapes only) and apply the same key heuristics the
+    worker's detect_single_file_family uses, plus SD2.1 signals (open_clip text
+    encoder prefix / 1024-dim cross-attention keys). Hub ids: name heuristics —
+    'xl' is checked first so 'sdxl-turbo' never reads as SD2.1; 'sd-turbo' is
+    SD2.1-based. Render time re-detects from pipe.unet.config.cross_attention_dim,
+    so this only has to be right enough for the capabilities route."""
+    ref = model_ref or {"kind": "hub"}
+    if ref.get("kind") == "file":
+        path = str(ref.get("path", ""))
+        try:
+            with open(path, "rb") as fh:
+                header_len = struct.unpack("<Q", fh.read(8))[0]
+                header = json.loads(fh.read(header_len))
+            keys = header.keys()
+            if any(("conditioner.embedders.1" in k) or ("add_embedding" in k) or (".label_emb." in k) for k in keys):
+                return "SDXL"
+            # open_clip text encoder layout — the SD2.x single-file signature.
+            if any(k.startswith("cond_stage_model.model.") for k in keys):
+                return "SD2.1"
+            for key, meta in header.items():
+                if key.endswith("attn2.to_k.weight") and isinstance(meta, dict):
+                    shape = meta.get("shape") or []
+                    if len(shape) == 2 and int(shape[1]) == 1024:
+                        return "SD2.1"
+            return "SD1.5"
+        except Exception:
+            hint = (str(ref.get("family", "")) + " " + Path(path).name).lower()
+            return "SDXL" if "xl" in hint else "SD1.5"
+    hub_id = str(ref.get("id") or _MODEL_ID).lower()
+    if "xl" in hub_id:
+        return "SDXL"
+    if any(sig in hub_id for sig in ("sd-turbo", "sd2", "stable-diffusion-2", "v2-")):
+        return "SD2.1"
+    return "SD1.5"
 
 
 def _app_data_dir() -> Path:
@@ -1012,6 +1214,7 @@ def _pip_install(
     no_deps: bool = False,
     index_url: str | None = None,
     force_reinstall: bool = False,
+    only_binary: bool = False,
 ) -> None:
     python = _find_python()
     if not python:
@@ -1024,6 +1227,10 @@ def _pip_install(
         cmd.append("--force-reinstall")
     if no_deps:
         cmd.append("--no-deps")
+    if only_binary:
+        # Never build from source (some pinned sci-stack versions ship an sdist
+        # that would try to compile against a mismatched numpy/toolchain).
+        cmd += ["--only-binary=:all:"]
     cmd += args
     try:
         _run(cmd, timeout=timeout)
@@ -1087,11 +1294,27 @@ def install_runtime() -> dict[str, Any]:
 
     _reset_site_dir()
     _pip_install(["torch"], index_url=_torch_index_url(), force_reinstall=True, timeout=2400)
+    # torchvision from the same index so its CUDA build matches torch (timm and
+    # several controlnet_aux detectors import it). --no-deps: torch is present.
+    _pip_install(["torchvision"], index_url=_torch_index_url(), timeout=2400, no_deps=True)
     _pip_install(
         ["huggingface-hub", "filelock", "numpy==1.26.4", "packaging", "pillow", "pyyaml", "regex", "requests", "tqdm", "tokenizers==0.19.1", "safetensors"],
         timeout=1200,
     )
     _pip_install(["diffusers==0.30.3", "transformers==4.44.2", "accelerate", "kornia"], timeout=1200, no_deps=True)
+    # ControlNet preprocessors (controlnet_aux + its leaf deps, named explicitly).
+    # --no-deps because their dependency trees reach torch/numpy: a with-deps
+    # install would pull PyPI's CPU-only torch (or numpy 2.x) over the CUDA torch
+    # and pinned numpy installed above.
+    # scipy stays UNpinned so it matches the runtime's numpy ABI (a cp312 runtime
+    # gets a numpy<2 scipy, a cp313/cp314 runtime gets a numpy>=2 scipy).
+    # only_binary: never fall back to a source build (no toolchain on end-user PCs).
+    _pip_install(
+        ["opencv-python-headless", "einops", "scipy", "timm==0.9.16", "controlnet_aux==0.0.10"],
+        timeout=1800,
+        no_deps=True,
+        only_binary=True,
+    )
     _write_python_manifest(python)
     _python_cache = python
     status = download_model()
@@ -1109,6 +1332,8 @@ def generate(job: dict) -> dict:
     status = model_status()
     if not status.get("dependenciesReady"):
         raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
+    # The worker resolves ControlNet repos from the job so it never duplicates the map.
+    job["controlnetMap"] = CONTROLNET_MODELS
     # Persistent worker: the model stays resident, so only the first render pays the
     # multi-GB load cost; later renders reuse it (reloading only on a model switch).
     try:
@@ -1120,3 +1345,48 @@ def generate(job: dict) -> dict:
     if isinstance(out, dict) and out.get("error"):
         raise RuntimeError(out["error"])
     return out
+
+
+def preprocess(job: dict) -> dict:
+    """Run one ControlNet preprocessor in the worker (rack Preview, no render).
+
+    job: {"type": <control type>, "image": <base64 or data URL>, "width"?, "height"?}
+    -> {"map_base64": "<raw base64 PNG>"}."""
+    status = model_status()
+    if not status.get("dependenciesReady"):
+        raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
+    job = dict(job)
+    job["controlnetMap"] = CONTROLNET_MODELS  # harmless; keeps worker inputs uniform
+    try:
+        out = _persistent_worker.request("preprocess", job, timeout=900)
+    except RuntimeError as exc:
+        if "worker exited unexpectedly" not in str(exc).lower():
+            raise
+        out = _worker("preprocess", job, timeout=900)
+    if isinstance(out, dict) and out.get("error"):
+        raise RuntimeError(out["error"])
+    return out
+
+
+def capabilities(model_query: str | None, shelf: list | None, model_dir: str | None) -> dict[str, Any]:
+    """ControlNet capabilities for a shelf model id — pure metadata, no torch.
+
+    Resolves the id to a modelRef exactly the way /generate does (server's
+    _model_ref_for), estimates the family, and reads the type list off
+    CONTROLNET_MODELS. A missing query resolves to the same default model
+    /generate would use."""
+    # server imports this module at load, so resolve its _model_ref_for lazily.
+    # Prefer the already-loaded instance: 'server' when imported as a module
+    # (tests), '__main__' when server.py IS the process (frozen sidecar, manual
+    # runs) — a fresh import only as a last resort.
+    _model_ref_for = None
+    for mod_name in ("server", "__main__"):
+        candidate = getattr(sys.modules.get(mod_name), "_model_ref_for", None)
+        if candidate is not None:
+            _model_ref_for = candidate
+            break
+    if _model_ref_for is None:
+        from server import _model_ref_for
+    model_ref = _model_ref_for(str(model_query or ""), list(shelf or []), model_dir)
+    family = estimate_family(model_ref)
+    return {"family": family, "types": list(CONTROLNET_MODELS.get(family, {}))}

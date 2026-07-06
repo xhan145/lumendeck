@@ -1,6 +1,7 @@
 import { CAPSULES } from './capsules';
+import { CONTROLNET_TYPE_NAMES, estimateFamilyFromModelId, supportedTypes } from './controlnet';
 import { findAsset, loraCompatible, type ModelAsset, type ModelFamily } from './shelf';
-import type { LoraSlot, Workflow } from './types';
+import type { ControlSlot, LoraSlot, Workflow } from './types';
 
 export type HealthCode =
   | 'missing-model'
@@ -11,6 +12,8 @@ export type HealthCode =
   | 'video-budget'
   | 'vram-risk'
   | 'lora-compat'
+  | 'controlnet-compat'
+  | 'controlnet-stack'
   | 'disconnected';
 
 export interface HealthIssue {
@@ -134,6 +137,33 @@ export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
       if (!compat.ok) {
         add({ severity: 'warning', code: 'lora-compat', message: compat.warning!, nodeId: rackNode?.id });
       }
+    }
+  }
+
+  // ControlNet rack: type availability per model family + stack depth
+  const controlRackNode = wf.nodes.find((node) => node.kind === 'controlNetRack');
+  const controlSlots = ((controlRackNode?.params.slots as ControlSlot[] | undefined) ?? [])
+    .filter((slot) => slot.enabled);
+  if (controlSlots.length > 0) {
+    const family = estimateFamilyFromModelId(checkpointId);
+    const available = supportedTypes(family);
+    for (const slot of controlSlots) {
+      if (!available.includes(slot.type)) {
+        add({
+          severity: 'warning',
+          code: 'controlnet-compat',
+          message: `${CONTROLNET_TYPE_NAMES[slot.type] ?? slot.type} is not available for this model — it will be skipped.`,
+          nodeId: controlRackNode?.id,
+        });
+      }
+    }
+    if (controlSlots.length > 2) {
+      add({
+        severity: 'warning',
+        code: 'controlnet-stack',
+        message: '3+ stacked ControlNets is heavy on 8 GB GPUs.',
+        nodeId: controlRackNode?.id,
+      });
     }
   }
 

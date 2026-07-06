@@ -27,6 +27,7 @@ export function QueuePanel() {
             </div>
           </div>
           {job.fallbackReason ? <div className="queue-warning">{job.fallbackReason}</div> : null}
+          {job.warning ? <div className="queue-warning">{job.warning}</div> : null}
           {job.error && !job.fallbackReason ? <div className="queue-error">{job.error}</div> : null}
         </div>
       ))}

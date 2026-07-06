@@ -1,5 +1,5 @@
 import { findAsset, type ModelAsset } from './shelf';
-import type { LoraSlot, Workflow } from './types';
+import type { ControlSlot, LoraSlot, Workflow } from './types';
 import { findNode } from './workflow';
 
 export interface ExportManifest {
@@ -14,6 +14,8 @@ export interface ExportManifest {
   media: { type: 'image' | 'video'; format: string; frameCount: number; fps: number };
   model: { id: string; name: string; family: string; hash: string } | null;
   loras: { id: string; name: string; weight: number; hash: string }[];
+  /** ControlNet guidance used for this render (rack slots + legacy Apply ControlNet). */
+  controlNets: { type: string; strength: number }[];
   graphVersion: number;
   graph: Workflow;
   render?: {
@@ -40,8 +42,24 @@ export function buildManifest(
   const model = findNode(wf, 'model');
   const rack = findNode(wf, 'loraRack');
 
+  const controlRack = findNode(wf, 'controlNetRack');
+  const controlNetApply = findNode(wf, 'controlNetApply');
+  const imageInput = findNode(wf, 'imageLoader');
+
   const checkpoint = model ? findAsset(shelf, String(model.params.assetId ?? '')) : undefined;
   const slots = ((rack?.params.slots as LoraSlot[] | undefined) ?? []).filter((s) => s.enabled);
+
+  // Mirror buildRenderJob's collection: enabled rack slots with an image, then
+  // the legacy singular controlNetApply + Load Image pairing when present.
+  const controlNets = ((controlRack?.params.slots as ControlSlot[] | undefined) ?? [])
+    .filter((s) => s.enabled && s.image)
+    .map((s) => ({ type: s.type as string, strength: s.strength }));
+  if (controlNetApply && imageInput?.params.image) {
+    controlNets.push({
+      type: String(controlNetApply.params.type ?? 'canny'),
+      strength: Number(controlNetApply.params.strength ?? 1),
+    });
+  }
 
   return {
     app: 'LumenDeck',
@@ -77,6 +95,7 @@ export function buildManifest(
         hash: asset?.hash ?? 'unknown',
       };
     }),
+    controlNets,
     graphVersion: wf.version,
     graph: wf,
   };

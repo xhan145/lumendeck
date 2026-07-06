@@ -153,6 +153,24 @@ export class HttpAdapter implements BackendAdapter {
     }
   }
 
+  /**
+   * On-demand ControlNet preprocess preview: extracts the guidance map (edges,
+   * depth, pose skeleton, …) for one control image without spending a render.
+   * Returns the raw base64 PNG of the map.
+   */
+  async controlNetPreprocess(req: { type: string; image: string; width?: number; height?: number }): Promise<string> {
+    const res = await fetch(`${this.base}/controlnet/preprocess`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    const data = (await res.json().catch(() => null)) as { map_base64?: string; error?: string } | null;
+    if (!res.ok || !data?.map_base64) {
+      throw new Error(data?.error ?? `Bridge /controlnet/preprocess failed: ${res.status}`);
+    }
+    return data.map_base64;
+  }
+
   async diffusersStatus(): Promise<BridgeModelStatus> {
     const res = await fetch(`${this.base}/diffusers/status`);
     if (!res.ok) throw new Error(`Bridge /diffusers/status failed: ${res.status}`);
@@ -247,6 +265,7 @@ export class HttpAdapter implements BackendAdapter {
         seed: number;
         fallback?: boolean;
         fallbackReason?: string;
+        droppedControls?: { type: string; reason: string }[];
       };
       const mediaType = data.mediaType ?? (data.video_base64 ? 'video' : 'image');
       const mimeType = data.mimeType ?? (mediaType === 'video' ? 'image/gif' : 'image/png');
@@ -262,6 +281,7 @@ export class HttpAdapter implements BackendAdapter {
         seed: data.seed,
         fallback: data.fallback,
         fallbackReason: data.fallbackReason,
+        droppedControls: data.droppedControls,
       };
     } finally {
       polling = false;

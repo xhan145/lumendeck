@@ -6,6 +6,8 @@ Exposes the same contract as the old FastAPI bridge:
   GET  /diffusers/status -> Diffusers dependency/model status
   POST /diffusers/install -> install managed Diffusers runtime + model
   POST /diffusers/download -> download/load the configured Diffusers model
+  GET  /controlnet/capabilities?model=<shelf id> -> {"family": "...", "types": [...]}
+  POST /controlnet/preprocess -> {"map_base64": "..."} (on-demand control-map preview)
   POST /generate -> {"image_base64": "...", "seed": int}
 
 `build_response` is a pure function so it can be unit-tested without binding a socket.
@@ -41,7 +43,7 @@ except Exception:
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/diffusers", "/progress", "/civitai")
+API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/diffusers", "/progress", "/civitai", "/controlnet")
 
 
 def _civitai_dest(file_name: str, asset_type: str) -> str:
@@ -115,6 +117,19 @@ CORS = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
 }
+
+# ControlNet type superset (SD1.5 supports the full set). Fallback literal only:
+# the authoritative table is diffusers_backend.CONTROLNET_MODELS — this keeps
+# /controlnet/capabilities answering harmlessly when that module is missing.
+_SD15_CONTROL_TYPES = ("canny", "depth", "pose", "scribble", "lineart", "softedge", "tile")
+
+
+def _all_control_types() -> list:
+    if _HAS_DIFFUSERS_MODULE:
+        table = getattr(diffusers_backend, "CONTROLNET_MODELS", None)
+        if table:
+            return list(table.get("SD1.5", {}))
+    return list(_SD15_CONTROL_TYPES)
 
 
 def _diffusers_available() -> bool:
@@ -263,6 +278,35 @@ def _shelf_with_real() -> list:
     return shelf
 
 
+def _asset_abs_path(asset: dict, model_root: str | None) -> str | None:
+    """Absolute on-disk path for a shelf asset, or None when there is no real file."""
+    rel = str(asset.get("path", ""))
+    if os.path.isabs(rel) and os.path.isfile(rel):
+        return os.path.normpath(rel)
+    if model_root:
+        candidate = os.path.normpath(os.path.join(model_root, rel))
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _model_ref_for(model_id: str, shelf: list, model_root: str | None) -> dict:
+    """Resolve a shelf model id to the worker's modelRef (read-only, pure).
+
+    Shared by /generate (via _resolve_render_targets) and /controlnet/capabilities
+    so both answer for exactly the same model. Unknown/demo ids resolve to the
+    default hub model."""
+    if model_id in HUB_MODELS:
+        hub = HUB_MODELS[model_id]
+        return {"kind": "hub", "id": hub} if hub else {"kind": "hub"}
+    assets = {str(a.get("id")): a for a in shelf}
+    asset = assets.get(model_id)
+    path = _asset_abs_path(asset, model_root) if asset and asset.get("assetType") == "checkpoint" else None
+    if path:
+        return {"kind": "file", "path": path, "family": asset.get("family", "")}
+    return {"kind": "hub"}  # default model
+
+
 def _resolve_render_targets(job: dict, shelf: list, model_root: str | None) -> dict:
     """Annotate a render job with modelRef/loraFiles for the diffusers worker.
 
@@ -270,35 +314,14 @@ def _resolve_render_targets(job: dict, shelf: list, model_root: str | None) -> d
     Unknown/demo assets resolve to the default hub model / are skipped.
     """
     assets = {str(a.get("id")): a for a in shelf}
-
-    def abs_path(asset: dict) -> str | None:
-        rel = str(asset.get("path", ""))
-        if os.path.isabs(rel) and os.path.isfile(rel):
-            return os.path.normpath(rel)
-        if model_root:
-            candidate = os.path.normpath(os.path.join(model_root, rel))
-            if os.path.isfile(candidate):
-                return candidate
-        return None
-
-    model_id = str(job.get("modelId") or "")
-    if model_id in HUB_MODELS:
-        hub = HUB_MODELS[model_id]
-        job["modelRef"] = {"kind": "hub", "id": hub} if hub else {"kind": "hub"}
-    else:
-        asset = assets.get(model_id)
-        path = abs_path(asset) if asset and asset.get("assetType") == "checkpoint" else None
-        if path:
-            job["modelRef"] = {"kind": "file", "path": path, "family": asset.get("family", "")}
-        else:
-            job["modelRef"] = {"kind": "hub"}  # default model
+    job["modelRef"] = _model_ref_for(str(job.get("modelId") or ""), shelf, model_root)
 
     lora_files = []
     for lora in job.get("loras") or []:
         asset = assets.get(str(lora.get("id")))
         if not asset or asset.get("assetType") != "lora":
             continue
-        path = abs_path(asset)
+        path = _asset_abs_path(asset, model_root)
         if not path:
             print(f"[models] skipping LoRA without a real file: {lora.get('id')}", flush=True)
             continue
@@ -433,6 +456,42 @@ def build_response(method: str, path: str, body: bytes):
             return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 503, headers, json.dumps({"error": str(exc), "status": _diffusers_status()}).encode()
+
+    if method == "GET" and path.startswith("/controlnet/capabilities"):
+        headers["Content-Type"] = "application/json"
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
+        model_query = qs.get("model", [""])[0]
+        if not _HAS_DIFFUSERS_MODULE:
+            # Harmless static answer (never a 500) so the UI can still draw the rack.
+            payload = {"family": "SD1.5", "types": list(_SD15_CONTROL_TYPES), "available": False}
+            return 200, headers, json.dumps(payload).encode()
+        try:
+            caps = diffusers_backend.capabilities(model_query or None, _shelf_with_real(), discover_model_dir())
+            return 200, headers, json.dumps(caps).encode()
+        except Exception as exc:
+            payload = {"family": "SD1.5", "types": list(_SD15_CONTROL_TYPES), "available": False, "error": str(exc)}
+            return 200, headers, json.dumps(payload).encode()
+
+    if method == "POST" and path == "/controlnet/preprocess":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_DIFFUSERS_MODULE:
+            return 503, headers, json.dumps({"error": "diffusers backend module is not available in this build"}).encode()
+        try:
+            req = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        ctrl_type = str(req.get("type", "") or "").lower()
+        if ctrl_type not in _all_control_types():
+            return 400, headers, json.dumps({
+                "error": f"unknown control type: {ctrl_type or '(missing)'}. Expected one of: {', '.join(_all_control_types())}",
+            }).encode()
+        if not req.get("image"):
+            return 400, headers, json.dumps({"error": "image (base64 or data URL) is required"}).encode()
+        try:
+            result = diffusers_backend.preprocess(req)
+            return 200, headers, json.dumps(result).encode()
+        except Exception as exc:
+            return 503, headers, json.dumps({"error": f"preprocess failed: {exc}"}).encode()
 
     if method == "POST" and path == "/model-folder":
         headers["Content-Type"] = "application/json"

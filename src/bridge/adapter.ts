@@ -1,4 +1,4 @@
-import type { LoraSlot, Workflow } from '../core/types';
+import type { ControlSlot, LoraSlot, Workflow } from '../core/types';
 import type { PipelineTimings } from '../turboForge/types';
 import { findNode } from '../core/workflow';
 
@@ -29,6 +29,12 @@ export interface RenderJob {
   hiresDenoise: number;
   hiresSteps: number;
   controlNet?: { model: string; strength: number; image: string };
+  /**
+   * MultiControlNet stack. 'model' carries the TYPE string
+   * ('canny'|'depth'|'pose'|'scribble'|'lineart'|'softedge'|'tile'), matching
+   * the legacy singular controlNet convention above.
+   */
+  controlNets?: Array<{ model: string; strength: number; image: string }>;
 }
 
 export interface RenderResult {
@@ -42,6 +48,8 @@ export interface RenderResult {
   /** true when a real render was expected but the backend fell back to procedural */
   fallback?: boolean;
   fallbackReason?: string;
+  /** controls the backend skipped because the loaded model family has no weights for them */
+  droppedControls?: { type: string; reason: string }[];
 }
 
 export interface RenderProgress {
@@ -81,9 +89,23 @@ export function buildRenderJob(wf: Workflow): RenderJob {
   const controlNet = findNode(wf, 'controlNetApply');
   const hires = findNode(wf, 'hiresFix');
   const exportNode = findNode(wf, 'export');
+  const controlRack = findNode(wf, 'controlNetRack');
   const slots = ((rack?.params.slots as LoraSlot[] | undefined) ?? []).filter((s) => s.enabled);
   const videoEnabled = Boolean(video?.params.enabled);
   const exportFormat = String(exportNode?.params.format ?? '');
+
+  // ControlNet stack: enabled rack slots that carry a control image, followed by
+  // the legacy singular controlNetApply + Load Image pairing when present.
+  const controlEntries = ((controlRack?.params.slots as ControlSlot[] | undefined) ?? [])
+    .filter((s) => s.enabled && s.image)
+    .map((s) => ({ model: s.type as string, strength: s.strength, image: s.image }));
+  if (controlNet && imageInput?.params.image) {
+    controlEntries.push({
+      model: String(controlNet.params.type ?? 'canny'),
+      strength: Number(controlNet.params.strength ?? 1),
+      image: String(imageInput.params.image),
+    });
+  }
 
   return {
     prompt: String(prompt?.params.positive ?? ''),
@@ -113,15 +135,10 @@ export function buildRenderJob(wf: Workflow): RenderJob {
     hiresScale: Number(hires?.params.scale ?? 1),
     hiresDenoise: Number(hires?.params.denoise ?? 0.35),
     hiresSteps: Number(hires?.params.steps ?? 14),
-    // ControlNet: structural guidance using the Load Image capsule's image as the
-    // control source when a ControlNet Apply capsule is present.
-    controlNet: controlNet && imageInput?.params.image
-      ? {
-          model: String(controlNet.params.type ?? 'canny'),
-          strength: Number(controlNet.params.strength ?? 1),
-          image: String(imageInput.params.image),
-        }
-      : undefined,
+    // ControlNet: the full stack when any controls are present; the first entry
+    // is mirrored into the legacy singular field for old-sidecar compatibility.
+    controlNets: controlEntries.length > 0 ? controlEntries : undefined,
+    controlNet: controlEntries.length > 0 ? controlEntries[0] : undefined,
   };
 }
 

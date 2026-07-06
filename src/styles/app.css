@@ -977,6 +977,15 @@
 .rack-presets-row { display: flex; gap: 8px; }
 .rack-presets-row input { flex: 1; min-width: 0; }
 .preset-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ===== ControlNet rack ===== */
+.cn-row { grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) 48px auto; }
+.cn-row select { min-width: 0; }
+.cn-media { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cn-media input[type='file'] { flex: 1; min-width: 140px; font-size: 12px; }
+.cn-thumb { height: 40px; border-radius: 6px; border: 1px solid var(--ld-border); }
+.cn-map { height: 64px; border-radius: 6px; border: 1px solid var(--ld-border); }
+.cn-pending { font-size: 12px; color: var(--ld-text-faint); }
 .preset-chip button.apply { color: var(--ld-cyan); }
 .preset-chip button.del { color: var(--ld-text-faint); display: inline-flex; }
 .preset-chip button.del:hover { color: var(--ld-danger); }
