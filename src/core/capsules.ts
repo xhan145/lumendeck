@@ -301,6 +301,16 @@ export const CAPSULES: Record<CapsuleKind, CapsuleDef> = {
       num('endPercent', 'End %', 0, 1, 0.05, 1),
     ],
   },
+  controlNetRack: {
+    kind: 'controlNetRack',
+    category: 'control',
+    title: 'ControlNet Rack',
+    accent: 'var(--cap-control)',
+    description: 'Stack structural guidance: depth, pose, edges and more.',
+    inputs: [s('conditioning', 'Conditioning', 'conditioning')],
+    outputs: [s('conditioning', 'Conditioning', 'conditioning')],
+    params: [{ id: 'slots', label: 'Control slots', kind: 'text', default: [] as unknown }],
+  },
   cannyPreprocessor: {
     kind: 'cannyPreprocessor',
     category: 'control',

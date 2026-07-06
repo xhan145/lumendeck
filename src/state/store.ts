@@ -70,6 +70,8 @@ export interface QueueJob {
   error?: string;
   fallback?: boolean;
   fallbackReason?: string;
+  /** non-fatal render warning, e.g. skipped ControlNets */
+  warning?: string;
   actualBackend?: string;
 }
 
@@ -619,6 +621,13 @@ export const useStudio = create<StudioState>((set, get) => {
           fallbackReason = `Real render failed - showing procedural placeholder. ${result.fallbackReason ?? ''}`.trim();
           patch({ error: fallbackReason, fallback: true, fallbackReason, actualBackend: 'procedural' });
         }
+        // Some/all requested ControlNets were unsupported for the loaded model
+        // family — the render still succeeded, but say so loudly (never silent).
+        const droppedControls = result.droppedControls ?? [];
+        const droppedMessage = droppedControls.length > 0
+          ? `Skipped controls: ${droppedControls.map((d) => `${d.type} (${d.reason})`).join(', ')}`
+          : '';
+        if (droppedMessage) patch({ warning: droppedMessage });
         const fallback = usedFallback || Boolean(result.fallback);
         const actualBackend = usedFallback ? 'mock' : result.fallback ? 'procedural' : backendSettings.selectedBackend;
         const renderMode = fallback
@@ -731,12 +740,13 @@ export const useStudio = create<StudioState>((set, get) => {
           turboLastBenchmark: enrichedBenchmark,
         });
         patch({
-          status: fallback ? 'done_with_warning' : 'done',
+          status: fallback || droppedMessage ? 'done_with_warning' : 'done',
           progress: 1,
-          phase: fallback ? 'done with warning' : 'done',
+          phase: fallback || droppedMessage ? 'done with warning' : 'done',
           previewDataUrl: result.dataUrl,
           fallback,
           fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
+          warning: droppedMessage || undefined,
           actualBackend,
         });
       } catch (err) {

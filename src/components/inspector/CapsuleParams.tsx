@@ -49,6 +49,14 @@ export function CapsuleParams({ nodeId, limit }: { nodeId: string; limit?: numbe
             </p>
           );
         }
+        if (node.kind === 'controlNetRack' && param.id === 'slots') {
+          const count = Array.isArray(node.params.slots) ? node.params.slots.length : 0;
+          return (
+            <p key={param.id} className="field-help">
+              {count} control slot{count === 1 ? '' : 's'} — manage them in the ControlNet Rack panel.
+            </p>
+          );
+        }
         return (
           <ParamField
             key={param.id}

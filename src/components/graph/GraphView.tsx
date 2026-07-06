@@ -24,6 +24,7 @@ function nodeSummary(kind: CapsuleKind, params: Record<string, unknown>): string
     case 'prompt': return String(params.positive ?? '').slice(0, 60) || 'No prompt';
     case 'model': return params.assetId ? String(params.assetId) : 'No checkpoint';
     case 'loraRack': return `${Array.isArray(params.slots) ? params.slots.length : 0} LoRA slots`;
+    case 'controlNetRack': return `${Array.isArray(params.slots) ? params.slots.length : 0} control slots`;
     case 'checkpointLoader': return String(params.checkpoint ?? 'model.safetensors');
     case 'clipTextEncode': return String(params.text ?? '').slice(0, 60) || 'No text';
     case 'sampler': return `${params.sampler} | ${params.steps} steps | cfg ${params.cfg}`;

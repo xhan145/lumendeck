@@ -38,6 +38,7 @@ export type CapsuleKind =
   | 'control'
   | 'controlNetLoader'
   | 'controlNetApply'
+  | 'controlNetRack'
   | 'cannyPreprocessor'
   | 'depthPreprocessor'
   | 'posePreprocessor'
@@ -145,6 +146,16 @@ export interface Workflow {
 export interface LoraSlot {
   assetId: string;
   weight: number;
+  enabled: boolean;
+}
+
+/** One stacked ControlNet in the ControlNet Rack. Each slot carries its own control image. */
+export interface ControlSlot {
+  id: string;
+  type: 'canny' | 'depth' | 'pose' | 'scribble' | 'lineart' | 'softedge' | 'tile';
+  strength: number;
+  /** base64 data URL of the control source image ('' when not uploaded yet) */
+  image: string;
   enabled: boolean;
 }
 
