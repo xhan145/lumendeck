@@ -1,19 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useStudio, type ViewId } from './state/store';
 import { APP_VERSION } from './state/storeConstants';
-import { BackendSettingsPanel } from './components/BackendSettingsPanel';
-import { TurboForgePanel } from './components/TurboForgePanel';
 import { Gallery } from './components/gallery/Gallery';
 import { GuideView } from './components/guide/GuideView';
 import { GraphView } from './components/graph/GraphView';
-import { HealthPanel } from './components/health/HealthPanel';
 import { BrandMark, Icon } from './components/icons';
-import { Inspector } from './components/inspector/Inspector';
-import { LoraRack } from './components/rack/LoraRack';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
-import { QueuePanel } from './components/queue/QueuePanel';
 import { RecipeView } from './components/recipe/RecipeView';
+import { ControlsPage } from './pages/ControlsPage';
+import { DiagnosticsPage } from './pages/DiagnosticsPage';
+import { PerformancePage } from './pages/PerformancePage';
+import { SettingsPage } from './pages/SettingsPage';
 import './styles/base.css';
 import './styles/app.css';
 
@@ -23,6 +21,10 @@ const VIEW_TITLES: Record<ViewId, string> = {
   graph: 'Graph',
   shelf: 'Model Shelf',
   gallery: 'Gallery',
+  controls: 'Controls',
+  settings: 'Settings',
+  diagnostics: 'Diagnostics',
+  performance: 'Performance',
 };
 
 function HealthChip() {
@@ -50,94 +52,51 @@ function BridgeStatus() {
   );
 }
 
-function RenderButton() {
-  const health = useStudio((s) => s.health);
-  const enqueueRender = useStudio((s) => s.enqueueRender);
-  const enqueueBatch = useStudio((s) => s.enqueueBatch);
-  const [batch, setBatch] = useState(1);
-  const errors = health.filter((i) => i.severity === 'error');
-  const blocked = errors.length > 0;
-  return (
-    <section className="rail-section">
-      <button className="btn primary" type="button" disabled={blocked} onClick={() => (batch > 1 ? void enqueueBatch(batch) : void enqueueRender())} style={{ width: '100%', justifyContent: 'center' }}>
-        {Icon.play()} {batch > 1 ? `Render ×${batch}` : 'Render'}
-      </button>
-      <label className="field-inline" style={{ marginTop: 8 }}>
-        <span className="field-label">Batch (seed grid)</span>
-        <input type="number" min={1} max={16} value={batch} style={{ width: 64 }}
-          onChange={(e) => setBatch(Math.max(1, Math.min(16, Number(e.target.value) || 1)))} />
-      </label>
-      {blocked ? (
-        <p className="field-help" style={{ color: 'var(--ld-danger)', marginTop: 8 }}>
-          Fix {errors.length} graph error{errors.length === 1 ? '' : 's'} before rendering.
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-function SideRail({ open, onClose }: { open: boolean; onClose: () => void }) {
-  return (
-    <aside className={`side-rail ${open ? 'open' : ''}`} aria-label="Studio controls">
-      <div className="side-rail-head">
-        <h3>Controls</h3>
-        <button className="btn icon rail-close" type="button" aria-label="Close controls" onClick={onClose}>
-          {Icon.close({ size: 16 })}
-        </button>
-      </div>
-      <RenderButton />
-      <div className="rail-scroll scroll">
-        <section className="rail-section">
-          <h3>Inspector</h3>
-          <Inspector />
-        </section>
-        <BackendSettingsPanel />
-        <TurboForgePanel />
-        <LoraRack />
-        <HealthPanel />
-        <QueuePanel />
-      </div>
-    </aside>
-  );
-}
-
 export function App() {
   const view = useStudio((s) => s.view);
   const setView = useStudio((s) => s.setView);
   const probeBridge = useStudio((s) => s.probeBridge);
-  const [railOpen, setRailOpen] = useState(false);
+  const compactMode = useStudio((s) => s.appSettings.compactMode);
 
-  // Probe the local bridge once on load so the shelf/status reflect reality.
   useEffect(() => { void probeBridge(); }, [probeBridge]);
 
+  const page =
+    view === 'guide' ? <GuideView onOpenControls={() => setView('controls')} />
+      : view === 'recipe' ? <RecipeView />
+      : view === 'graph' ? <GraphView />
+      : view === 'shelf' ? <ModelShelf />
+      : view === 'gallery' ? <Gallery />
+      : view === 'controls' ? <ControlsPage />
+      : view === 'settings' ? <SettingsPage />
+      : view === 'diagnostics' ? <DiagnosticsPage />
+      : view === 'performance' ? <PerformancePage />
+      : <GuideView onOpenControls={() => setView('controls')} />;
+
   return (
-    <div className="shell">
+    <div className={`shell ${compactMode ? 'compact' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <BrandMark size={26} />
           <span className="lumen">Lumen</span><span className="deck">Deck</span>
           <span className="ver">v{APP_VERSION}</span>
         </div>
-        <span className="view-title">{VIEW_TITLES[view]}</span>
+        <span className="view-title">{VIEW_TITLES[view] ?? 'Guide'}</span>
         <div className="topbar-right">
           <BridgeStatus />
           <HealthChip />
-          <button className="btn icon controls-toggle" type="button" aria-label="Toggle controls" onClick={() => setRailOpen((v) => !v)}>
+          <button className="btn controls-toggle" type="button" aria-label="Open Controls" onClick={() => setView('controls')}>
+            {Icon.gear({ size: 18 })} Controls
+          </button>
+          <button className="btn icon controls-toggle" type="button" aria-label="Open Settings" onClick={() => setView('settings')}>
             {Icon.gear({ size: 18 })}
           </button>
         </div>
       </header>
       <div className="workspace">
-        <NavRail view={view} setView={(v) => { setView(v); setRailOpen(false); }} onSettings={() => setRailOpen((v) => !v)} />
+        <NavRail view={view} setView={setView} />
         <div className="main-pane">
-          {view === 'guide' ? <GuideView onOpenControls={() => setRailOpen((v) => !v)} />
-            : view === 'recipe' ? <RecipeView />
-            : view === 'graph' ? <GraphView />
-            : view === 'shelf' ? <ModelShelf />
-            : <Gallery />}
+          {page}
         </div>
-        {railOpen ? <div className="rail-scrim" onClick={() => setRailOpen(false)} /> : null}
-        <SideRail open={railOpen} onClose={() => setRailOpen(false)} />
       </div>
     </div>
   );

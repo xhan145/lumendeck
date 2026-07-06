@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { downloadDataUrl, downloadJson, slugify } from '../../bridge/exporter';
 import type { ExportManifest } from '../../core/manifest';
+import { fallbackReasonFor, isFallbackRender, renderBackendLabel, renderModeLabel } from '../../core/renderHonesty';
+import { estimateGalleryStorage } from '../../core/storageStatus';
 import type { TurboForgeManifestData } from '../../turboForge/types';
 import { useStudio, type GalleryItem } from '../../state/store';
 import { Icon } from '../icons';
@@ -32,6 +34,8 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const m = item.manifest as ManifestWithTurbo;
   const base = slugify(m.prompt);
   const ext = mediaExtension(item);
+  const fallback = isFallbackRender(item);
+  const fallbackReason = fallbackReasonFor(item);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -49,6 +53,13 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
         </div>
         <div className="drawer-body">
           <MediaPreview item={item} alt={m.prompt || 'Generated render'} />
+          {fallback ? (
+            <div className="fallback-warning" role="alert">
+              <strong>This was not a clean real model render.</strong>
+              <span>LumenDeck used a procedural/mock fallback.</span>
+              {fallbackReason ? <span>{fallbackReason}</span> : null}
+            </div>
+          ) : null}
           <div className="drawer-actions">
             <button className="btn" type="button" onClick={() => downloadDataUrl(item.dataUrl, `${base}-${m.seed}.${ext}`)}>
               {Icon.download()} {ext.toUpperCase()}
@@ -81,6 +92,9 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
             {m.turboForge ? (
               <DetailRow label="TurboForge">{m.turboForge.backendId} · {m.turboForge.preset}</DetailRow>
             ) : null}
+            <DetailRow label="Render mode">{renderModeLabel(item)}</DetailRow>
+            <DetailRow label="Backend">{renderBackendLabel(item)}</DetailRow>
+            {fallbackReason ? <DetailRow label="Fallback reason">{fallbackReason}</DetailRow> : null}
             <DetailRow label="Created">{new Date(item.createdAt).toLocaleString()}</DetailRow>
             <DetailRow label="Graph">v{m.graphVersion} · {m.graph.nodes.length} capsules, {m.graph.edges.length} links</DetailRow>
             <DetailRow label="App">{m.app} {m.appVersion}</DetailRow>
@@ -97,10 +111,17 @@ export function Gallery() {
   const setView = useStudio((s) => s.setView);
   const [openId, setOpenId] = useState<string | null>(null);
   const open = gallery.find((g) => g.id === openId) ?? null;
+  const storage = estimateGalleryStorage(gallery);
 
   return (
     <main className="gallery" aria-label="Gallery">
       <div className="gallery-inner">
+        {gallery.length > 0 ? (
+          <div className="storage-warning">
+            <strong>Browser gallery storage is limited.</strong>
+            <span>{storage.itemCount} items, about {storage.approximateLabel}. Export important renders and manifests.</span>
+          </div>
+        ) : null}
         {gallery.length === 0 ? (
           <div className="gallery-empty">
             <p>No renders yet. Choose a checkpoint, then press Render.</p>
@@ -110,15 +131,19 @@ export function Gallery() {
           <div className="gallery-grid">
             {gallery.map((item) => {
               const m = item.manifest as ManifestWithTurbo;
+              const fallback = isFallbackRender(item);
               return (
                 <article key={item.id} className="card render-card">
                   <button type="button" className="render-card" onClick={() => setOpenId(item.id)} aria-label={`Open details for ${m.prompt || 'render'}`}>
                     <MediaPreview item={item} alt={m.prompt || 'Generated render'} />
+                    <span className={`render-badge ${fallback ? 'fallback' : ''}`}>
+                      {fallback ? 'Fallback' : renderModeLabel(item)}
+                    </span>
                     <div className="meta">
                       <span className="p" title={m.prompt}>{m.prompt || 'Untitled render'}</span>
                       <span className="s">
                         <span className="mono">{m.media?.type === 'video' || item.mediaType === 'video' ? 'video' : 'seed'} {m.seed}</span>
-                        <span>{new Date(item.createdAt).toLocaleTimeString()}</span>
+                        <span>{renderBackendLabel(item)}</span>
                       </span>
                     </div>
                   </button>

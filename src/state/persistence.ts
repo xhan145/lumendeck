@@ -1,4 +1,5 @@
 import type { RackPreset, Workflow } from '../core/types';
+import type { AppSettings } from './appSettings';
 import type { BackendSettings } from '../turboForge/backends/backendSettings';
 import type { GalleryItem } from './store';
 
@@ -9,6 +10,7 @@ export interface PersistedState {
   rackPresets: RackPreset[];
   gallery: GalleryItem[];
   backendSettings: BackendSettings;
+  appSettings?: AppSettings;
 }
 
 export function loadPersisted(): Partial<PersistedState> {

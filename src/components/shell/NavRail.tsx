@@ -1,3 +1,4 @@
+import type React from 'react';
 import type { ViewId } from '../../state/store';
 import { Icon } from '../icons';
 
@@ -13,17 +14,18 @@ const ITEMS: NavItem[] = [
   { id: 'graph', label: 'Graph', icon: () => Icon.graph({ size: 22 }) },
   { id: 'shelf', label: 'Shelf', icon: () => Icon.grid({ size: 22 }) },
   { id: 'gallery', label: 'Gallery', icon: () => Icon.image({ size: 22 }) },
+  { id: 'controls', label: 'Controls', icon: () => Icon.play({ size: 22 }) },
+  { id: 'settings', label: 'Settings', icon: () => Icon.gear({ size: 22 }) },
+  { id: 'diagnostics', label: 'Diagnostics', icon: () => Icon.pulse({ size: 22 }) },
+  { id: 'performance', label: 'Performance', icon: () => Icon.bolt({ size: 22 }) },
 ];
 
-/** Material 3 navigation rail — primary view switching + Settings. */
 export function NavRail({
   view,
   setView,
-  onSettings,
 }: {
   view: ViewId;
   setView: (v: ViewId) => void;
-  onSettings: () => void;
 }) {
   return (
     <nav className="nav-rail" aria-label="Primary views">
@@ -45,10 +47,6 @@ export function NavRail({
           );
         })}
       </ul>
-      <button type="button" className="nav-item nav-settings" onClick={onSettings} aria-label="Controls & settings">
-        <span className="nav-item-icon">{Icon.gear({ size: 22 })}</span>
-        <span className="nav-item-label">Settings</span>
-      </button>
     </nav>
   );
 }

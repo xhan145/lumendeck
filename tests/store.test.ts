@@ -29,6 +29,23 @@ describe('studio store — recipe/graph single-object invariant', () => {
     expect(useStudio.getState().workflow.nodes.filter((n) => n.kind === 'control')).toHaveLength(2);
   });
 
+  it('routes to all primary views and stores local preferences', () => {
+    const store = useStudio.getState();
+    const views = ['guide', 'recipe', 'graph', 'shelf', 'gallery', 'controls', 'settings', 'diagnostics', 'performance'] as const;
+    for (const view of views) {
+      store.setView(view);
+      expect(useStudio.getState().view).toBe(view);
+    }
+
+    store.setView('settings');
+    store.updateAppSettings({ compactMode: true, outputDirectory: 'C:/renders' });
+
+    const state = useStudio.getState();
+    expect(state.view).toBe('settings');
+    expect(state.appSettings.compactMode).toBe(true);
+    expect(state.appSettings.outputDirectory).toBe('C:/renders');
+  });
+
   it('health recomputes on edit', () => {
     const store = useStudio.getState();
     const model = findNode(store.workflow, 'model')!;

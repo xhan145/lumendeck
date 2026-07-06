@@ -25,7 +25,7 @@ import { DEMO_SHELF } from '../data/demoShelf';
 import { TEMPLATES } from '../data/templates';
 import type { LumenFile } from '../core/lumenFile';
 import { TURBO_BACKENDS } from '../turboForge/backends';
-import { loadBenchmarks, measuredSpeedupPercent, saveBenchmark } from '../turboForge/benchmarks';
+import { clearBenchmarks, loadBenchmarks, measuredSpeedupPercent, saveBenchmark } from '../turboForge/benchmarks';
 import { turboCompileCache } from '../turboForge/cache';
 import { findCapability, buildCapabilityMatrix } from '../turboForge/modelMatrix';
 import { collectBrowserHardwareInfo, TurboProfiler } from '../turboForge/profiler';
@@ -41,8 +41,9 @@ import {
 } from '../turboForge/backends/backendSettings';
 import { loadPersisted, savePersisted } from './persistence';
 import { APP_VERSION } from './storeConstants';
+import { DEFAULT_APP_SETTINGS, sanitizeAppSettings, type AppSettings } from './appSettings';
 
-export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery';
+export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance';
 
 export interface GalleryItem {
   id: string;
@@ -52,16 +53,24 @@ export interface GalleryItem {
   extension?: string;
   createdAt: string;
   manifest: ExportManifest;
+  selectedBackend?: RenderBackendId;
+  actualBackend?: string;
+  renderMode?: 'real' | 'mock' | 'procedural' | 'fallback' | 'unknown';
+  fallback?: boolean;
+  fallbackReason?: string;
 }
 
 export interface QueueJob {
   id: string;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'done_with_warning' | 'error';
   progress: number;
   label: string;
   phase?: string;
   previewDataUrl?: string;
   error?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
+  actualBackend?: string;
 }
 
 interface StudioState {
@@ -83,6 +92,9 @@ interface StudioState {
   bridgeModelFolderBusy: boolean;
   bridgeModelFolderError: string | null;
   backendSettings: BackendSettings;
+  appSettings: AppSettings;
+  queuePaused: boolean;
+  controlStatus: string | null;
   turboPresetId: TurboPresetId;
   turboBackendId: BackendId;
   turboBenchmarks: BenchmarkResult[];
@@ -92,6 +104,8 @@ interface StudioState {
   turboError: string | null;
 
   setView(view: ViewId): void;
+  updateAppSettings(settings: Partial<AppSettings>): void;
+  resetAppSettings(): void;
   selectNode(id: string | null): void;
   setWorkflow(wf: Workflow): void;
   updateParam(nodeId: string, paramId: string, value: unknown): void;
@@ -126,6 +140,12 @@ interface StudioState {
   downloadBridgeModel(): Promise<void>;
   enqueueRender(): Promise<void>;
   enqueueBatch(count: number): Promise<void>;
+  pauseQueue(): void;
+  resumeQueue(): void;
+  cancelRunningJobs(): void;
+  clearQueue(): void;
+  clearLocalHistory(): void;
+  setControlStatus(message: string | null): void;
   removeGalleryItem(id: string): void;
   restoreSnapshot(item: GalleryItem): void;
   loadWorkflowFile(file: LumenFile): void;
@@ -188,6 +208,12 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
 const persisted = loadPersisted();
 const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
+const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
+const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
+  ? 'controls'
+  : initialAppSettings.startupBehavior === 'last-view' && initialAppSettings.lastView
+    ? initialAppSettings.lastView
+    : 'guide';
 
 export const useStudio = create<StudioState>((set, get) => {
   const commit = (wf: Workflow) =>
@@ -198,7 +224,7 @@ export const useStudio = create<StudioState>((set, get) => {
     shelf: DEMO_SHELF,
     shelfSource: 'demo',
     health: checkHealth(initialWorkflow, DEMO_SHELF),
-    view: 'guide',
+    view: initialView,
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
     gallery: persisted.gallery ?? [],
@@ -212,6 +238,9 @@ export const useStudio = create<StudioState>((set, get) => {
     bridgeModelFolderBusy: false,
     bridgeModelFolderError: null,
     backendSettings: initialBackendSettings,
+    appSettings: initialAppSettings,
+    queuePaused: false,
+    controlStatus: null,
     turboPresetId: 'fast',
     turboBackendId: settingsBackendToTurboBackend(initialBackendSettings.selectedBackend),
     turboBenchmarks: loadBenchmarks(),
@@ -220,7 +249,9 @@ export const useStudio = create<StudioState>((set, get) => {
     turboBusy: false,
     turboError: null,
 
-    setView: (view) => set({ view }),
+    setView: (view) => set({ view, appSettings: { ...get().appSettings, lastView: view } }),
+    updateAppSettings: (settings) => set({ appSettings: sanitizeAppSettings({ ...get().appSettings, ...settings }) }),
+    resetAppSettings: () => set({ appSettings: DEFAULT_APP_SETTINGS, controlStatus: 'Settings reset to defaults.' }),
     selectNode: (selectedNodeId) => set({ selectedNodeId }),
     setWorkflow: (wf) => commit(wf),
     updateParam: (nodeId, paramId, value) => {
@@ -287,6 +318,7 @@ export const useStudio = create<StudioState>((set, get) => {
       if (backendSettings.selectedBackend === 'comfyui') comfyAdapter.setBaseUrl(backendSettings.comfyUrl);
       set({
         backendSettings,
+        appSettings: sanitizeAppSettings({ ...get().appSettings, preferredBackend: backendSettings.selectedBackend }),
         adapterId: backendSettings.selectedBackend,
         turboBackendId: settingsBackendToTurboBackend(backendSettings.selectedBackend),
         turboLastPlan: null,
@@ -537,6 +569,10 @@ export const useStudio = create<StudioState>((set, get) => {
     },
 
     enqueueRender: async () => {
+      if (get().queuePaused) {
+        set({ controlStatus: 'Queue is paused. Resume the queue before starting a render.' });
+        return;
+      }
       const { workflow, shelf, backendSettings } = get();
       const errors = get().health.filter((i) => i.severity === 'error');
       if (errors.length > 0) return; // UI blocks this path; guard anyway.
@@ -561,6 +597,7 @@ export const useStudio = create<StudioState>((set, get) => {
         profiler.mark('backend-start');
         let result;
         let usedFallback = false;
+        let fallbackReason = '';
         try {
           result = await adapter.generate(job, (update) => {
             const progress = normalizeProgress(update);
@@ -569,7 +606,8 @@ export const useStudio = create<StudioState>((set, get) => {
         } catch (error) {
           if (!backendSettings.fallbackToMock || backendSettings.selectedBackend === 'mock') throw error;
           usedFallback = true;
-          patch({ error: `${error instanceof Error ? error.message : String(error)} Falling back to mock backend.` });
+          fallbackReason = `${error instanceof Error ? error.message : String(error)} Falling back to mock backend.`;
+          patch({ error: fallbackReason, fallback: true, fallbackReason });
           result = await mockAdapter.generate(job, (update) => {
             const progress = normalizeProgress(update);
             patch({ progress: progress.progress, phase: progress.phase, previewDataUrl: progress.previewDataUrl });
@@ -578,8 +616,18 @@ export const useStudio = create<StudioState>((set, get) => {
         // Bridge produced a procedural placeholder when a real render was expected —
         // surface it loudly instead of pretending the render succeeded.
         if (result.fallback) {
-          patch({ error: `Real render failed — showing procedural placeholder. ${result.fallbackReason ?? ''}`.trim() });
+          fallbackReason = `Real render failed - showing procedural placeholder. ${result.fallbackReason ?? ''}`.trim();
+          patch({ error: fallbackReason, fallback: true, fallbackReason, actualBackend: 'procedural' });
         }
+        const fallback = usedFallback || Boolean(result.fallback);
+        const actualBackend = usedFallback ? 'mock' : result.fallback ? 'procedural' : backendSettings.selectedBackend;
+        const renderMode = fallback
+          ? 'fallback'
+          : backendSettings.selectedBackend === 'mock'
+            ? 'mock'
+            : backendSettings.selectedBackend === 'bridge' && backendSettings.bridgeRenderer === 'procedural'
+              ? 'procedural'
+              : 'real';
         profiler.measure('backendRequestMs', 'backend-start');
         for (const [key, value] of Object.entries(result.backendTimings ?? {})) {
           profiler.set(key as keyof NonNullable<typeof result.backendTimings>, Number(value));
@@ -602,10 +650,10 @@ export const useStudio = create<StudioState>((set, get) => {
           createdAt: baseManifest.createdAt,
           presetId: plan.selectedPreset,
           backendId: plan.selectedBackend,
-          backendName: usedFallback ? 'Mock backend fallback' : TURBO_BACKENDS[plan.selectedBackend].displayName,
-          hardware: collectBrowserHardwareInfo(usedFallback ? 'Mock backend fallback' : TURBO_BACKENDS[plan.selectedBackend].displayName),
+          backendName: fallback ? `${actualBackend} fallback` : TURBO_BACKENDS[plan.selectedBackend].displayName,
+          hardware: collectBrowserHardwareInfo(fallback ? `${actualBackend} fallback` : TURBO_BACKENDS[plan.selectedBackend].displayName),
           runtime: {
-            backendName: usedFallback ? 'Mock backend fallback' : TURBO_BACKENDS[plan.selectedBackend].displayName,
+            backendName: fallback ? `${actualBackend} fallback` : TURBO_BACKENDS[plan.selectedBackend].displayName,
             precisionMode: plan.optimizationFlags.precision,
             modelId: plan.selectedModel,
             modelHash: modelCapability?.fileHash ?? null,
@@ -630,21 +678,23 @@ export const useStudio = create<StudioState>((set, get) => {
         const turboForge: TurboForgeManifestData = {
           preset: plan.selectedPreset,
           backendId: plan.selectedBackend,
-          backendHealthStatus: usedFallback ? 'degraded' : 'healthy',
+          backendHealthStatus: fallback ? 'degraded' : 'healthy',
           optimizationFlags: plan.optimizationFlags,
           compileCacheStatus: plan.compileCacheStatus,
           modelCapability,
           loraStack: plan.selectedLoras,
           renderPlan: plan,
           benchmark: enrichedBenchmark,
-          warnings: usedFallback
+          warnings: fallback
             ? [
                 ...plan.warnings,
                 {
                   code: 'backend-fallback',
                   severity: 'warning',
-                  message: 'The selected backend failed, so LumenDeck used the mock backend fallback.',
-                  recommendedFix: 'Start ComfyUI, check the backend URL, or switch to Mock.',
+                  message: fallbackReason || 'The selected backend returned a fallback render.',
+                  recommendedFix: actualBackend === 'procedural'
+                    ? 'Install the Diffusers runtime/model or change the bridge renderer to diffusers after setup.'
+                    : 'Start ComfyUI, check the backend URL, or switch to Mock for demos.',
                 },
               ]
             : plan.warnings,
@@ -653,6 +703,14 @@ export const useStudio = create<StudioState>((set, get) => {
           appVersion: APP_VERSION,
         };
         const manifest = withTurboForgeManifest(baseManifest, turboForge);
+        manifest.render = {
+          selectedBackend: backendSettings.selectedBackend,
+          actualBackend,
+          mode: renderMode,
+          fallback,
+          fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
+          bridgeRenderer: backendSettings.bridgeRenderer,
+        };
         const item: GalleryItem = {
           id: uid('render'),
           dataUrl: result.dataUrl,
@@ -661,13 +719,26 @@ export const useStudio = create<StudioState>((set, get) => {
           extension: result.extension,
           createdAt: manifest.createdAt,
           manifest,
+          selectedBackend: backendSettings.selectedBackend,
+          actualBackend,
+          renderMode,
+          fallback,
+          fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
         };
         set({
           gallery: [item, ...get().gallery],
           turboBenchmarks: saveBenchmark(enrichedBenchmark),
           turboLastBenchmark: enrichedBenchmark,
         });
-        patch({ status: 'done', progress: 1, phase: 'done', previewDataUrl: result.dataUrl });
+        patch({
+          status: fallback ? 'done_with_warning' : 'done',
+          progress: 1,
+          phase: fallback ? 'done with warning' : 'done',
+          previewDataUrl: result.dataUrl,
+          fallback,
+          fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
+          actualBackend,
+        });
       } catch (err) {
         patch({ status: 'error', error: err instanceof Error ? err.message : String(err) });
       }
@@ -685,6 +756,27 @@ export const useStudio = create<StudioState>((set, get) => {
         }
       }
     },
+
+    pauseQueue: () => set({ queuePaused: true, controlStatus: 'Queue paused. Running backend requests are not interrupted yet.' }),
+    resumeQueue: () => set({ queuePaused: false, controlStatus: 'Queue resumed.' }),
+    cancelRunningJobs: () => set({
+      queue: get().queue.map((job) => job.status === 'running'
+        ? { ...job, status: 'error', error: 'Cancelled locally. Backend cancellation is not connected yet.', phase: 'cancelled' }
+        : job),
+      controlStatus: 'Running jobs were marked cancelled locally. Native/backend cancellation is not connected yet.',
+    }),
+    clearQueue: () => set({ queue: [], controlStatus: 'Queue cleared.' }),
+    clearLocalHistory: () => {
+      clearBenchmarks();
+      set({
+        gallery: [],
+        turboBenchmarks: [],
+        turboLastBenchmark: null,
+        queue: [],
+        controlStatus: 'Local gallery, queue, and benchmark history cleared.',
+      });
+    },
+    setControlStatus: (message) => set({ controlStatus: message }),
 
     removeGalleryItem: (id) => set({ gallery: get().gallery.filter((g) => g.id !== id) }),
 
@@ -719,6 +811,7 @@ useStudio.subscribe((state) => {
       rackPresets: state.rackPresets,
       gallery: state.gallery.slice(0, 24),
       backendSettings: state.backendSettings,
+      appSettings: state.appSettings,
     });
   }, 300);
 });
