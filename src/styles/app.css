@@ -1088,6 +1088,51 @@
 .detail-grid dd { margin: 0 0 6px; color: var(--ld-text); overflow-wrap: anywhere; }
 .drawer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ===== Gallery collections + tags (gc-*) ===== */
+.vh {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.gc-filterbar { display: grid; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.gc-filter-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.gc-field { display: grid; gap: 4px; }
+.gc-field-label { font-size: 11px; color: var(--ld-text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.gc-search { flex: 1 1 220px; min-width: 180px; }
+.gc-search input { width: 100%; }
+.gc-collection { flex: 0 1 220px; min-width: 160px; }
+.gc-collection select { width: 100%; }
+.gc-collection-actions { display: flex; gap: 6px; align-items: center; }
+.gc-collection-actions .btn.icon:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.gc-tag-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.gc-tag-filter { cursor: pointer; transition: all var(--dur-fast) var(--ease-out); }
+.gc-tag-filter.on,
+.gc-tag-filter[aria-pressed='true'] {
+  color: var(--ld-cyan); border-color: rgba(52, 214, 244, 0.5); background: rgba(52, 214, 244, 0.08);
+}
+
+.gc-card-tags { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 12px 4px; }
+.gc-card-tags .gc-tag { font-size: 10.5px; }
+
+.gc-organizer { display: grid; gap: var(--sp-3); }
+.gc-organizer select { width: 100%; }
+.gc-tag-editor {
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  padding: 6px; border: 1px solid var(--ld-border); border-radius: var(--rad-2); background: var(--ld-surface-2);
+}
+.gc-tag { display: inline-flex; align-items: center; gap: 4px; }
+.gc-tag-x {
+  background: none; border: none; cursor: pointer; padding: 0; line-height: 1;
+  color: var(--ld-text-faint); font-size: 14px;
+}
+.gc-tag-x:hover { color: var(--ld-danger); }
+.gc-tag-input { flex: 1; min-width: 90px; border: none; background: none; color: var(--ld-text); font-size: 12px; }
+.gc-tag-input:focus { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gc-tag-filter { transition: none; }
+}
+
 /* ===== Inspector ===== */
 .inspector-empty { color: var(--ld-text-faint); font-size: 13px; }
 .inspector-head { display: flex; align-items: center; gap: 8px; margin-bottom: var(--sp-3); }
