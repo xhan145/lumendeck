@@ -1,6 +1,7 @@
 import type { ControlSlot, LoraSlot, Workflow } from '../core/types';
 import type { PipelineTimings } from '../turboForge/types';
 import { findNode } from '../core/workflow';
+import { expandWildcards, hasWildcards, mulberry32, type UsedWildcard, type WildcardSet } from '../core/prompt/wildcards';
 
 export interface RenderJob {
   prompt: string;
@@ -35,6 +36,14 @@ export interface RenderJob {
    * the legacy singular controlNet convention above.
    */
   controlNets?: Array<{ model: string; strength: number; image: string }>;
+  /**
+   * The wildcard-resolved positive prompt actually sent to the backend. When the
+   * original prompt has no `__token__` wildcards this equals `prompt` exactly, so
+   * behavior is identical to before this feature.
+   */
+  resolvedPrompt: string;
+  /** wildcards resolved for this job (empty when none were present). */
+  usedWildcards: UsedWildcard[];
 }
 
 export interface RenderResult {
@@ -78,7 +87,7 @@ export interface BackendAdapter {
   generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult>;
 }
 
-export function buildRenderJob(wf: Workflow): RenderJob {
+export function buildRenderJob(wf: Workflow, wildcardSets: WildcardSet[] = []): RenderJob {
   const prompt = findNode(wf, 'prompt');
   const sampler = findNode(wf, 'sampler');
   const canvas = findNode(wf, 'canvas');
@@ -107,10 +116,23 @@ export function buildRenderJob(wf: Workflow): RenderJob {
     });
   }
 
+  const positive = String(prompt?.params.positive ?? '');
+  const seed = Number(sampler?.params.seed ?? -1);
+  // Resolve wildcards seeded by the render seed so a re-render with the SAME
+  // fixed seed resolves identically (spec acceptance #2). A random seed (-1) has
+  // no reproducible target, so it draws a fresh per-call seed for the picks.
+  // IMPORTANT: with no tokens present, resolved === positive (identical behavior).
+  const resolvedSeed = resolveSeed(seed);
+  const expansion = hasWildcards(positive)
+    ? expandWildcards(positive, wildcardSets, mulberry32(resolvedSeed))
+    : { resolved: positive, used: [] as UsedWildcard[], unknown: [] as string[] };
+
   return {
-    prompt: String(prompt?.params.positive ?? ''),
+    prompt: expansion.resolved,
     negativePrompt: String(prompt?.params.negative ?? ''),
-    seed: Number(sampler?.params.seed ?? -1),
+    seed,
+    resolvedPrompt: expansion.resolved,
+    usedWildcards: expansion.used,
     steps: Number(sampler?.params.steps ?? 28),
     cfg: Number(sampler?.params.cfg ?? 7),
     denoise: Number(sampler?.params.denoise ?? 1),

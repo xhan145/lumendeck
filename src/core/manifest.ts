@@ -1,4 +1,5 @@
 import { findAsset, type ModelAsset } from './shelf';
+import { expandWildcards, hasWildcards, mulberry32, type UsedWildcard, type WildcardSet } from './prompt/wildcards';
 import type { ControlSlot, LoraSlot, Workflow } from './types';
 import { findNode } from './workflow';
 
@@ -8,6 +9,10 @@ export interface ExportManifest {
   createdAt: string;
   prompt: string;
   negativePrompt: string;
+  /** the wildcard-resolved positive prompt actually rendered (equals prompt when no wildcards). */
+  resolvedPrompt: string;
+  /** wildcards resolved for this render (empty when none). */
+  wildcards: { token: string; value: string }[];
   seed: number;
   sampler: { name: string; steps: number; cfg: number };
   canvas: { width: number; height: number };
@@ -33,6 +38,7 @@ export function buildManifest(
   shelf: ModelAsset[],
   appVersion: string,
   now: Date,
+  wildcardSets: WildcardSet[] = [],
 ): ExportManifest {
   const prompt = findNode(wf, 'prompt');
   const sampler = findNode(wf, 'sampler');
@@ -61,13 +67,23 @@ export function buildManifest(
     });
   }
 
+  const positive = String(prompt?.params.positive ?? '');
+  const seed = Number(sampler?.params.seed ?? -1);
+  // Mirror buildRenderJob: resolve wildcards seeded by the render seed so the
+  // manifest documents the exact text that made the image. No tokens → identical.
+  const expansion = hasWildcards(positive)
+    ? expandWildcards(positive, wildcardSets, mulberry32(seed >= 0 ? Math.floor(seed) : 0))
+    : { resolved: positive, used: [] as UsedWildcard[], unknown: [] as string[] };
+
   return {
     app: 'LumenDeck',
     appVersion,
     createdAt: now.toISOString(),
-    prompt: String(prompt?.params.positive ?? ''),
+    prompt: positive,
     negativePrompt: String(prompt?.params.negative ?? ''),
-    seed: Number(sampler?.params.seed ?? -1),
+    resolvedPrompt: expansion.resolved,
+    wildcards: expansion.used.map((w) => ({ token: w.token, value: w.value })),
+    seed,
     sampler: {
       name: String(sampler?.params.sampler ?? 'euler_a'),
       steps: Number(sampler?.params.steps ?? 0),
