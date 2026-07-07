@@ -1,297 +1,350 @@
-# LumenDeck
-
-LumenDeck is a local-first, node-native generative image studio shell: a spiritual successor to
-Disco Diffusion. It includes Guide, Recipe, Graph, Model Shelf, Gallery, Controls, Settings,
-Diagnostics, Performance, LoRA Rack, and TurboForge performance planning.
-
-**Two synchronized editors, one workflow object.** The **Recipe View** (beginner-friendly cards) and
-the **Graph View** (a real, editable SVG node graph: searchable node palette, typed ports, duplicate,
-delete, auto-layout, fit/reset view, keyboard move/delete) operate on the same underlying workflow, so
-an edit in either shows up in the other immediately. Every capsule is edited through a shared,
-accessible **Inspector**.
-
-**Core Capsules:** Prompt, Model, LoRA Rack, Control, Sampler, Video, Canvas, Queue, Export, Manifest.
-
-**Recipe portability (v0.2):** save the current workflow as a `.lumen` file and re-open it later, or
-start from a built-in **template** (Neon Poster, Ink Sketch, Portrait Studio) from the Recipe View
-header.
-
-**Real generation (v0.2):** the desktop build **auto-starts a bundled render bridge**. The Backend
-panel offers three bridge renderer modes: **procedural** (instant, offline, always works),
-**diffusers** (real SD-Turbo), and **auto** (real if available, else procedural). It also includes a
-real-photo model panel that checks Diffusers readiness, creates a managed local runtime when needed,
-and downloads/loads SD-Turbo for the user. The existing **ComfyUI** adapter remains available for an
-external ComfyUI server.
+# LumenDeck Dossier
 
-**Graph Health** runs before every render and flags missing/uninstalled models, broken links,
-incompatible sockets, bad dimensions (non-multiple-of-8, too small/large), LoRA family conflicts, and
-likely VRAM over-budget. Render is blocked with a reason while any error is present.
+## Next-Generation Local AI Creation Studio
 
-## Page map and first run
-
-- **Guide**: first-run paths for Quick demo, built-in Diffusers, ComfyUI, and scanning your own models.
-- **Recipe**: card-based workflow editing, `.lumen` save/load, and starter templates.
-- **Graph**: editable node graph with health checks and a shared Inspector.
-- **Model Shelf**: bundled demo catalog, Civitai search/download, and bring-your-own model folder scan.
-- **Gallery**: local render history, export, restore graph, and fallback warnings.
-- **Controls**: render button, batch/seed grid, queue, Inspector, LoRA Rack, and Health panel.
-- **Settings**: backend URLs, bridge renderer mode, fallback toggle, runtime/model actions, storage/privacy, and reset controls.
-- **Diagnostics**: copyable troubleshooting report for CUDA, Python/Torch, bridge, ComfyUI, folder scan, queue, and fallback state.
-- **Performance**: TurboForge plan, presets, cache/compile flags, benchmark history, and measured-only speedup display.
+## 1. Product Overview
 
-Recommended first action: open **Diagnostics**, check the Diffusers bridge/model state, then use
-**Install runtime + model** if CUDA/Torch/SD-Turbo are missing. Use **Quick demo** only to validate UI
-flow; it is not a real model render.
+**LumenDeck is a next-generation local AI creation and rendering platform designed to give creators full control over how images, videos, characters, social content, visual campaigns, and creative systems are generated, refined, organized, and deployed.**
 
-The design spec and implementation plan live in [`docs/superpowers/`](docs/superpowers/). Brand:
-Midnight `#071426`, Ion Cyan `#34D6F4`, Voltage Violet `#7C3AED`, Mango Fuse `#FF8A3D`, Signal Mint
-`#45E6A6`, Paper `#FBFCFE`, Ink `#101828`, Slate `#475467`: dark-only, WCAG-AA contrast, visible
-focus, reduced-motion aware.
+Instead of acting like a simple prompt-to-image tool, LumenDeck is built as a full creative command center. It brings prompts, models, styles, characters, references, render settings, workflows, automation, and asset libraries into one unified interface. The goal is to make advanced AI creation feel powerful without becoming chaotic.
 
-## Run Locally
+LumenDeck is made for artists, developers, AI creators, fictional persona builders, social media producers, brand designers, music visual creators, and anyone building a large creative universe with many moving parts.
 
-```bash
-npm install
-npm run dev -- --host 127.0.0.1
-```
+At its core, LumenDeck focuses on **local-first creative independence**: more privacy, more ownership, more customization, and less reliance on locked-down cloud tools. It is not just a renderer. It is a creative operating system for AI-powered visual production.
 
-Open `http://127.0.0.1:5178/`.
+---
 
-Validation commands:
+## 2. Core Vision
 
-```bash
-npm test
-npm run build
-```
+Most AI creation tools treat every generation like an isolated output. You type a prompt, receive an image, download it, and then lose the context of how it was made.
 
-## Quickest start — real images (Windows)
+LumenDeck takes a different approach.
 
-Double-click **`run.bat`**. It builds the app once, then starts the bridge which serves
-the UI *and* the render API on one origin at **http://127.0.0.1:8787** (opens automatically).
-Because everything is same-origin, the browser never hits a cross-origin/"failed to fetch"
-error. If Python has the diffusion deps, renders are real:
+It treats every prompt, render, character, model, reference image, style preset, caption, video, and final asset as part of a larger creative system. The platform remembers how work evolves, where ideas came from, which assets are connected, what styles are recurring, and what should happen next.
 
-```bash
-python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia
-```
+LumenDeck is designed to answer questions like:
 
-Without them the app still runs on the built-in procedural renderer, and the Backend panel
-shows a one-click way to enable real diffusion.
+* Which prompt created this image?
+* Which model produced the best version of this character?
+* Which renders belong to this campaign?
+* Which assets are ready to post?
+* Which character looks are drifting from the original identity?
+* Which styles are strongest?
+* Which unused renders deserve another look?
+* What should I generate next?
 
-**Developing?** `npm run dev` autostarts the bridge too (via a Vite plugin) and proxies the
-API same-origin, so real rendering works in dev without extra terminals.
+The larger vision is simple:
 
-## Desktop app (Windows MSI)
+**LumenDeck does not only generate assets. It remembers how your creative universe is built.**
 
-LumenDeck ships as a native Windows desktop app via [Tauri](https://tauri.app): a small WebView2
-shell around the built web app. As of v0.2 the app **bundles the render bridge as a sidecar and
-auto-starts it on launch**, so generation plumbing works from a single installer with no manual
-Python server step. The offline Procedural renderer works out of the box; real diffusion (SD-Turbo)
-can be prepared from the app with Backend -> Diffusers bridge -> Install runtime + model. That
-creates an app-local runtime under `%LOCALAPPDATA%\LumenDeck\diffusers-runtime`, installs CPU PyTorch
-and Diffusers, then downloads/loads the Hugging Face weights.
+---
 
-**Install:** run the installer at
-`src-tauri/target/release/bundle/msi/LumenDeck_0.2.0_x64_en-US.msi`. It requires the Microsoft
-**WebView2** runtime, preinstalled on Windows 11.
+## 3. The Constellation System
 
-**Build it yourself** (needs Rust + the MSVC toolchain and Python + PyInstaller; the WiX bundler is
-fetched automatically):
+The **LumenDeck Constellation System** is the platform’s visual project-memory layer. It maps every prompt, render, model, style, reference image, character, preset, caption, video, and final export as part of an interconnected creative universe.
 
-```bash
-npm install
-pip install pyinstaller
-python bridge/build_sidecar.py   # freezes the bridge -> src-tauri/binaries/
-npm run tauri build              # runs `npm run build`, compiles the shell, bundles sidecar + .msi
-```
+Instead of burying creative work inside folders, filenames, and scattered downloads, the Constellation System turns a project into an interactive star map. Every asset becomes a node. Every relationship becomes a visible connection. Every creative decision leaves a trail.
 
-The produced `.exe` is at `src-tauri/target/release/lumendeck.exe`. App icons are generated from
-`src-tauri/icon-source.png` via `npm run tauri icon <path>`. The bundled bridge is spawned on port
-8787 and terminates with the app (stdin-EOF watchdog + Tauri child cleanup).
+A character can sit at the center like an anchor star, with outfits, poses, scenes, expressions, videos, captions, render settings, and posts orbiting around it. A music release can become its own constellation, connecting cover art, promo clips, lyrics, thumbnails, visualizers, and platform-ready social posts. A brand system can become a galaxy of logos, color palettes, motion styles, presets, typography, reusable templates, and campaign assets.
 
-## Backends
+This makes LumenDeck feel less like a file browser and more like a creative observatory.
 
-## Fallback render honesty
+The creator can see:
 
-LumenDeck marks non-real output explicitly. If the selected backend fails and LumenDeck uses Mock, or
-if the bridge returns a procedural placeholder while Diffusers was expected, the queue shows
-`done + warning`, the Gallery card gets a **Fallback** badge, and the detail drawer records the
-fallback reason. Exported manifests include selected backend, actual backend, render mode, fallback
-flag, fallback reason, and TurboForge warnings.
+* Where an idea started
+* How it evolved
+* Which assets are related
+* Which renders are strongest
+* Which branches went nowhere
+* Which pieces are missing
+* Which items are ready for publishing
+* Which styles, characters, or campaigns need attention
 
-Mock and procedural output are useful for smoke tests, previews, and app development. They should not
-be treated as clean real model renders.
+The Constellation System turns the creative process into something spatial, searchable, and alive.
 
-## Storage limitations
+---
 
-In dev/web mode the Gallery uses browser/localStorage persistence with base64 media. This is limited
-and can be cleared by browser profile cleanup. Export important renders and manifests from Gallery.
-The desktop filesystem gallery storage path is scaffolded as `%LOCALAPPDATA%\LumenDeck\gallery` with
-planned `renders`, `manifests`, and `thumbnails` subfolders.
+## 4. Creative Lineage
 
-Generated media, model weights, caches, Python runtimes, build output, and Tauri targets are ignored
-by git. Do not commit `.safetensors`, `.ckpt`, `.pt`, `.pth`, `.onnx`, generated videos, or runtime
-caches.
+A major strength of the Constellation System is **creative lineage**.
 
-### Video Renders
+Every generated asset carries memory of its origin. LumenDeck can connect an output back to the prompt, reference image, model, LoRA, seed, settings, style preset, negative prompt, upscaler, caption, and export format that created it.
 
-Enable the **Video** capsule in Recipe or Graph view to render a short animated loop. The built-in
-bridge returns deterministic animated GIF output (`mediaType: video`, `mimeType: image/gif`) with
-frame count, FPS, motion strength, camera motion, and loop settings recorded in the manifest.
+This means creators can trace an image backward through its entire creative bloodline.
 
-### Mock Backend
+A finished render is not just a file. It is a point in a larger chain:
 
-The Mock backend is built in and needs no GPU. It creates deterministic procedural images and SVG
-animation previews so you can
-test prompts, manifests, gallery restore, TurboForge planning, benchmark storage, and UI flow.
+**Reference → prompt → model → render → variant → selected asset → campaign item → published post → performance feedback → next generation**
 
-Use it when:
+This makes iteration far more powerful. If a specific image works well, the creator can return to its exact creative DNA. If a character begins to look inconsistent, LumenDeck can show which branch caused the drift. If a campaign has strong visuals but weak captions, the system can reveal that gap in context.
 
-- You are developing the app UI.
-- ComfyUI is not running.
-- You want no-GPU smoke tests.
+The Constellation System becomes a memory engine for creative work.
 
-Mock timings are app-validation timings only. They are not model speed benchmarks.
+---
 
-### ComfyUI API Backend
+## 5. Gradients as Visual Language
 
-LumenDeck can connect directly to a local ComfyUI server.
+Gradients are not just decoration in LumenDeck. They are an information system.
 
-1. Start ComfyUI normally.
-2. In LumenDeck, open the Backend panel.
-3. Select `ComfyUI API`.
-4. Set the URL, usually `http://127.0.0.1:8188`.
-5. Click `Test connection`.
-6. Select a checkpoint in Model Shelf or edit the ComfyUI template checkpoint name.
-7. Render.
+The Constellation System can use color, brightness, opacity, glow, saturation, and gradient shifts to communicate the status and meaning of every asset.
 
-The ComfyUI path checks `/system_stats`, submits a workflow to `/prompt`, polls
-`/history/{prompt_id}`, and fetches the output via `/view`.
+A node might shift from cool blue to violet to gold as it moves through stages:
 
-If ComfyUI is offline, blocked by CORS, or rejects the sample workflow, LumenDeck shows a
-plain-English error. If `Fallback to mock` is enabled, the app renders with Mock instead and records
-the fallback in the manifest warning data.
+**raw experiment → promising variant → selected favorite → approved asset → published final**
 
-Workflow import/export placeholders are visible in Diagnostics for future ComfyUI workflow JSON
-support. They are disabled until the mapping engine is implemented.
+Older generations can fade into softer tones while newer work glows brighter at the edge of the constellation. Strong assets can pulse with higher brightness. Failed renders can dim. Unused but high-potential assets can shimmer in a separate state, waiting to be rediscovered.
 
-### Diffusers Bridge
+Style families can carry their own color signatures. A cinematic campaign might live in deep blue and silver. A neon social set might burn violet and magenta. A character identity system might use gold cores with lavender edges. A model-testing branch might appear in cooler technical tones.
 
-A tiny local HTTP backend that gives LumenDeck a real generation path plus a local model scanner,
-with **no GPU or heavy dependencies** required for the default path. The desktop app bundles the
-pure-stdlib server as a sidecar and starts it automatically. Its default generator is a
-pure-standard-library procedural renderer that produces deterministic, reproducible PNGs and animated
-GIFs from a seed:
-the reference implementation of the `BackendAdapter` contract.
+Gradients can represent:
 
-```bash
-cd bridge
-python server.py --port 8787
-```
+* Asset freshness
+* Approval status
+* Render quality
+* Model confidence
+* Character consistency
+* Style family
+* Campaign readiness
+* Publishing status
+* Similarity to reference
+* Creative momentum
+* Render cost or complexity
+* Performance after posting
 
-In LumenDeck's Backend panel choose **Diffusers bridge**, set the URL to `http://127.0.0.1:8787`, and
-**Test connection**. Open **Model Shelf -> Bring your own models**, paste a folder path, and scan it
-to replace the demo catalog with local checkpoints/LoRAs (file hashing + family inference). The older
-`LUMENDECK_MODEL_DIR` environment variable still works for scripted launches.
+This allows metadata to become visible without opening panels, menus, or spreadsheets. The constellation becomes readable at a glance.
 
-For real SD-Turbo photos, use **Install runtime + model** in the Backend panel. LumenDeck creates an
-app-local runtime, installs PyTorch + Diffusers, and downloads/loads `stabilityai/sd-turbo` into the
-Hugging Face cache. On NVIDIA systems it installs CUDA PyTorch; otherwise it falls back to CPU
-PyTorch. A compatible Python 3.10-3.13 install must be available; Python 3.12 is the recommended
-target.
+The interface tells the story before the user even clicks.
 
-Advanced/manual install:
+---
 
-```bash
-python -m pip install torch numpy==1.26.4 diffusers==0.30.3 transformers==4.44.2 tokenizers==0.19.1 accelerate safetensors kornia
-```
+## 6. Positioning Over Time
 
-Then use **Check model** and **Download model** in the Backend panel. Full details:
-[bridge/README.md](bridge/README.md).
+The second major layer is **positioning over time**.
 
-Runtime repair status: full in-app runtime repair is not implemented yet. To repair manually, close
-LumenDeck, delete `%LOCALAPPDATA%\LumenDeck\diffusers-runtime`, relaunch, then run **Install runtime +
-model** again.
+Assets in LumenDeck are not randomly scattered. They move, cluster, orbit, separate, and stabilize based on their creative relationships.
 
-For common failure modes, see [docs/diagnostics.md](docs/diagnostics.md).
+Early exploratory prompts sit near the origin point. Strong variants pull closer to the project core. Failed renders drift outward like dim satellites. Published assets lock into stable positions. New ideas branch from older ones, forming visible trails of creative lineage.
 
-### Workflow Templates
+Over time, the project map evolves.
 
-The default ComfyUI workflow template lives in:
+A character may begin as a single reference image, then branch into facial studies, outfit tests, lighting experiments, social posts, video prompts, and final campaign assets. A music release may start with cover art, then expand into visualizers, thumbnails, short-form clips, story posts, and launch materials. A brand system may begin with a logo, then grow into color systems, motion assets, templates, product screens, and marketing graphics.
 
-`src/turboForge/workflows/comfyWorkflowTemplates.ts`
+The user can scrub through time and watch the constellation form.
 
-It maps prompt, negative prompt, seed, steps, CFG, width, height, and checkpoint name into a minimal
-text-to-image graph. ComfyUI checkpoint names must match files known to your ComfyUI
-`models/checkpoints` folder. If your model is named differently, edit the template or select a model
-id that maps to the right checkpoint filename.
+They can see:
 
-## TurboForge
+* The first prompt
+* The first useful render
+* The strongest creative branch
+* The moment the style changed
+* The point where a character drifted
+* The campaign buildout
+* The final export stage
+* The publishing sequence
+* The feedback loop after release
 
-TurboForge helps workflows feel faster and fail less by planning renders before they start, caching
-expensive setup decisions, warning about heavy settings, and recording benchmark history.
+This turns creative development into motion. Instead of guessing how a project evolved, the creator can literally see the idea travel.
 
-Presets:
+**A timeline becomes space. A project map becomes motion.**
 
-- Safe: most reliable
-- Fast: good default
-- Turbo: faster if supported
-- Forge: compile for max speed
-- Eco: lower memory
-- Draft: fast preview
-- Final: high-quality export
+---
 
-TurboForge does not guarantee 2x speed. Measured speedup appears only after baseline and optimized
-benchmark data exist for the selected workflow/backend.
+## 7. Momentum, Drift, and Creative Health
 
-Benchmarks distinguish:
+Because LumenDeck understands relationships over time, the Constellation System can show the health of a creative project.
 
-- Mock/app timing
-- Backend health-check timing
-- Real backend request timing
-- Render queue/wait timing where available
-- Output fetch/download timing where available
-- Total render time
+Some areas may glow with momentum because new assets are being created, refined, and published. Other areas may fade because they have gone stale. Some clusters may become overcrowded with duplicates. Others may look empty, revealing missing campaign pieces.
 
-Real model benchmarks require a connected backend and supported hardware.
+The system can highlight:
 
-## Manifests
+* Style drift
+* Character inconsistency
+* Duplicate renders
+* Forgotten assets
+* Weak branches
+* Overused prompts
+* Underdeveloped campaign areas
+* Missing formats
+* Publishing gaps
+* High-performing creative directions
+* Assets that deserve reuse
 
-Every gallery render stores a manifest with:
+This makes the constellation useful not only as a beautiful map, but as a practical creative command system.
 
-- Prompt, seed, sampler, canvas, model, LoRAs, and graph snapshot
-- TurboForge preset and render plan
-- Selected backend and backend health status
-- Compile cache status and optimization flags
-- Benchmark data when available
-- Warnings and recommended fixes
+It can help creators decide what to generate next, what to delete, what to refine, what to publish, and what to turn into a reusable template.
+
+---
+
+## 8. The Project Observatory
+
+The Constellation System turns LumenDeck into a project observatory.
+
+A creator can zoom out and see an entire creative universe: characters, campaigns, styles, models, renders, posts, and outputs all connected in one field. Then they can zoom in on a single node and inspect its prompt, settings, references, metadata, status, and linked assets.
+
+This gives users two powerful modes:
+
+**Macro view:**
+See the full creative system, identify clusters, gaps, momentum, and drift.
+
+**Micro view:**
+Inspect one asset’s exact origin, settings, status, connections, and next possible actions.
+
+This makes LumenDeck useful for both artistic exploration and production management. It supports the dream-state chaos of making things, but also the practical discipline of finishing, organizing, publishing, and improving them.
+
+---
+
+## 9. Automation Potential
+
+The Constellation System can become the brain that powers smarter automation.
+
+Because LumenDeck knows how assets relate to one another, it can help automate:
+
+* Prompt reuse
+* Character consistency checks
+* Campaign planning
+* Social post preparation
+* Asset tagging
+* Render comparison
+* Version history
+* Publishing workflows
+* Caption generation
+* Thumbnail selection
+* Style matching
+* Missing asset detection
+* Model recommendation
+* Project cleanup
+
+For example, if a creator is building a fictional persona, LumenDeck could detect which renders match the persona best, which outfits are underused, which expressions need more variety, and which posts are ready for scheduling.
+
+If a creator is building a music release campaign, the system could organize cover art, short-form videos, captions, platform crops, visualizers, and social templates into a launch-ready sequence.
+
+If a creator is testing models, the system could show which model produced the most consistent results for a specific character or visual style.
+
+This turns automation from a blind button press into an informed creative assistant.
+
+---
+
+## 10. Local-First Philosophy
+
+LumenDeck is designed around local-first creative power.
+
+The platform should prioritize:
+
+* Local rendering where possible
+* Local asset organization
+* Local project memory
+* Local model management
+* Private creative workflows
+* Optional integrations rather than mandatory cloud dependency
+* User-owned files and metadata
+* Transparent export paths
+
+This matters because creators should not lose control of their work, their characters, their references, or their creative history. LumenDeck should feel like a studio that belongs to the user, not a rented hallway inside someone else’s machine.
+
+Cloud features can exist, but they should enhance the workflow rather than own it.
+
+---
+
+## 11. User Experience Direction
+
+The LumenDeck interface should feel like a high-end creative cockpit: cinematic, responsive, visual, and alive without becoming noisy.
+
+The design language should support:
+
+* Glassmorphism panels
+* Deep spatial canvas views
+* Animated constellation maps
+* Gradient-rich status systems
+* Smooth timeline scrubbing
+* Drag-and-drop asset organization
+* Node-based project memory
+* Character and campaign hubs
+* Render queue visibility
+* Model and preset routing
+* Visual comparison tools
+* Publishing preparation areas
+
+The system should feel advanced, but not overwhelming. It should make complexity navigable.
+
+The ideal feeling is:
+
+**A creator opens LumenDeck and immediately understands where their universe is, what is moving, what is finished, what is broken, and what wants to be born next.**
+
+---
+
+## 12. Signature Feature Statement
+
+The strongest positioning for this system is:
+
+**LumenDeck is not just an AI renderer. It is a living creative map.**
+
+Its Constellation System connects prompts, renders, models, references, characters, styles, captions, videos, and published assets into interactive project galaxies. Gradients reveal status, quality, freshness, consistency, and momentum. Spatial positioning shows relationships, branches, drift, and creative lineage. Time controls let users watch an idea evolve from first spark to final campaign.
+
+LumenDeck turns AI creation from a pile of files into a navigable universe.
+
+---
+
+## 13. Short Product Description
+
+**LumenDeck is a next-generation local AI creation studio for rendering, organizing, and evolving images, videos, characters, campaigns, and creative systems. Its Constellation System maps prompts, models, references, renders, styles, and final assets into living visual constellations, helping creators track lineage, preserve consistency, discover gaps, and guide what to generate next.**
+
+---
+
+## 14. Long Product Description
+
+**LumenDeck is a local-first AI creation and rendering platform designed for creators who need more than a prompt box. It combines image and video generation, model routing, character workflows, asset management, automation, and visual project memory inside one unified creative dashboard.**
+
+**Its signature Constellation System transforms every project into an interactive map where prompts, renders, models, references, characters, styles, captions, videos, and final exports are connected as part of a living creative universe. Through gradients, glow states, spatial positioning, and timeline movement, LumenDeck reveals how ideas evolve, which assets are strongest, where creative drift is happening, what is ready to publish, and what should be generated next.**
+
+**The result is a creative operating system for AI-powered visual production: private, organized, intelligent, cinematic, and built for creators who want ownership over both their outputs and the process that made them.**
+
+---
+
+## 15. One-Line Pitch
+
+**LumenDeck turns AI generation into a living creative universe where every prompt, render, model, character, and asset is connected, traceable, and ready to evolve.**
+
+---
+
+## 16. Killer Feature Phrase
+
+**A timeline you can see as space, and a project map you can read as motion.**
+
+---
+
+## 17. Final Positioning
+
+LumenDeck should be positioned as a new category of AI creation software.
+
+Not simply:
+
+* Prompt-to-image
+* Prompt-to-video
+* Asset manager
+* Model launcher
+* Social automation tool
+
+But a fusion of all of them:
+
+**A local AI creative operating system with spatial memory, visual lineage, and time-aware project intelligence.**
+
+LumenDeck gives creators the ability to generate, understand, organize, refine, publish, and evolve their work inside one living system.
+
+It does not just help users make more assets.
+
+It helps them build worlds.
+
+---
 
 ## Support LumenDeck
 
-LumenDeck is free, open source, and donation-supported. If it earns a place in your creative
-toolkit, you can support development on Ko-fi:
+LumenDeck is free, open source, and donation-supported. If it earns a place in your creative toolkit, you can support development on Ko-fi:
 
 **[Support LumenDeck on Ko-fi](https://ko-fi.com/mekhaneproductions)**
 
-Donations fund installer builds, documentation, preset packs, constellation system improvements,
-gradient engine and renderer polish, and long-term maintenance. Every core feature stays free and
-open — donations are optional and never unlock a paywall. Prefer to help another way? See
-[CONTRIBUTING.md](CONTRIBUTING.md) for bug reports, presets, docs, and code, and
-[ROADMAP.md](ROADMAP.md) for where the project is heading.
+Donations fund installer builds, documentation, preset packs, constellation system improvements, gradient engine and renderer polish, and long-term maintenance. Every core feature stays free and open — donations are optional and never unlock a paywall. Prefer to help another way? See [CONTRIBUTING.md](CONTRIBUTING.md) for bug reports, presets, docs, and code, and [ROADMAP.md](ROADMAP.md) for where the project is heading.
 
 ## License
 
 LumenDeck is licensed under the [Apache License 2.0](LICENSE).
 Copyright 2026 MEKHANE Productions (Greg Molina).
-
-## Git Remote
-
-If `git push` says no push destination is configured, create or choose a remote repository, then run:
-
-```bash
-git remote add origin <REPO_URL>
-git push -u origin main
-```
-
-Do not use a fake remote URL. Use the actual GitHub/GitLab/Bitbucket repository you want LumenDeck
-pushed to.
