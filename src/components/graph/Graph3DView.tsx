@@ -58,6 +58,10 @@ import { estimateFamilyFromModelId, type ControlNetFamily } from '../../core/con
 import { fieldProfile, type FieldProfile } from '../../core/field/fieldProfile';
 import { applyField } from '../../core/field/applyField';
 import type { Ghost } from '../../state/store';
+import { readAudioFrequency } from '../../state/store';
+import { computeBands, scaleBands } from '../../core/audio/bands';
+import { applyAudio, type AudioReaction } from '../../core/audio/mapping';
+import { AudioPanel } from '../audio/AudioPanel';
 
 interface Props {
   /** Called when the WebGL context cannot be created (workspace falls back to 2D). */
@@ -238,6 +242,10 @@ export function Graph3DView({ onContextFailed }: Props) {
   // Subscribe to the active clip id so the playback effect tears down + re-arms
   // when the clip changes or disappears (e.g. the active clip is deleted mid-play).
   const activeClipId = useStudio((s) => s.motion.activeClipId);
+  // Audio reactivity: subscribe only to the running flag so the reactive tick
+  // effect arms/disarms when audio starts/stops. The loop reads the live
+  // mapping/sensitivity + engine frames via useStudio.getState() each frame.
+  const audioRunning = useStudio((s) => s.audio.running);
 
   // ---- Render-Space Ghost Controller (v0.16.0) ----------------------------
   // The field slice + its actions land in parallel (src/state); this half only
@@ -495,6 +503,9 @@ export function Graph3DView({ onContextFailed }: Props) {
         // Leaving the 3D view must stop any headless ghost-recording timers, or
         // they sample forever and produce a bogus over-long clip on return.
         useStudio.getState().cancelAllGhostRecordings();
+        // Leaving the 3D view must also release the audio engine (AudioContext +
+        // mic tracks) + any bake sampler, or they leak past the view's lifetime.
+        useStudio.getState().stopAudio();
         ro?.disconnect();
         host.removeEventListener('wheel', onWheel);
         host.removeEventListener('scroll', resetScroll, true);
@@ -1084,6 +1095,80 @@ export function Graph3DView({ onContextFailed }: Props) {
     return unsub;
   }, [ready, applyPlaybackFrame]);
 
+  // ---- audio reactive overlay ----------------------------------------------
+  // While audio.running, each rAF frame maps the engine's live bands into the
+  // SAME transient orb offset/ring overlay the motion-playback preview uses
+  // (position/scale/ring) WITHOUT writing workflow params. Reuses restoreStaticOrbs
+  // on teardown, exactly like playback. Audio + motion playback are mutually
+  // exclusive (the store stops one when the other starts), so they never both
+  // drive the orbs. rAF is acceptable here: reactivity only matters on-screen,
+  // and the engine is torn down on unmount so the AudioContext/mic never leak.
+
+  /** Apply one audio reaction frame (offset + scale + ring sweep) to every orb. */
+  const applyAudioFrame = useCallback((reaction: AudioReaction) => {
+    const t = threeRef.current;
+    if (!t) return;
+    const wf = useStudio.getState().workflow;
+    const sel = useStudio.getState().selectedNodeId;
+    const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+    for (const node of wf.nodes) {
+      if (node.id === sel) continue; // the expanded card never moves
+      const entry = orbsRef.current.get(node.id);
+      if (!entry) continue;
+      const base = orbWorldCenter(node);
+      const off = reaction.offsets.get(node.id);
+      if (off) {
+        entry.group.position.set(base.x + off.dx, base.y + off.dy, base.z + off.dz);
+        entry.group.scale.setScalar(off.scale);
+      } else {
+        entry.group.position.set(base.x, base.y, base.z);
+        entry.group.scale.setScalar(1);
+      }
+      // Ring sweep: quantize the audio ring value to bounded buckets so the ring
+      // geometry is only rebuilt when the bucket changes (never per-frame churn),
+      // matching the static/playback ring-rebuild philosophy. restoreStaticOrbs
+      // rebuilds the real (param-weight) ring on teardown, so this self-heals.
+      const ringVal = reaction.ringValues.get(node.id);
+      if (ringVal != null) {
+        const q = Math.round(clamp01(ringVal) * 10) / 10;
+        if (entry.ringT !== q) {
+          if (entry.ring) { entry.group.remove(entry.ring); disposeObject3D(entry.ring); entry.ring = null; }
+          const stops = gradientStops(q);
+          entry.ring = makeOrbRing(ORB_RADIUS, q, stops[1]);
+          if (entry.ring) entry.group.add(entry.ring);
+          const accent = capsuleAccent(node.kind);
+          updateOrbMaterial(entry.material, stops, accent);
+          entry.tintKey = `${stops[0]}|${stops[1]}|${stops[2]}|${accent}`;
+          entry.ringT = q;
+        }
+      }
+    }
+    routeWiresLive();
+  }, [capsuleAccent, routeWiresLive]);
+
+  useEffect(() => {
+    if (!ready || !audioRunning) return;
+    let raf = 0;
+    const tick = () => {
+      const t = threeRef.current;
+      const s = useStudio.getState();
+      // Stop if audio ended or motion playback took over (mutual exclusion).
+      if (!t || !s.audio.running || s.transport.playing) return;
+      const bands = scaleBands(computeBands(readAudioFrequency()), s.audio.sensitivity);
+      const reaction = applyAudio(bands, s.audio.mapping);
+      applyAudioFrame(reaction);
+      t.renderer.render(t.scene, t.camera);
+      t.cssRenderer.render(t.scene, t.camera);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      // Settle the orbs back to their static positions/values (one idle flush).
+      restoreStaticOrbs();
+    };
+  }, [ready, audioRunning, applyAudioFrame, restoreStaticOrbs]);
+
   // ---- camera actions ------------------------------------------------------
   const resetCamera = () => {
     camRef.current = { tx: 0, ty: 0, tz: 0, ...DEFAULT_CAM };
@@ -1619,6 +1704,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         {motionPanelOpen ? (
           <div id="graph-motion-body" className="motion-panel-body scroll">
             <MotionTimeline />
+            <AudioPanel />
           </div>
         ) : null}
       </div>

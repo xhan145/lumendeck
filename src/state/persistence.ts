@@ -5,6 +5,8 @@ import type { GalleryItem } from './store';
 import type { PromptToolsState } from './promptTools';
 import type { MotionState } from '../core/motion/types';
 import type { FieldState } from './field';
+import type { AudioState } from './audio';
+import type { AudioMapping } from '../core/audio/mapping';
 
 const KEY = 'lumendeck.v1';
 
@@ -40,6 +42,13 @@ export interface PersistedState {
    * across a reload (it is reset on hydrate).
    */
   field?: FieldState;
+  /**
+   * Audio Reactivity slice — ONLY the editable `mapping` + `sensitivity`.
+   * Optional so state saved before this feature still loads (missing -> the
+   * workflow's default mapping via hydrateAudio). The live `running`/`source`
+   * are NEVER persisted, so a reload never auto-listens to the microphone.
+   */
+  audio?: { mapping?: AudioMapping; sensitivity?: number };
 }
 
 /**
@@ -58,6 +67,8 @@ export function persistedProjection(state: {
   motion: MotionState;
   /** Optional so callers assembled before this slice existed still typecheck. */
   field?: FieldState;
+  /** Optional so callers assembled before this slice existed still typecheck. */
+  audio?: AudioState;
 }): PersistedState {
   return {
     workflow: state.workflow,
@@ -77,6 +88,10 @@ export function persistedProjection(state: {
           anchors: state.field.anchors,
         }
       : { ghosts: [], anchors: [] },
+    // Persist ONLY the mapping + sensitivity; the live running/source are dropped
+    // so a reload never resumes listening (mic privacy) and toggling Start/Stop
+    // never churns persistence.
+    audio: state.audio ? { mapping: state.audio.mapping, sensitivity: state.audio.sensitivity } : undefined,
   };
 }
 

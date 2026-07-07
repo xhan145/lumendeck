@@ -1,7 +1,7 @@
 {
   "name": "lumendeck",
   "private": true,
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "LumenDeck — local-first, node-native generative image studio",
   "type": "module",
   "scripts": {

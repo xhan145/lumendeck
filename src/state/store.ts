@@ -69,10 +69,17 @@ import { fieldProfile, profileHasAxes, type FieldProfile } from '../core/field/f
 import { applyField } from '../core/field/applyField';
 import { pathToClip, type PathSample } from '../core/field/pathToClip';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
+import { defaultAudioState, hydrateAudio, SENSITIVITY_MIN, SENSITIVITY_MAX, type AudioSourceKind, type AudioState } from './audio';
+import { AudioEngine, type AudioSource } from '../audio/engine';
+import { computeBands, scaleBands } from '../core/audio/bands';
+import { audioToClip, type AudioSample } from '../core/audio/audioToClip';
+import type { AudioMapping } from '../core/audio/mapping';
 
 // Re-export the field slice types so the 3D UI (Graph3DView) imports them from the
 // store alongside the actions, matching the motion slice's ergonomics.
 export type { Ghost, Anchor, FieldState } from './field';
+export type { AudioState } from './audio';
+export type { AudioSource } from '../audio/engine';
 
 export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance';
 
@@ -125,6 +132,8 @@ interface StudioState {
   motion: MotionState;
   /** Render-Space Ghost Controller: ghosts + anchors (see src/state/field.ts). */
   field: FieldState;
+  /** Audio Reactivity slice: source/running (ephemeral) + mapping/sensitivity (see src/state/audio.ts). */
+  audio: AudioState;
   /**
    * Ephemeral playhead/transport — NEVER persisted. Carries both the live state
    * (playing/t/playbackRate) and the transport actions; the 3D/UI layer runs the
@@ -252,6 +261,18 @@ interface StudioState {
   /** Cancel all in-progress ghost recordings (no clip) — called on 3D-view unmount. */
   cancelAllGhostRecordings(): void;
 
+  // Audio Reactivity — live analysis overlay + bake-to-clip (see src/state/audio.ts).
+  /** Start the engine on a source; pauses motion playback first (never both drive orbs). Loud status on failure. */
+  startAudio(source: AudioSource): Promise<void>;
+  /** Stop the engine + any bake sampler; orbs return to rest (never persisted). */
+  stopAudio(): void;
+  /** Replace the editable band -> orb-channel mapping. */
+  setAudioMapping(mapping: AudioMapping): void;
+  /** Set the global band sensitivity (clamped). */
+  setAudioSensitivity(v: number): void;
+  /** Record `seconds` of bands (wall-clock sampler) -> audioToClip -> motion slice + active. */
+  bakeAudioClip(seconds: number): void;
+
   setAdapter(id: RenderBackendId): void;
   updateBackendSettings(settings: Partial<BackendSettings>): void;
   testSelectedBackend(): Promise<void>;
@@ -324,6 +345,51 @@ const GHOST_RECORD_INTERVAL_MS = 66;
 const wallNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 
+/**
+ * The single, module-level audio engine (AudioContext + AnalyserNode). Kept
+ * OUTSIDE store state — it is imperative browser plumbing, never persisted and
+ * never part of the render projection. The reactive tick in Graph3DView reads
+ * frames via `readAudioFrequency()`; stopAudio() + 3D-view unmount tear it down.
+ */
+const audioEngine = new AudioEngine();
+
+/**
+ * Active audio-bake session (module-level, like ghostRecordings): a wall-clock
+ * setInterval sampling `performance.now()` deltas — NOT a bare rAF — so the
+ * capture window is honored even if the tab is occluded. Null when not baking.
+ */
+interface AudioBake {
+  samples: AudioSample[];
+  timer: ReturnType<typeof setInterval>;
+  startedAt: number;
+}
+let audioBake: AudioBake | null = null;
+/** Sample cadence for audio baking (~15Hz — plenty for value curves). */
+const AUDIO_BAKE_INTERVAL_MS = 66;
+
+/** Read the current byte FFT from the shared engine (empty when stopped). */
+export function readAudioFrequency(): Uint8Array {
+  return audioEngine.read();
+}
+
+/** The node an audio clip bakes onto: the first mapped target, else the sampler, else the first node. */
+function primaryAudioNodeId(mapping: AudioMapping, workflow: Workflow): string {
+  return (
+    mapping.targets[0]?.nodeId ??
+    workflow.nodes.find((n) => n.kind === 'sampler')?.id ??
+    workflow.nodes[0]?.id ??
+    ''
+  );
+}
+
+/** Tear down an in-progress audio bake sampler (idempotent). */
+function stopAudioBake(): void {
+  if (audioBake) {
+    clearInterval(audioBake.timer);
+    audioBake = null;
+  }
+}
+
 /** Prefer a real (diffusers) installed checkpoint, else the first installed one. */
 function pickCheckpoint(shelf: ModelAsset[]): string {
   const installed = shelf.filter((a) => a.assetType === 'checkpoint' && a.installed);
@@ -369,6 +435,7 @@ const initialPromptTools = hydratePromptTools(persisted.promptTools);
 const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
 const initialMotion = hydrateMotion(persisted.motion, initialWorkflow);
 const initialField = hydrateField(persisted.field);
+const initialAudio = hydrateAudio(persisted.audio, initialWorkflow);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
@@ -439,12 +506,17 @@ export const useStudio = create<StudioState>((set, get) => {
     promptTools: initialPromptTools,
     motion: initialMotion,
     field: initialField,
+    audio: initialAudio,
     transport: {
       ...defaultTransport(),
       // Transport actions only mutate the ephemeral playhead (they preserve these
       // method refs via patchTransport). The 3D/UI layer runs the rAF advance and
       // calls seek. Playback NEVER commits sampled values (see bakeClipToWorkflow).
-      play: () => patchTransport({ playing: true }),
+      // Starting playback STOPS audio first — the two must never both drive orbs.
+      play: () => {
+        if (get().audio.running) get().stopAudio();
+        patchTransport({ playing: true });
+      },
       pause: () => patchTransport({ playing: false }),
       stop: () => patchTransport({ playing: false, t: 0 }),
       seek: (t) => patchTransport({ t: Math.max(0, t) }),
@@ -524,7 +596,16 @@ export const useStudio = create<StudioState>((set, get) => {
       for (const [, r] of ghostRecordings) clearInterval(r.timer);
       ghostRecordings.clear();
       setField({ ...get().field, ghosts: [], anchors: [] });
-      commit(createDefaultWorkflow());
+      // A fresh workflow also orphans the audio mapping's node ids: stop any live
+      // session + bake, then re-seed the default mapping against the new graph
+      // (preserving the user's sensitivity).
+      stopAudioBake();
+      audioEngine.stop();
+      const freshWorkflow = createDefaultWorkflow();
+      set({
+        audio: { ...defaultAudioState(freshWorkflow), sensitivity: get().audio.sensitivity },
+      });
+      commit(freshWorkflow);
     },
 
     rackSlots: () => {
@@ -960,6 +1041,79 @@ export const useStudio = create<StudioState>((set, get) => {
         ...get().field,
         ghosts: get().field.ghosts.map((g) => (g.recording ? { ...g, recording: false } : g)),
       });
+    },
+
+    // ---- Audio Reactivity ----
+    startAudio: async (source) => {
+      // Audio and motion playback must NEVER both drive orbs — pause playback first.
+      if (get().transport.playing) get().transport.pause();
+      const kind: AudioSourceKind = 'mic' in source ? 'mic' : 'tone' in source ? 'tone' : 'file';
+      try {
+        await audioEngine.start(source);
+        set({
+          audio: { ...get().audio, running: true, source: kind },
+          controlStatus: `Audio reactive: listening (${kind}).`,
+        });
+      } catch (err) {
+        // Loud status, engine stays stopped, orbs never react to a fake signal.
+        audioEngine.stop();
+        set({
+          audio: { ...get().audio, running: false, source: null },
+          controlStatus: `Audio error — ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    },
+
+    stopAudio: () => {
+      // Cancel any in-progress bake sampler + release the engine (mic tracks +
+      // AudioContext) so nothing leaks; orbs settle back on the next idle flush.
+      stopAudioBake();
+      audioEngine.stop();
+      set({ audio: { ...get().audio, running: false, source: null } });
+    },
+
+    setAudioMapping: (mapping) => set({ audio: { ...get().audio, mapping } }),
+
+    setAudioSensitivity: (v) => {
+      const sensitivity = v < SENSITIVITY_MIN ? SENSITIVITY_MIN : v > SENSITIVITY_MAX ? SENSITIVITY_MAX : v;
+      set({ audio: { ...get().audio, sensitivity } });
+    },
+
+    bakeAudioClip: (seconds) => {
+      if (!get().audio.running) {
+        set({ controlStatus: 'Start audio before baking a reactive clip.' });
+        return;
+      }
+      if (audioBake) return; // a bake is already running — ignore a re-trigger
+      const nodeId = primaryAudioNodeId(get().audio.mapping, get().workflow);
+      const windowMs = Math.max(0.1, seconds) * 1000;
+      const startedAt = wallNow();
+      // Seed a t=0 sample so a clip always has an opening frame.
+      const seed: AudioSample = { t: 0, bands: scaleBands(computeBands(audioEngine.read()), get().audio.sensitivity) };
+      const samples: AudioSample[] = [seed];
+      const timer = setInterval(() => {
+        const rec = audioBake;
+        if (!rec) return;
+        // Wall-clock elapsed (starvation-safe): sample bands NOW at REAL seconds.
+        const elapsed = wallNow() - rec.startedAt;
+        const bands = scaleBands(computeBands(audioEngine.read()), get().audio.sensitivity);
+        rec.samples.push({ t: elapsed / 1000, bands });
+        if (elapsed >= windowMs) {
+          clearInterval(rec.timer);
+          audioBake = null;
+          const clip = audioToClip(rec.samples, get().audio.mapping, nodeId);
+          if (clip.tracks.length === 0) {
+            set({ controlStatus: 'Audio bake produced no tracks (map a band to this node first).' });
+            return;
+          }
+          // Land the capture in the motion slice + make it active (plays via
+          // Phase 1, renders via Phase 2 unchanged).
+          setMotion({ clips: [...get().motion.clips, clip], activeClipId: clip.id });
+          set({ controlStatus: `Baked ${seconds}s of audio into "${clip.name}" (${rec.samples.length} samples).` });
+        }
+      }, AUDIO_BAKE_INTERVAL_MS);
+      audioBake = { samples, timer, startedAt };
+      set({ controlStatus: `Baking ${seconds}s of audio…` });
     },
 
     setAdapter: (adapterId) => {
