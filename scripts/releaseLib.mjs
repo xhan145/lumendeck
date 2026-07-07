@@ -33,8 +33,8 @@ export function buildAssetUrl(version, fileName) {
  * @param {string} args.version - release version, no leading `v` (matches package.json).
  * @param {string} [args.notes] - release notes / changelog body.
  * @param {string} [args.pubDate] - ISO 8601 publish date (defaults to now).
- * @param {string} args.sigContents - the contents of the `.sig` file for the artifact.
- * @param {string} args.assetUrl - download URL of the `.msi.zip` (see buildAssetUrl).
+ * @param {string} args.sigContents - the contents of the `.msi.sig` file.
+ * @param {string} args.assetUrl - download URL of the `.msi` installer (see buildAssetUrl).
  * @param {string} [args.platform] - platform key (defaults to `windows-x86_64`).
  * @returns {{version:string, notes:string, pub_date:string, platforms:Record<string,{signature:string,url:string}>}}
  */

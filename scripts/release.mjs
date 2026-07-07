@@ -112,22 +112,25 @@ step('Build: signed desktop bundle (npx tauri build)');
 run('npx', ['tauri', 'build']);
 
 // 3. LOCATE ARTIFACTS ------------------------------------------------------
-step('Locate: .msi / .msi.zip / .sig under src-tauri/target/release/bundle');
+// Tauri v2 signs the .msi DIRECTLY: it emits `<name>.msi` + `<name>.msi.sig`
+// (there is no .msi.zip — that was v1). The updater downloads the .msi and
+// verifies it against the .sig. The bundle dir accumulates every version's MSI,
+// so match THIS version's files exactly, not the first .msi alphabetically.
+step('Locate: this version\'s .msi + .msi.sig under src-tauri/target/release/bundle');
 const bundleDir = join(ROOT, 'src-tauri', 'target', 'release', 'bundle', 'msi');
 if (!existsSync(bundleDir)) fail(`Bundle dir not found: ${bundleDir}`);
 const files = readdirSync(bundleDir);
-const msi = files.find((f) => f.endsWith('.msi'));
-const msiZip = files.find((f) => f.endsWith('.msi.zip'));
-const sig = files.find((f) => f.endsWith('.msi.zip.sig'));
-if (!msi) fail('No .msi found (is bundle.targets = ["msi"]?).');
-if (!msiZip) fail('No .msi.zip found (is bundle.createUpdaterArtifacts = true and signing env set?).');
-if (!sig) fail('No .msi.zip.sig found (signing env missing?).');
-console.log(`  msi=${msi}\n  msiZip=${msiZip}\n  sig=${sig}`);
+const msi = files.find((f) => f.includes(`_${version}_`) && f.endsWith('.msi'));
+const sig = msi ? `${msi}.sig` : undefined;
+if (!msi) fail(`No .msi for ${version} found (is bundle.targets = ["msi"]?).`);
+if (!sig || !existsSync(join(bundleDir, sig)))
+  fail('No .msi.sig found (is bundle.createUpdaterArtifacts = true and the signing env set?).');
+console.log(`  msi=${msi}\n  sig=${sig}`);
 
 // 4. GENERATE latest.json --------------------------------------------------
 step('Generate: latest.json');
 const sigContents = readFileSync(join(bundleDir, sig), 'utf8').trim();
-const assetUrl = buildAssetUrl(version, msiZip);
+const assetUrl = buildAssetUrl(version, msi);
 const notes =
   process.env.LUMENDECK_RELEASE_NOTES ||
   `LumenDeck ${version}. See the GitHub release page for details.`;
@@ -148,9 +151,8 @@ run('gh', [
   'release',
   'create',
   tag,
-  join(bundleDir, msi), // human installer
-  join(bundleDir, msiZip), // updater artifact
-  join(bundleDir, sig), // updater signature
+  join(bundleDir, msi), // human installer AND updater artifact (v2 signs the .msi)
+  join(bundleDir, sig), // updater signature (.msi.sig)
   latestPath, // updater manifest
   '--title',
   `LumenDeck ${version}`,
