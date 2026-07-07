@@ -61,7 +61,19 @@ import { record as recordHistoryPure, toggleFavorite as toggleFavoritePure, type
 import { planVariations, type VariationAxis } from '../core/prompt/variations';
 import { defaultTransport, hydrateMotion, makeClip } from './motion';
 import { sampleClip, trackKey } from '../core/motion/interpolate';
-import { buildMotionRenderJobs } from '../core/motion/renderPlan';
+import { applyPatches, buildMotionRenderJobs } from '../core/motion/renderPlan';
+import {
+  buildEvolveKnobs,
+  crossover,
+  genomeToPatches,
+  mutate,
+  randomGenome,
+  seedFromString,
+  selectTopK,
+  type Genome,
+  type KnobDesc,
+} from '../core/evolve/genome';
+import { mulberry32 } from '../core/prompt/wildcards';
 import { isBindable } from '../core/motion/binding';
 import type { Keyframe, MotionClip, MotionState, MotionTrack, OrbMotion, TransportState } from '../core/motion/types';
 import { hydrateField, type Anchor, type FieldState, type Ghost } from './field';
@@ -119,6 +131,87 @@ export interface QueueJob {
   actualBackend?: string;
 }
 
+/** One scored candidate in an evolve generation (image + the genome that made it). */
+export interface EvolveCandidateView {
+  /** the candidate's index in the population sent to the backend (maps to a genome) */
+  genomeIndex: number;
+  /** the render knobs that produced this candidate (adopt/breed reuse it) */
+  genome: Genome;
+  dataUrl: string;
+  score: number;
+  breakdown: { clip: number | null; aesthetic: number };
+}
+
+/** One generation's population of scored candidates. */
+export interface EvolveGeneration {
+  candidates: EvolveCandidateView[];
+}
+
+/** The best candidate seen across the whole run (what "Adopt best" writes). */
+export interface EvolveBest {
+  dataUrl: string;
+  score: number;
+  breakdown: { clip: number | null; aesthetic: number };
+  genome: Genome;
+  generation: number;
+  genomeIndex: number;
+}
+
+/**
+ * Ephemeral Auto-Evolve slice (NEVER persisted — the candidate images are large
+ * base64 blobs and belong in the durable Gallery only on Adopt). Holds the run
+ * config, every generation's scored candidates, the running best, and the
+ * interactive parent-pick state.
+ */
+export interface EvolveState {
+  mode: 'auto' | 'interactive';
+  /** objective weights (raw slider values; the server renormalizes + zeroes clip when off) */
+  weights: { clip: number; aesthetic: number };
+  population: number;
+  generations: number;
+  running: boolean;
+  /** false when the backend could not load CLIP — surfaced as a LOUD banner */
+  clipAvailable: boolean;
+  fallbackReason: string | null;
+  generationsData: EvolveGeneration[];
+  best: EvolveBest | null;
+  /** interactive: candidate genomeIndices in the LAST generation chosen as parents */
+  selectedParents: number[];
+  /** interactive: true while waiting for the user to pick parents + breed onward */
+  awaitingParents: boolean;
+  status: string | null;
+  error: string | null;
+  /** 0..1 progress of the generation currently rendering */
+  progress: number;
+}
+
+/** Population/generation clamps (mirrored server-side per the integration contract). */
+export const EVOLVE_POP_MIN = 2;
+export const EVOLVE_POP_MAX = 8;
+export const EVOLVE_GEN_MIN = 1;
+export const EVOLVE_GEN_MAX = 6;
+/** Per-gene mutation magnitude when breeding the next generation. */
+const EVOLVE_MUTATION_RATE = 0.25;
+
+function defaultEvolveState(): EvolveState {
+  return {
+    mode: 'auto',
+    weights: { clip: 0.6, aesthetic: 0.4 },
+    population: 4,
+    generations: 3,
+    running: false,
+    clipAvailable: true,
+    fallbackReason: null,
+    generationsData: [],
+    best: null,
+    selectedParents: [],
+    awaitingParents: false,
+    status: null,
+    error: null,
+    progress: 0,
+  };
+}
+
 interface StudioState {
   workflow: Workflow;
   shelf: ModelAsset[];
@@ -132,6 +225,8 @@ interface StudioState {
   motion: MotionState;
   /** Render-Space Ghost Controller: ghosts + anchors (see src/state/field.ts). */
   field: FieldState;
+  /** Ephemeral Auto-Evolve slice: search config + scored generations (NEVER persisted). */
+  evolve: EvolveState;
   /** Audio Reactivity slice: source/running (ephemeral) + mapping/sensitivity (see src/state/audio.ts). */
   audio: AudioState;
   /**
@@ -260,6 +355,30 @@ interface StudioState {
   stopGhostRecording(id: string): void;
   /** Cancel all in-progress ghost recordings (no clip) — called on 3D-view unmount. */
   cancelAllGhostRecordings(): void;
+
+  // Auto-Evolve — explore→score→evolve search (frontend loops /evolve-step per gen).
+  /** Update the evolve config (mode/weights/population/generations), all clamped. */
+  setEvolveConfig(patch: {
+    mode?: 'auto' | 'interactive';
+    weights?: { clip?: number; aesthetic?: number };
+    population?: number;
+    generations?: number;
+  }): void;
+  /**
+   * Run the search: gen 0 = random population, then (Auto) breed+score to the
+   * generation limit, or (Interactive) score one generation and wait for the user
+   * to pick parents. Renders + scores each generation through the active backend's
+   * `evolveStep`. Surfaces `clipAvailable=false` loudly; never a silent placeholder.
+   */
+  runEvolve(): Promise<void>;
+  /** Interactive: toggle a candidate (by genomeIndex) as a parent for the next gen. */
+  pickEvolveParent(genomeIndex: number): void;
+  /** Interactive: breed the next generation from the picked parents (else the top-K). */
+  evolveNextGeneration(): Promise<void>;
+  /** Write the best genome's params into the workflow (one commit) + add its image to the Gallery. */
+  adoptBest(): Promise<void>;
+  /** Clear the current run's generations/best/status (keeps the config). */
+  clearEvolve(): void;
 
   // Audio Reactivity — live analysis overlay + bake-to-clip (see src/state/audio.ts).
   /** Start the engine on a source; pauses motion playback first (never both drive orbs). Loud status on failure. */
@@ -495,6 +614,93 @@ export const useStudio = create<StudioState>((set, get) => {
     commit(next);
   };
 
+  // ---- Auto-Evolve helpers ------------------------------------------------
+  const evClampInt = (v: number, lo: number, hi: number): number =>
+    Math.max(lo, Math.min(hi, Math.round(Number.isFinite(v) ? v : lo)));
+  const evClamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : Number.isFinite(v) ? v : 0);
+  const setEvolve = (patch: Partial<EvolveState>) => set({ evolve: { ...get().evolve, ...patch } });
+  /** The sampler node id the search drives (evolve targets the sampler's knobs). */
+  const evolveNodeId = (): string | null => findNode(get().workflow, 'sampler')?.id ?? null;
+  /** The nodes a genome writes: sampler (cfg/steps/seed) + optional Load Image (strength). */
+  const evolveNodes = (): { sampler: string; imageLoader?: string } | null => {
+    const sampler = findNode(get().workflow, 'sampler')?.id;
+    if (!sampler) return null;
+    const img = findNode(get().workflow, 'imageLoader');
+    return { sampler, imageLoader: img?.id };
+  };
+  /** True when the selected checkpoint is a turbo/LCM model (guidance pinned, few steps). */
+  const currentIsTurbo = (): boolean => {
+    const id = String(findNode(get().workflow, 'model')?.params.assetId ?? '');
+    return /turbo|lcm|lightning/i.test(id);
+  };
+  /** True when the Load Image capsule carries an init image (img2img active). */
+  const currentHasInitImage = (): boolean =>
+    Boolean(String(findNode(get().workflow, 'imageLoader')?.params.image ?? ''));
+  /** The evolve knobs that actually affect THIS model+workflow (no inert dimensions). */
+  const evolveKnobs = (): KnobDesc[] =>
+    buildEvolveKnobs({ family: currentFamily(), isTurbo: currentIsTurbo(), hasInitImage: currentHasInitImage() });
+  /** The positive prompt CLIP scores candidates against. */
+  const evolvePromptText = (): string => String(findNode(get().workflow, 'prompt')?.params.positive ?? '');
+  /** Build one RenderJob per genome from the CURRENT base workflow (reuses buildRenderJob). */
+  const buildEvolveJobs = (genomes: Genome[], nodes: { sampler: string; imageLoader?: string }, knobs: KnobDesc[]) => {
+    const wf = get().workflow;
+    const wildcards = get().promptTools.wildcardSets;
+    return genomes.map((g) => buildRenderJob(applyPatches(wf, genomeToPatches(g, knobs, nodes)), wildcards));
+  };
+  /**
+   * Breed the next generation: elitism (carry the single best parent unchanged) +
+   * mutated uniform crossovers to fill the population. Deterministic given `rng`.
+   */
+  const breedGenomes = (parents: EvolveCandidateView[], knobs: KnobDesc[], population: number, rng: () => number): Genome[] => {
+    const pool = parents.length > 0 ? parents : [];
+    if (pool.length === 0) return Array.from({ length: population }, () => randomGenome(knobs, rng));
+    const next: Genome[] = [pool[0].genome.slice()]; // elitism
+    while (next.length < population) {
+      const a = pool[Math.floor(rng() * pool.length)] ?? pool[0];
+      const b = pool[Math.floor(rng() * pool.length)] ?? pool[0];
+      next.push(mutate(crossover(a.genome, b.genome, knobs, rng), knobs, EVOLVE_MUTATION_RATE, rng));
+    }
+    return next.slice(0, population);
+  };
+  /**
+   * Render + score ONE generation through the active backend's `evolveStep`, map
+   * each candidate back to its genome, append it, and update the running best +
+   * clipAvailable/fallbackReason. Returns the scored candidates (null on no sampler).
+   */
+  const runEvolveGeneration = async (genomes: Genome[], genIndex: number): Promise<EvolveCandidateView[] | null> => {
+    const nodes = evolveNodes();
+    if (!nodes) { setEvolve({ error: 'Add a Sampler capsule to evolve its render params.' }); return null; }
+    const knobs = evolveKnobs();
+    const jobs = buildEvolveJobs(genomes, nodes, knobs);
+    const adapter = activeAdapter(get().backendSettings);
+    const result = await adapter.evolveStep(
+      jobs,
+      { prompt: evolvePromptText(), weights: get().evolve.weights },
+      (update) => setEvolve({ progress: normalizeProgress(update).progress }),
+    );
+    const views: EvolveCandidateView[] = result.candidates.map((c) => ({
+      genomeIndex: c.index,
+      genome: genomes[c.index] ?? genomes[0] ?? [],
+      dataUrl: c.dataUrl,
+      score: c.score,
+      breakdown: c.breakdown,
+    }));
+    let best = get().evolve.best;
+    for (const v of views) {
+      if (!best || v.score > best.score) {
+        best = { dataUrl: v.dataUrl, score: v.score, breakdown: v.breakdown, genome: v.genome, generation: genIndex, genomeIndex: v.genomeIndex };
+      }
+    }
+    setEvolve({
+      generationsData: [...get().evolve.generationsData, { candidates: views }],
+      best,
+      clipAvailable: result.clipAvailable,
+      fallbackReason: result.fallbackReason ?? null,
+      progress: 1,
+    });
+    return views;
+  };
+
   return {
     workflow: initialWorkflow,
     shelf: DEMO_SHELF,
@@ -506,6 +712,7 @@ export const useStudio = create<StudioState>((set, get) => {
     promptTools: initialPromptTools,
     motion: initialMotion,
     field: initialField,
+    evolve: defaultEvolveState(),
     audio: initialAudio,
     transport: {
       ...defaultTransport(),
@@ -900,6 +1107,156 @@ export const useStudio = create<StudioState>((set, get) => {
       });
       return { fallbackReason };
     },
+
+    // ---- Auto-Evolve --------------------------------------------------------
+    setEvolveConfig: (patch) => {
+      const ev = get().evolve;
+      const weights = patch.weights
+        ? {
+            clip: patch.weights.clip != null ? evClamp01(patch.weights.clip) : ev.weights.clip,
+            aesthetic: patch.weights.aesthetic != null ? evClamp01(patch.weights.aesthetic) : ev.weights.aesthetic,
+          }
+        : ev.weights;
+      setEvolve({
+        mode: patch.mode ?? ev.mode,
+        population: patch.population != null ? evClampInt(patch.population, EVOLVE_POP_MIN, EVOLVE_POP_MAX) : ev.population,
+        generations: patch.generations != null ? evClampInt(patch.generations, EVOLVE_GEN_MIN, EVOLVE_GEN_MAX) : ev.generations,
+        weights,
+      });
+    },
+
+    runEvolve: async () => {
+      const ev = get().evolve;
+      if (ev.running) return;
+      if (!evolveNodeId()) { setEvolve({ error: 'Add a Sampler capsule to evolve its render params.' }); return; }
+      const knobs = evolveKnobs();
+      const population = evClampInt(ev.population, EVOLVE_POP_MIN, EVOLVE_POP_MAX);
+      const generations = evClampInt(ev.generations, EVOLVE_GEN_MIN, EVOLVE_GEN_MAX);
+      // Deterministic per-run rng seeded from the prompt (spec: never Math.random
+      // in the search path). Same prompt => same starting population.
+      const rng = mulberry32(seedFromString(evolvePromptText() || 'lumendeck-evolve'));
+      setEvolve({
+        running: true, error: null, status: 'Rendering generation 1…',
+        generationsData: [], best: null, selectedParents: [], awaitingParents: false,
+        progress: 0, population, generations, clipAvailable: true, fallbackReason: null,
+      });
+      try {
+        let genomes = Array.from({ length: population }, () => randomGenome(knobs, rng));
+        const first = await runEvolveGeneration(genomes, 0);
+        if (!first) { setEvolve({ running: false }); return; }
+        if (get().evolve.mode === 'interactive') {
+          setEvolve({ running: false, awaitingParents: generations > 1, status: generations > 1 ? 'Pick parent(s), then breed the next generation.' : 'Single-generation run complete. Adopt the best.' });
+          return;
+        }
+        for (let gen = 1; gen < generations; gen++) {
+          setEvolve({ status: `Rendering generation ${gen + 1}…`, progress: 0 });
+          const prev = get().evolve.generationsData[gen - 1]?.candidates ?? [];
+          const elite = selectTopK(prev, Math.max(1, Math.ceil(population / 2)));
+          genomes = breedGenomes(elite, knobs, population, rng);
+          const bred = await runEvolveGeneration(genomes, gen);
+          if (!bred) break;
+        }
+        const best = get().evolve.best;
+        setEvolve({ running: false, status: best ? `Evolve complete — best score ${best.score.toFixed(3)}. Adopt it or run again.` : 'Evolve complete.' });
+      } catch (err) {
+        setEvolve({ running: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+
+    pickEvolveParent: (genomeIndex) => {
+      const sel = get().evolve.selectedParents;
+      const next = sel.includes(genomeIndex) ? sel.filter((i) => i !== genomeIndex) : [...sel, genomeIndex];
+      setEvolve({ selectedParents: next });
+    },
+
+    evolveNextGeneration: async () => {
+      const ev = get().evolve;
+      if (ev.running || !ev.awaitingParents) return;
+      const lastGen = ev.generationsData[ev.generationsData.length - 1];
+      if (!lastGen) return;
+      if (ev.generationsData.length >= ev.generations) {
+        setEvolve({ awaitingParents: false, status: 'Reached the generation limit. Adopt the best or clear.' });
+        return;
+      }
+      const knobs = evolveKnobs();
+      const rng = mulberry32(seedFromString(`${evolvePromptText()}:${ev.generationsData.length}`));
+      // Parents = the user's picks, else the top half of the last generation.
+      const parents = ev.selectedParents.length > 0
+        ? lastGen.candidates.filter((c) => ev.selectedParents.includes(c.genomeIndex))
+        : selectTopK(lastGen.candidates, Math.max(1, Math.ceil(ev.population / 2)));
+      const genIndex = ev.generationsData.length;
+      setEvolve({ running: true, awaitingParents: false, error: null, status: `Breeding generation ${genIndex + 1}…`, progress: 0 });
+      try {
+        const genomes = breedGenomes(parents, knobs, ev.population, rng);
+        const bred = await runEvolveGeneration(genomes, genIndex);
+        if (!bred) { setEvolve({ running: false }); return; }
+        const done = get().evolve.generationsData.length >= get().evolve.generations;
+        setEvolve({
+          running: false, selectedParents: [], awaitingParents: !done,
+          status: done ? 'Reached the generation limit. Adopt the best or clear.' : 'Pick parent(s) for the next generation.',
+        });
+      } catch (err) {
+        setEvolve({ running: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+
+    adoptBest: async () => {
+      const ev = get().evolve;
+      const best = ev.best;
+      const nodes = evolveNodes();
+      if (!best) { setEvolve({ error: 'Run an evolve first, then adopt the best candidate.' }); return; }
+      if (!nodes) { setEvolve({ error: 'No Sampler capsule to adopt the evolved params into.' }); return; }
+      const knobs = evolveKnobs();
+      // Write the winning genome's params into the workflow in ONE commit (undo-safe).
+      let next = get().workflow;
+      for (const p of genomeToPatches(best.genome, knobs, nodes)) next = updateNodeParam(next, p.nodeId, p.param, p.value);
+      commit(next);
+      // Land the winning image in the durable Gallery with an evolve manifest.
+      const { shelf, backendSettings } = get();
+      const manifest = buildManifest(
+        next, shelf, APP_VERSION, new Date(), get().promptTools.wildcardSets, undefined,
+        { generations: ev.generations, population: ev.population, weights: ev.weights, score: best.score },
+      );
+      const seedIdx = knobs.findIndex((k) => k.param === 'seed');
+      if (seedIdx >= 0 && best.genome[seedIdx] != null) manifest.seed = Math.round(best.genome[seedIdx]);
+      const isMock = backendSettings.selectedBackend === 'mock';
+      const mockReason = 'Adopted a procedural Mock candidate (no real CLIP/aesthetic objective).';
+      manifest.render = {
+        selectedBackend: backendSettings.selectedBackend,
+        actualBackend: backendSettings.selectedBackend,
+        mode: isMock ? 'mock' : 'real',
+        fallback: isMock,
+        fallbackReason: isMock ? mockReason : undefined,
+        bridgeRenderer: backendSettings.bridgeRenderer,
+      };
+      const item: GalleryItem = {
+        id: uid('render'),
+        dataUrl: best.dataUrl,
+        mediaType: 'image',
+        mimeType: 'image/png',
+        extension: 'png',
+        createdAt: manifest.createdAt,
+        manifest,
+        selectedBackend: backendSettings.selectedBackend,
+        actualBackend: backendSettings.selectedBackend,
+        renderMode: isMock ? 'mock' : 'real',
+        fallback: isMock,
+        fallbackReason: isMock ? mockReason : undefined,
+        collectionId: null,
+        tags: ['Evolve'],
+      };
+      const nextGallery = await addRenderOp(galleryStore, get().gallery, item);
+      set({
+        gallery: nextGallery,
+        controlStatus: `Adopted the best evolve candidate (score ${best.score.toFixed(3)}) into the workflow + Gallery.`,
+      });
+      setEvolve({ status: `Adopted best (score ${best.score.toFixed(3)}) — params written + image saved to the Gallery.` });
+    },
+
+    clearEvolve: () => setEvolve({
+      running: false, generationsData: [], best: null, selectedParents: [], awaitingParents: false,
+      status: null, error: null, progress: 0, clipAvailable: true, fallbackReason: null,
+    }),
 
     // ---- Render-Space Ghost Controller ----
     fieldProfileFor: (nodeId) => profileForNode(nodeId),

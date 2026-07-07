@@ -1,4 +1,12 @@
-import type { BackendAdapter, RenderJob, RenderMotionOptions, RenderProgressCallback, RenderResult } from './adapter';
+import type {
+  BackendAdapter,
+  EvolveStepOptions,
+  EvolveStepResult,
+  RenderJob,
+  RenderMotionOptions,
+  RenderProgressCallback,
+  RenderResult,
+} from './adapter';
 import { resolveSeed } from './adapter';
 import { buildStreamingPreview } from './preview';
 import { BASIC_TXT2IMG_TEMPLATE } from '../turboForge/workflows/comfyWorkflowTemplates';
@@ -146,6 +154,15 @@ export class ComfyAdapter implements BackendAdapter {
    */
   async renderMotion(_jobs: RenderJob[], _opts: RenderMotionOptions, _onProgress?: RenderProgressCallback): Promise<RenderResult> {
     throw new Error('Motion-clip rendering is not supported on the ComfyUI backend. Use the local Diffusers bridge or the Mock backend to render a motion clip.');
+  }
+
+  /**
+   * Auto-Evolve renders + scores a whole population against a CLIP/aesthetic
+   * objective in the resident diffusers worker; the ComfyUI backend has no such
+   * scorer endpoint. Throw loudly rather than pretend (no silent fallback).
+   */
+  async evolveStep(_jobs: RenderJob[], _opts: EvolveStepOptions, _onProgress?: RenderProgressCallback): Promise<EvolveStepResult> {
+    throw new Error('Auto-Evolve is not supported on the ComfyUI backend. Use the local Diffusers bridge (or the Mock backend for a procedural preview).');
   }
 
   private async pollHistory(promptId: string, onProgress?: (progress: number) => void): Promise<ComfyHistoryEntry> {

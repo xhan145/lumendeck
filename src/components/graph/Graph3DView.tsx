@@ -43,6 +43,7 @@ import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
 import { MotionTimeline } from '../motion/MotionTimeline';
+import { EvolvePanel } from '../evolve/EvolvePanel';
 import {
   buildNeonGrid,
   disposeObject3D,
@@ -1705,6 +1706,7 @@ export function Graph3DView({ onContextFailed }: Props) {
           <div id="graph-motion-body" className="motion-panel-body scroll">
             <MotionTimeline />
             <AudioPanel />
+            <EvolvePanel />
           </div>
         ) : null}
       </div>

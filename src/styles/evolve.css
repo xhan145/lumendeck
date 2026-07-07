@@ -1,0 +1,229 @@
+/* Auto-Evolve panel (Living Constellation Phase 4) — the objective/search
+   controls + candidate grid (imported by EvolvePanel.tsx). Reuses shared chrome
+   (.btn, .field-help, .mono, brand tokens) and sits in the same graph/motion dock
+   as the Motion Timeline + Audio panels, so it inherits that panel's surface.
+   Only evolve-specific layout lives here. */
+
+.evolve-panel {
+  display: grid;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--ld-border);
+}
+
+/* ---- header ------------------------------------------------------------- */
+.ev-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.ev-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ld-text);
+}
+.ev-title svg { color: var(--ld-cyan); }
+.ev-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text-faint);
+  white-space: nowrap;
+}
+.ev-status.live { color: var(--ld-cyan); }
+.ev-note { margin: 0; }
+
+/* ---- CLIP-unavailable loud banner --------------------------------------- */
+.ev-clip-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ld-warn);
+  background: rgba(255, 138, 0, 0.10);
+  border: 1px solid rgba(255, 138, 0, 0.45);
+  border-radius: 8px;
+}
+.ev-clip-banner svg { color: var(--ld-warn); flex: none; margin-top: 1px; }
+
+/* ---- shared inline label+control cluster (scoped copy) ------------------ */
+.ev-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ev-inline-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text-faint);
+  white-space: nowrap;
+}
+.ev-inline-val {
+  min-width: 4ch;
+  text-align: right;
+  font-size: 11px;
+  color: var(--ld-text-dim);
+}
+.ev-inline input[type='number'] { width: 6ch; min-width: 0; }
+
+/* ---- objective weights -------------------------------------------------- */
+.ev-weights { display: grid; gap: 6px; }
+.ev-weights .ev-inline { display: flex; }
+.ev-weights .ev-inline-label { min-width: 7ch; }
+.ev-weights input[type='range'] { flex: 1; }
+
+/* ---- config ------------------------------------------------------------- */
+.ev-config {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ev-mode {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.ev-mode-btn.active {
+  border-color: var(--ld-cyan);
+  color: var(--ld-cyan);
+}
+
+/* ---- actions ------------------------------------------------------------ */
+.ev-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ev-clear { margin-left: auto; }
+.ev-gate { margin: 0; color: var(--ld-warn); }
+
+/* ---- progress ----------------------------------------------------------- */
+.ev-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ev-progress-bar {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: color-mix(in srgb, var(--ld-surface) 70%, #000 30%);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-pill);
+  overflow: hidden;
+}
+.ev-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--ld-cyan), var(--ld-violet));
+  transition: width 120ms linear;
+}
+.ev-progress-status { font-size: 11px; color: var(--ld-text-dim); white-space: nowrap; }
+
+.ev-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--ld-danger);
+}
+.ev-error svg { color: var(--ld-danger); flex: none; }
+
+/* ---- generations grid --------------------------------------------------- */
+.ev-generations { display: grid; gap: var(--sp-2); }
+.ev-gen { display: grid; gap: 4px; }
+.ev-gen-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ld-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ev-cands {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ev-cand {
+  position: relative;
+  border: 1px solid var(--ld-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ld-surface) 70%, #000 30%);
+}
+.ev-cand.best {
+  border-color: var(--ld-cyan);
+  box-shadow: 0 0 0 1px var(--ld-cyan), 0 0 12px rgba(52, 214, 244, 0.35);
+}
+.ev-cand.selected { border-color: var(--ld-violet); box-shadow: 0 0 0 1px var(--ld-violet); }
+.ev-cand-pick,
+.ev-cand-static {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+.ev-cand-pick { cursor: pointer; }
+.ev-cand.pickable .ev-cand-pick:hover { filter: brightness(1.08); }
+.ev-cand-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+.ev-cand-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ld-cyan);
+  color: #04121a;
+}
+.ev-cand-score {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 5px;
+}
+.ev-cand-score-bar {
+  position: relative;
+  flex: 1;
+  height: 5px;
+  background: color-mix(in srgb, var(--ld-surface) 55%, #000 45%);
+  border-radius: var(--rad-pill);
+  overflow: hidden;
+}
+.ev-cand-score-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--ld-cyan), var(--ld-violet));
+  transition: width 160ms ease;
+}
+.ev-cand-score-val { font-size: 10px; color: var(--ld-text-dim); min-width: 3ch; text-align: right; }
+
+.ev-next { justify-self: start; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ev-progress-fill,
+  .ev-cand-score-fill { transition: none; }
+}

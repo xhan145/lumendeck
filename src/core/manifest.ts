@@ -42,6 +42,17 @@ export interface ExportManifest {
     fps: number;
     durationSec: number;
   };
+  /**
+   * Present only when this render was ADOPTED from an Auto-Evolve run: the search
+   * settings + the winning candidate's blended score. The winning genome's params
+   * already live in `graph` (adopt writes them), so the render is reproducible.
+   */
+  evolve?: {
+    generations: number;
+    population: number;
+    weights: { clip: number; aesthetic: number };
+    score: number;
+  };
 }
 
 /** The motion descriptor `buildManifest` folds into a motion-render manifest. */
@@ -53,6 +64,14 @@ export interface ManifestMotion {
   durationSec: number;
 }
 
+/** The evolve descriptor `buildManifest` folds into an adopted-candidate manifest. */
+export interface ManifestEvolve {
+  generations: number;
+  population: number;
+  weights: { clip: number; aesthetic: number };
+  score: number;
+}
+
 export function buildManifest(
   wf: Workflow,
   shelf: ModelAsset[],
@@ -60,6 +79,7 @@ export function buildManifest(
   now: Date,
   wildcardSets: WildcardSet[] = [],
   motion?: ManifestMotion,
+  evolve?: ManifestEvolve,
 ): ExportManifest {
   const prompt = findNode(wf, 'prompt');
   const sampler = findNode(wf, 'sampler');
@@ -138,5 +158,8 @@ export function buildManifest(
     // Motion-render manifests also carry the animated clip fields (spec §"Data
     // flow & manifest"); omitted entirely for ordinary image/video renders.
     ...(motion ? { motion } : {}),
+    // Adopted Auto-Evolve results carry the search settings + winning score;
+    // omitted entirely for every other render (additive, backward-compatible).
+    ...(evolve ? { evolve } : {}),
   };
 }

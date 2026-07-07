@@ -43,7 +43,7 @@ except Exception:
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/render-motion", "/diffusers", "/progress", "/civitai", "/controlnet")
+API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/render-motion", "/evolve-step", "/diffusers", "/progress", "/civitai", "/controlnet")
 
 
 def _civitai_dest(file_name: str, asset_type: str) -> str:
@@ -664,6 +664,59 @@ def build_response(method: str, path: str, body: bytes):
         if track:
             _write_progress(job_id, {"phase": "done"})
         return 200, headers, json.dumps(result).encode()
+
+    if method == "POST" and path == "/evolve-step":
+        headers["Content-Type"] = "application/json"
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        jobs = payload.get("jobs")
+        if not isinstance(jobs, list) or not jobs:
+            return 400, headers, json.dumps({"error": "jobs must be a non-empty list"}).encode()
+        if not all(isinstance(job, dict) for job in jobs):
+            return 400, headers, json.dumps({"error": "every job must be an object"}).encode()
+        # Population clamp 2..8 (server): cap the candidate count regardless of the UI.
+        jobs = jobs[:8]
+        prompt = str(payload.get("prompt", ""))
+        weights = payload.get("weights")
+        if not isinstance(weights, dict):
+            weights = {}
+        job_id = str(payload.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        progress_path = None
+        if track:
+            _prune_progress_files()
+            progress_path = _progress_path(job_id)
+            _write_progress(job_id, {"phase": "loading"})
+        # Auto-evolve REQUIRES real renders + scoring. There is NO procedural fallback
+        # for scoring, so an unavailable runtime or any failure is a LOUD 503 (never a
+        # silent placeholder / fake score).
+        if not _diffusers_available():
+            if track:
+                _write_progress(job_id, {"phase": "error"})
+            return 503, headers, json.dumps({
+                "error": "Auto-evolve needs the real Diffusers runtime (torch/model not installed on the bridge).",
+            }).encode()
+        try:
+            shelf = _shelf_with_real()
+            model_root = discover_model_dir()
+            for job in jobs:
+                _resolve_render_targets(job, shelf, model_root)
+            evolve_payload = {"jobs": jobs, "prompt": prompt, "weights": weights}
+            if progress_path:
+                evolve_payload["progressPath"] = progress_path
+            result = diffusers_backend.evolve_step(evolve_payload)
+            if track:
+                _write_progress(job_id, {"phase": "done"})
+            return 200, headers, json.dumps(result).encode()
+        except Exception as exc:
+            import traceback
+            print(f"[evolve-step] evolve failed: {exc}", flush=True)
+            traceback.print_exc()
+            if track:
+                _write_progress(job_id, {"phase": "error"})
+            return 503, headers, json.dumps({"error": f"evolve failed: {exc}"}).encode()
 
     return 404, headers, json.dumps({"error": "not found"}).encode()
 
