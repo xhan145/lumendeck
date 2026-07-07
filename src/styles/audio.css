@@ -1,0 +1,169 @@
+/* Audio Reactivity panel (Phase 3) — the source/mapping/meter/bake controls
+   (imported by AudioPanel.tsx). Reuses shared chrome (.btn, .field-help, .mono,
+   brand tokens) and sits in the same graph/motion dock as the Motion Timeline,
+   so it inherits that panel's surface. Only audio-specific layout lives here. */
+
+.audio-panel {
+  display: grid;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--ld-border);
+}
+
+/* ---- header ------------------------------------------------------------- */
+.ap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.ap-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ld-text);
+}
+.ap-title svg { color: var(--ld-cyan); }
+.ap-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text-faint);
+  white-space: nowrap;
+}
+.ap-status.live { color: var(--ld-cyan); }
+.ap-note { margin: 0; }
+
+/* ---- shared inline label+control cluster (scoped copy) ------------------ */
+.ap-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ap-inline-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text-faint);
+  white-space: nowrap;
+}
+.ap-inline-val {
+  min-width: 3ch;
+  text-align: right;
+  font-size: 11px;
+  color: var(--ld-text-dim);
+}
+.ap-inline select,
+.ap-inline input[type='number'] { min-width: 0; }
+/* Visually-hidden label text that stays available to screen readers. */
+.audio-panel .sr-only-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- source picker + transport ------------------------------------------ */
+.ap-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ap-file {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ap-file-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ap-tone input[type='number'] { width: 7ch; }
+.ap-stop { margin-left: auto; }
+.ap-stop-glyph {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  background: currentColor;
+  border-radius: 2px;
+}
+
+/* ---- live level meter --------------------------------------------------- */
+.ap-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ap-meter-track {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: color-mix(in srgb, var(--ld-surface) 70%, #000 30%);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-pill);
+  overflow: hidden;
+}
+.ap-meter-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--ld-cyan), var(--ld-violet));
+  transition: width 80ms linear;
+}
+
+/* ---- sensitivity -------------------------------------------------------- */
+.ap-sens { display: flex; }
+.ap-sens input[type='range'] { flex: 1; }
+
+/* ---- mapping editor ----------------------------------------------------- */
+.ap-mapping { display: grid; gap: 6px; }
+.ap-mapping-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.ap-mapping-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ld-text);
+}
+.ap-target-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ap-target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ap-target select { max-width: 12ch; }
+.ap-arrow { color: var(--ld-text-faint); }
+.ap-gain input[type='number'] { width: 6ch; }
+
+/* ---- bake --------------------------------------------------------------- */
+.ap-bake {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ap-bake input[type='number'] { width: 6ch; }
+.ap-bake .primary { margin-left: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ap-meter-fill { transition: none; }
+}
