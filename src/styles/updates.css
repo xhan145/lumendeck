@@ -1,0 +1,67 @@
+/* ===== Updates card (auto-updater) ===== */
+.updates-card .updates-status {
+  display: grid;
+  gap: var(--sp-2);
+  min-height: 24px;
+}
+
+.updates-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ld-text-dim);
+}
+.updates-line svg { flex: none; }
+.updates-line.ok { color: var(--ld-ok); }
+.updates-line.accent { color: var(--ld-cyan); }
+.updates-line.error { color: var(--ld-danger); }
+
+.updates-available {
+  display: grid;
+  gap: 6px;
+}
+.updates-available-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.updates-dismiss { color: var(--ld-text-faint); }
+.updates-dismiss:hover { color: var(--ld-text); }
+
+.updates-notes {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-1);
+  background: rgba(3, 9, 18, 0.22);
+  color: var(--ld-text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.updates-downloading {
+  display: grid;
+  gap: 8px;
+}
+.updates-progress { width: 100%; }
+/* An indeterminate download (no known total) gently pulses the fill. */
+.updates-progress > div[style*="35%"] {
+  animation: updates-indeterminate 1.4s var(--ease-out) infinite alternate;
+}
+
+.updates-error { overflow-wrap: anywhere; }
+
+@keyframes updates-indeterminate {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .updates-progress > div[style*="35%"] { animation: none; opacity: 0.8; }
+}

@@ -24,3 +24,12 @@ __pycache__/
 *.mkv
 *.webm
 *.gif
+
+# Updater signing keys + secrets — NEVER commit. The minisign PRIVATE key lives
+# outside the repo at ~/.tauri/lumendeck-updater.key (see docs/RELEASING.md).
+*.key
+*.key.pub
+.tauri/
+.env
+.env.*
+!.env.example

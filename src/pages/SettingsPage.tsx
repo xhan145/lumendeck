@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '../state/appSettings';
 import { useStudio } from '../state/store';
 import { Icon } from '../components/icons';
+import { UpdatesCard } from '../components/updates/UpdatesCard';
 import { TURBO_PRESETS } from '../turboForge/presets';
 import { estimateGalleryStorage } from '../core/storageStatus';
 import type { BridgeRenderer, RenderBackendId } from '../turboForge/backends/backendSettings';
@@ -122,6 +123,8 @@ export function SettingsPage() {
         {controlStatus ? <div className="status-banner" role="status">{controlStatus}</div> : null}
 
         <section className="page-grid">
+          <UpdatesCard />
+
           <article className="card page-card">
             <div className="page-card-head">
               <h2>Backend</h2>
