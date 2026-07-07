@@ -1,4 +1,13 @@
-import type { BackendAdapter, RenderJob, RenderMotionOptions, RenderProgressCallback, RenderResult } from './adapter';
+import type {
+  BackendAdapter,
+  EvolveCandidate,
+  EvolveStepOptions,
+  EvolveStepResult,
+  RenderJob,
+  RenderMotionOptions,
+  RenderProgressCallback,
+  RenderResult,
+} from './adapter';
 import { resolveSeed } from './adapter';
 import { buildStreamingPreview } from './preview';
 
@@ -166,6 +175,50 @@ export class MockAdapter implements BackendAdapter {
       extension: last!.extension,
       fallback: true,
       fallbackReason: `Mock backend: procedural preview only (${frames} ${opts.format.toUpperCase()} frames not encoded). Use the local Diffusers bridge to render a real motion clip.`,
+    };
+  }
+
+  /**
+   * Procedural stand-in for one evolve generation. Renders each population job
+   * with the offline procedural path (so cfg/steps/seed visibly change the
+   * thumbnails) and assigns a DETERMINISTIC pseudo-score derived from the job's
+   * params — never a fabricated CLIP number. `clipAvailable:false` + a clear
+   * placeholder note say loudly this is not a real objective; it never throws.
+   */
+  async evolveStep(
+    jobs: RenderJob[],
+    opts: EvolveStepOptions,
+    onProgress?: RenderProgressCallback,
+  ): Promise<EvolveStepResult> {
+    const total = jobs.length;
+    const candidates: EvolveCandidate[] = [];
+    for (let i = 0; i < total; i++) {
+      const job = jobs[i];
+      const result = await this.generate(job);
+      // Deterministic pseudo-aesthetic in [0,1] from the job's search params, so
+      // scores vary across candidates and are reproducible (NOT a real metric).
+      const rng = mulberry32(resolveSeed(job.seed) ^ hashString(`${opts.prompt}|${job.cfg}|${job.steps}`));
+      const aesthetic = Math.round(rng() * 1000) / 1000;
+      candidates.push({
+        dataUrl: result.dataUrl,
+        // With CLIP unavailable the score is aesthetic-only (weights renormalized).
+        score: aesthetic,
+        breakdown: { clip: null, aesthetic },
+        index: i,
+      });
+      onProgress?.({
+        progress: total > 0 ? (i + 1) / total : 1,
+        phase: 'candidate',
+        detail: `Candidate ${i + 1}/${total}`,
+        previewDataUrl: result.dataUrl,
+      });
+    }
+    onProgress?.({ progress: 1, phase: 'done' });
+    return {
+      candidates,
+      clipAvailable: false,
+      fallbackReason:
+        'Mock backend: procedural thumbnails with a deterministic placeholder score (no CLIP/aesthetic model). Switch to the local Diffusers bridge for a real objective.',
     };
   }
 }

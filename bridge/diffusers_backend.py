@@ -828,6 +828,182 @@ def do_render_sequence(payload, state):
     return {**encoded, "seed": seed if seed is not None else 0, "frameCount": len(frames), "fps": max(1, min(30, fps))}
 
 
+# --- Auto-evolve scoring (Living Constellation Phase 4) ----------------------
+# Behaviorally identical to bridge/scorer.py (the unit-tested reference); this
+# in-worker copy is what actually runs, with torch/transformers/numpy resident.
+# CLIP is cached module-global so a whole population/run loads it once; a failure
+# latches so it degrades to aesthetics-only instantly (never a fabricated number).
+_CLIP = {"model": None, "processor": None, "failed": False, "reason": None}
+
+
+def _clamp01(value):
+    return max(0.0, min(1.0, float(value)))
+
+
+def _load_clip():
+    if _CLIP["failed"]:
+        return None, None
+    if _CLIP["model"] is not None:
+        return _CLIP["model"], _CLIP["processor"]
+    try:
+        import torch  # noqa: F401
+        from transformers import CLIPModel, CLIPProcessor
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        model.eval()
+        _CLIP["model"] = model
+        _CLIP["processor"] = processor
+        return model, processor
+    except Exception as exc:
+        _CLIP["failed"] = True
+        _CLIP["reason"] = f"CLIP is unavailable ({exc}); scoring on aesthetic heuristics only."
+        return None, None
+
+
+def _clip_scores(images, prompt):
+    model, processor = _load_clip()
+    if model is None:
+        return None, _CLIP.get("reason")
+    import torch
+    with torch.no_grad():
+        inputs = processor(text=[prompt or ""], images=list(images), return_tensors="pt", padding=True)
+        # Full forward -> projected embeds (stable across transformers versions;
+        # get_image_features/get_text_features changed return type in 5.x).
+        outputs = model(**inputs)
+        image_features = outputs.image_embeds
+        text_features = outputs.text_embeds
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        cos = (image_features @ text_features.T).squeeze(-1)
+        values = [_clamp01((float(c) + 1.0) / 2.0) for c in cos.reshape(-1)]
+    return values, None
+
+
+def _aesthetic_metrics(image):
+    import math
+    import numpy as np
+    arr = np.asarray(image.convert("RGB"), dtype=np.float64)
+    red, green, blue = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    luma = 0.299 * red + 0.587 * green + 0.114 * blue
+    if luma.shape[0] >= 3 and luma.shape[1] >= 3:
+        laplacian = (-4.0 * luma[1:-1, 1:-1] + luma[:-2, 1:-1] + luma[2:, 1:-1] + luma[1:-1, :-2] + luma[1:-1, 2:])
+        sharp_raw = float(laplacian.var())
+    else:
+        sharp_raw = 0.0
+    sharpness = 1.0 - math.exp(-sharp_raw / 500.0)
+    contrast = _clamp01(float(luma.std()) / 80.0)
+    rg = red - green
+    yb = 0.5 * (red + green) - blue
+    std_root = math.sqrt(float(rg.std()) ** 2 + float(yb.std()) ** 2)
+    mean_root = math.sqrt(float(rg.mean()) ** 2 + float(yb.mean()) ** 2)
+    colorfulness = _clamp01((std_root + 0.3 * mean_root) / 110.0)
+    hist, _edges = np.histogram(luma, bins=256, range=(0.0, 255.0))
+    total = float(hist.sum())
+    if total > 0.0:
+        probs = hist.astype(np.float64) / total
+        nonzero = probs[probs > 0.0]
+        entropy = float(-(nonzero * np.log2(nonzero)).sum())
+    else:
+        entropy = 0.0
+    entropy_norm = _clamp01(entropy / 8.0)
+    aesthetic = (sharpness + contrast + colorfulness + entropy_norm) / 4.0
+    return {
+        "sharpness": _clamp01(sharpness),
+        "contrast": contrast,
+        "colorfulness": colorfulness,
+        "entropy": entropy_norm,
+        "aesthetic": _clamp01(aesthetic),
+    }
+
+
+def _blend(clip_value, aesthetic_value, weights, clip_available):
+    weights = weights or {}
+    clip_weight = max(0.0, float(weights.get("clip", 0.5)))
+    aesthetic_weight = max(0.0, float(weights.get("aesthetic", 0.5)))
+    if not clip_available or clip_value is None:
+        return _clamp01(aesthetic_value)
+    total = clip_weight + aesthetic_weight
+    if total <= 0.0:
+        return _clamp01((clip_value + aesthetic_value) / 2.0)
+    return _clamp01((clip_weight * clip_value + aesthetic_weight * aesthetic_value) / total)
+
+
+def _score_images(images, prompt, weights):
+    weights = weights or {}
+    images = list(images)
+    aesthetics = [_aesthetic_metrics(image) for image in images]
+    clip_values, clip_reason = _clip_scores(images, prompt)
+    clip_available = clip_values is not None
+    results = []
+    for index, metrics in enumerate(aesthetics):
+        clip_value = clip_values[index] if clip_available else None
+        score = _blend(clip_value, metrics["aesthetic"], weights, clip_available)
+        results.append({"score": score, "clip": clip_value, "aesthetic": metrics["aesthetic"]})
+    return results, clip_available, (None if clip_available else clip_reason)
+
+
+def do_evolve_step(payload, state):
+    """Render a candidate population (model resident) then score each candidate.
+
+    payload: {"jobs": [RenderJob...], "prompt": str, "weights": {"clip","aesthetic"},
+              "progressPath"?: str}. Renders each job through the SAME resident pipe
+    (one model load for the whole population), writes {phase:'candidate', step:i,
+    steps:N} per candidate, then scores them with the CLIP+aesthetic scorer. Returns
+    {"candidates":[{image_base64, score, breakdown:{clip,aesthetic}, index}],
+     "clipAvailable": bool, "fallbackReason"?: str}. Loud on bad input; never silent.
+    """
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        raise RuntimeError("evolve_step needs a non-empty 'jobs' list")
+    total = max(1, min(8, len(jobs)))
+    jobs = jobs[:total]
+    prompt = str(payload.get("prompt", ""))
+    weights = payload.get("weights") or {}
+    progress_path = payload.get("progressPath")
+
+    def report(data):
+        if not progress_path:
+            return
+        try:
+            with open(progress_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError:
+            pass
+
+    frames = []
+    encoded = []
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise RuntimeError(f"evolve_step job {index} is not an object")
+        report({"phase": "candidate", "step": index, "steps": total})
+        # Per-candidate internal steps are suppressed; candidate-level progress is
+        # what the UI polls (like render_sequence's per-frame progress).
+        job = dict(job)
+        job.pop("progressPath", None)
+        image, _seed, _dropped = _render_one_image(job, state, lambda _data: None)
+        frames.append(image.convert("RGB"))
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        encoded.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+
+    report({"phase": "scoring", "step": total, "steps": total})
+    results, clip_available, clip_reason = _score_images(frames, prompt, weights)
+    report({"phase": "done"})
+
+    candidates = []
+    for index, (image_b64, result) in enumerate(zip(encoded, results)):
+        candidates.append({
+            "image_base64": image_b64,
+            "score": result["score"],
+            "breakdown": {"clip": result["clip"], "aesthetic": result["aesthetic"]},
+            "index": index,
+        })
+    out = {"candidates": candidates, "clipAvailable": clip_available}
+    if clip_reason:
+        out["fallbackReason"] = clip_reason
+    return out
+
+
 def serve():
     """Persistent request loop: keeps the model resident across renders.
 
@@ -849,6 +1025,8 @@ def serve():
                 out = do_generate(payload, state)
             elif command == "render_sequence":
                 out = do_render_sequence(payload, state)
+            elif command == "evolve_step":
+                out = do_evolve_step(payload, state)
             elif command == "preprocess":
                 out = do_preprocess(payload)
             elif command == "ping":
@@ -883,6 +1061,10 @@ def main():
         return
     if command == "render_sequence":
         out = do_render_sequence(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
+        print(json.dumps(out))
+        return
+    if command == "evolve_step":
+        out = do_evolve_step(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
         print(json.dumps(out))
         return
     if command == "preprocess":
@@ -1608,6 +1790,47 @@ def render_motion(payload: dict) -> dict:
         if "worker exited unexpectedly" not in str(exc).lower():
             raise
         out = _worker("render_sequence", worker_payload, timeout=3600)
+    if isinstance(out, dict) and out.get("error"):
+        raise RuntimeError(out["error"])
+    return out
+
+
+def evolve_step(payload: dict) -> dict:
+    """Render + score one generation's candidate population via the resident worker.
+
+    payload: {"jobs": [RenderJob...], "prompt": str, "weights": {"clip","aesthetic"},
+              "progressPath"?: str}. Each job is the standard image RenderJob shape
+      (the same one generate() renders); we inject the ControlNet map into each so
+      the worker never duplicates that table. The model stays resident across the
+      whole population -- one load, N renders -- then the scorer scores each
+      candidate. Returns {"candidates": [{image_base64, score, breakdown{clip,
+      aesthetic}, index}], "clipAvailable": bool, "fallbackReason"?: str}. Raises
+      loudly on bad input or a missing runtime (evolve REQUIRES real renders).
+    """
+    status = model_status()
+    if not status.get("dependenciesReady"):
+        raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        raise RuntimeError("evolve_step needs a non-empty 'jobs' list")
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise RuntimeError(f"evolve_step job {index} is not an object")
+        # The worker resolves ControlNet repos from the job so it never duplicates the map.
+        job["controlnetMap"] = CONTROLNET_MODELS
+    worker_payload = {
+        "jobs": jobs,
+        "prompt": str(payload.get("prompt", "")),
+        "weights": payload.get("weights") or {},
+    }
+    if payload.get("progressPath"):
+        worker_payload["progressPath"] = payload["progressPath"]
+    try:
+        out = _persistent_worker.request("evolve_step", worker_payload, timeout=3600)
+    except RuntimeError as exc:
+        if "worker exited unexpectedly" not in str(exc).lower():
+            raise
+        out = _worker("evolve_step", worker_payload, timeout=3600)
     if isinstance(out, dict) and out.get("error"):
         raise RuntimeError(out["error"])
     return out

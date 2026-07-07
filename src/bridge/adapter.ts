@@ -83,6 +83,45 @@ export interface RenderMotionOptions {
   jobId?: string;
 }
 
+/** Objective weights for scoring an evolve candidate (CLIP vs. aesthetic). */
+export interface EvolveWeights {
+  clip: number;
+  aesthetic: number;
+}
+
+/** Options for one evolve generation: the scoring prompt, weights, + progress id. */
+export interface EvolveStepOptions {
+  /** The target text CLIP scores the candidates against (the positive prompt). */
+  prompt: string;
+  weights: EvolveWeights;
+  /** stable id for progress polling; adapters mint one when omitted. */
+  jobId?: string;
+}
+
+/**
+ * One scored candidate returned from an evolve generation. `breakdown.clip` is
+ * `null` when CLIP is unavailable (score then comes from aesthetics only — the
+ * weights are renormalized server-side). `index` is the candidate's position in
+ * the population the caller sent.
+ */
+export interface EvolveCandidate {
+  dataUrl: string;
+  score: number;
+  breakdown: { clip: number | null; aesthetic: number };
+  index: number;
+}
+
+/**
+ * Result of rendering + scoring ONE evolve generation. `clipAvailable=false` is a
+ * LOUD, honest signal (the frontend shows a banner); it is never a silent fake.
+ * `fallbackReason` explains any degraded path (CLIP absent, procedural mock, …).
+ */
+export interface EvolveStepResult {
+  candidates: EvolveCandidate[];
+  clipAvailable: boolean;
+  fallbackReason?: string;
+}
+
 /**
  * Boundary between LumenDeck and any generation backend. Implementations:
  * MockAdapter (in-browser procedural), HttpAdapter (local FastAPI bridge),
@@ -100,6 +139,17 @@ export interface BackendAdapter {
    * backend it returns procedural frames with `fallback:true` (never silent).
    */
   renderMotion(jobs: RenderJob[], opts: RenderMotionOptions, onProgress?: RenderProgressCallback): Promise<RenderResult>;
+  /**
+   * Render + score ONE evolve generation: `jobs` is the population (built by the
+   * frontend from each genome), rendered by the resident worker (model stays
+   * loaded) and scored against `opts.prompt` with `opts.weights`. The frontend
+   * loops this per generation (see the store's `runEvolve`); the bridge only has
+   * to implement `/evolve-step`. Returns per-candidate scores + `clipAvailable`.
+   * Loud error on failure — NEVER a silent placeholder. When CLIP can't load the
+   * bridge sets `clipAvailable:false` and scores on aesthetics only (weights
+   * renormalized), flagged via `fallbackReason`.
+   */
+  evolveStep(jobs: RenderJob[], opts: EvolveStepOptions, onProgress?: RenderProgressCallback): Promise<EvolveStepResult>;
 }
 
 export function buildRenderJob(wf: Workflow, wildcardSets: WildcardSet[] = []): RenderJob {

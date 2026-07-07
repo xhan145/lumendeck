@@ -1,5 +1,14 @@
 import type { ModelAsset } from '../core/shelf';
-import type { BackendAdapter, RenderJob, RenderMotionOptions, RenderProgressCallback, RenderResult } from './adapter';
+import type {
+  BackendAdapter,
+  EvolveCandidate,
+  EvolveStepOptions,
+  EvolveStepResult,
+  RenderJob,
+  RenderMotionOptions,
+  RenderProgressCallback,
+  RenderResult,
+} from './adapter';
 import { buildStreamingPreview } from './preview';
 
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8787';
@@ -365,6 +374,97 @@ export class HttpAdapter implements BackendAdapter {
         // gallery stores it verbatim, so coerce only the numeric case.
         seed: typeof data.seed === 'number' ? data.seed : Number(data.seed) || 0,
         fallback: data.fallback,
+        fallbackReason: data.fallbackReason,
+      };
+    } finally {
+      polling = false;
+    }
+  }
+
+  /**
+   * Render + score ONE evolve generation in a single request: POST /evolve-step
+   * with the full population job list; the persistent worker renders each (model
+   * resident) and the scorer returns per-candidate {score, breakdown}. We poll
+   * /progress/<jobId> for {phase:'candidate', step, steps} like /generate and map
+   * each `image_base64` to a dataUrl. `clipAvailable=false` + `fallbackReason`
+   * pass straight through (loud, never silent). Errors surface loudly like
+   * /generate.
+   */
+  async evolveStep(
+    jobs: RenderJob[],
+    opts: EvolveStepOptions,
+    onProgress?: RenderProgressCallback,
+  ): Promise<EvolveStepResult> {
+    const jobId = opts.jobId
+      ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`);
+    onProgress?.({ progress: 0.02, phase: 'queued' });
+
+    // Live per-candidate progress: poll while the POST is in flight. Best-effort —
+    // poll errors are ignored and never fail the run.
+    let polling = Boolean(onProgress);
+    const pollLoop = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 600));
+        if (!polling) break;
+        try {
+          const res = await fetch(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1200) });
+          if (!res.ok) continue;
+          const p = (await res.json()) as { phase?: string; step?: number; steps?: number };
+          if (p.phase === 'loading') {
+            onProgress?.({ progress: 0.05, phase: 'loading' });
+          } else if (p.phase === 'candidate' && p.steps && p.steps > 0) {
+            const progress = Math.min(0.97, 0.05 + 0.92 * ((p.step ?? 0) / p.steps));
+            onProgress?.({ progress, phase: 'candidate', detail: `Candidate ${p.step ?? 0}/${p.steps}` });
+          }
+        } catch {
+          // ignore — progress is advisory
+        }
+      }
+    };
+    if (polling) void pollLoop();
+
+    try {
+      const res = await fetch(`${this.base}/evolve-step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs, prompt: opts.prompt, weights: opts.weights, jobId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Bridge /evolve-step failed (${res.status}): ${text.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as {
+        candidates?: {
+          image_base64?: string;
+          score?: number;
+          breakdown?: { clip?: number | null; aesthetic?: number };
+          index?: number;
+        }[];
+        clipAvailable?: boolean;
+        fallbackReason?: string;
+      };
+      if (!Array.isArray(data.candidates)) {
+        throw new Error('Bridge /evolve-step response did not include a candidates array.');
+      }
+      const candidates: EvolveCandidate[] = data.candidates.map((c, i) => {
+        if (!c.image_base64) {
+          throw new Error(`Bridge /evolve-step candidate ${i} did not include image data.`);
+        }
+        const clip = c.breakdown?.clip;
+        return {
+          dataUrl: `data:image/png;base64,${c.image_base64}`,
+          score: Number(c.score ?? 0),
+          breakdown: {
+            clip: typeof clip === 'number' ? clip : null,
+            aesthetic: Number(c.breakdown?.aesthetic ?? 0),
+          },
+          index: typeof c.index === 'number' ? c.index : i,
+        };
+      });
+      onProgress?.({ progress: 1, phase: 'done' });
+      return {
+        candidates,
+        clipAvailable: data.clipAvailable !== false,
         fallbackReason: data.fallbackReason,
       };
     } finally {
