@@ -11,6 +11,7 @@ import { CapsuleIcon, Icon } from '../icons';
 import { CollapsiblePalette } from './CollapsiblePalette';
 import { GraphNode } from './GraphNode';
 import { OrbChip } from './OrbChip';
+import { GhostChip } from './GhostChip';
 import { nodeSummary } from './nodeSummary';
 import { NODE_WIDTH, socketColor, socketPoint, type Point } from './wires';
 import {
@@ -26,7 +27,16 @@ import {
   type Vec3,
   type WorldPoint,
 } from './graph3d/projection';
-import { gradientStops, weightT } from './graph3d/orbWeight';
+import { gradientStops, primaryParamId, primaryWeight, weightT } from './graph3d/orbWeight';
+import {
+  angleToValue,
+  clamp,
+  fieldPosToWorld,
+  hitRingBand,
+  nudgeFieldPos,
+  pointerAngle,
+  worldToFieldPos,
+} from './graph3d/ghostGizmo';
 import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
 import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
@@ -44,6 +54,10 @@ import {
   updateOrbMaterial,
   updateWireLine,
 } from './graph3d/scene';
+import { estimateFamilyFromModelId, type ControlNetFamily } from '../../core/controlnet';
+import { fieldProfile, type FieldProfile } from '../../core/field/fieldProfile';
+import { applyField } from '../../core/field/applyField';
+import type { Ghost } from '../../state/store';
 
 interface Props {
   /** Called when the WebGL context cannot be created (workspace falls back to 2D). */
@@ -81,6 +95,10 @@ interface ThreeCtx {
   camera: THREE.PerspectiveCamera;
   wireGroup: THREE.Group;
   orbGroup: THREE.Group;
+  /** Translucent ghost-controller orbs + axis guides (v0.16 overlay). */
+  ghostGroup: THREE.Group;
+  /** Saved-anchor markers (v0.16 overlay). */
+  anchorGroup: THREE.Group;
   /** Shared smooth-shaded sphere geometry for every orb (disposed on unmount). */
   orbGeometry: THREE.SphereGeometry;
   nodeObjects: Map<string, CSS3DObject>;
@@ -101,6 +119,54 @@ interface OrbEntry {
 
 /** Gradient stops for weightless kinds: a neutral slate orb. */
 const NEUTRAL_ORB_STOPS: [string, string, string] = ['#42526b', '#5c6d87', '#7b8ca6'];
+
+/** Per-ghost scene entry: a translucent orb group + labeled axis guides, keyed by ghost id. */
+interface GhostEntry {
+  group: THREE.Group;
+  material: THREE.ShaderMaterial;
+  /** Field profile the axis guides were built for (rebuilt when it changes). */
+  profileKey: string;
+}
+
+/** Per-anchor scene entry: a small clickable marker, keyed by anchor id. */
+interface AnchorEntry {
+  group: THREE.Group;
+  mesh: THREE.Mesh;
+}
+
+/** Live ring-dial drag: which node's primary value the pointer is turning. */
+interface RingDrag {
+  nodeId: string;
+  param: string;
+  min: number;
+  max: number;
+  /** Orb center in screen px (the dial pivot), captured at pointer-down. */
+  cx: number;
+  cy: number;
+}
+
+/** Live ghost drag: the ghost being flown through the field. */
+interface GhostDrag {
+  id: string;
+  nodeId: string;
+  /** Fixed ground-plane z (world) the pointer ray intersects for X/Z. */
+  planeZ: number;
+  /** True while Shift is held: the drag sets Y (height) instead of X/Z. */
+  shift: boolean;
+  /** Screen y at the moment Shift-drag began (for the height delta). */
+  shiftStartY: number;
+  /** Field Y at the moment Shift-drag began. */
+  shiftStartFieldY: number;
+}
+
+/** Translucent ghost orb opacity (spec: ~0.45). */
+const GHOST_OPACITY = 0.45;
+/** Pointer band (px) that counts as grabbing the equatorial ring dial. */
+const RING_BAND = { inner: 12, outer: 16 };
+/** Screen px of vertical Shift-drag that spans the full field Y axis. */
+const GHOST_SHIFT_PX_PER_AXIS = 320;
+/** Anchor marker radius (world units). */
+const ANCHOR_RADIUS = 14;
 
 /**
  * Every socket type any capsule can expose — used to pre-resolve ALL wire
@@ -149,7 +215,7 @@ const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [
 function isBackgroundTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || typeof el.closest !== 'function') return false;
-  return !el.closest('.gnode, .orb-chip, .collapsible-palette, .graph-toolbar, .graph-hint, .graph-mode-toggle, .graph3d-note, .motion-panel');
+  return !el.closest('.gnode, .orb-chip, .ghost-chip, .collapsible-palette, .graph-toolbar, .graph-hint, .graph-mode-toggle, .graph3d-note, .graph3d-ghost-note, .motion-panel');
 }
 
 export function Graph3DView({ onContextFailed }: Props) {
@@ -173,6 +239,23 @@ export function Graph3DView({ onContextFailed }: Props) {
   // when the clip changes or disappears (e.g. the active clip is deleted mid-play).
   const activeClipId = useStudio((s) => s.motion.activeClipId);
 
+  // ---- Render-Space Ghost Controller (v0.16.0) ----------------------------
+  // The field slice + its actions land in parallel (src/state); this half only
+  // reads the ghosts/anchors and calls the actions per the shared contract.
+  const ghosts = useStudio((s) => s.field.ghosts);
+  const anchors = useStudio((s) => s.field.anchors);
+  const spawnGhost = useStudio((s) => s.spawnGhost);
+  const moveGhost = useStudio((s) => s.moveGhost);
+  const setGhostIntensity = useStudio((s) => s.setGhostIntensity);
+  const pinGhost = useStudio((s) => s.pinGhost);
+  const collapseGhost = useStudio((s) => s.collapseGhost);
+  const saveAnchor = useStudio((s) => s.saveAnchor);
+  const restoreAnchor = useStudio((s) => s.restoreAnchor);
+  const deleteAnchor = useStudio((s) => s.deleteAnchor);
+  const startGhostRecording = useStudio((s) => s.startGhostRecording);
+  const stopGhostRecording = useStudio((s) => s.stopGhostRecording);
+  const updateParam = useStudio((s) => s.updateParam);
+
   const viewportRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeCtx | null>(null);
   const flushRef = useRef<FlushScheduler | null>(null);
@@ -183,6 +266,13 @@ export function Graph3DView({ onContextFailed }: Props) {
   const accentCacheRef = useRef(new Map<CapsuleKind, string>());
   const dragRef = useRef<DragState | null>(null);
   const interactionRef = useRef<{ mode: 'orbit' | 'pan'; x: number; y: number; moved: number } | null>(null);
+  // Ghost/anchor scene entries (reconciled like orbs; disposed on unmount).
+  const ghostsSceneRef = useRef(new Map<string, GhostEntry>());
+  const anchorsSceneRef = useRef(new Map<string, AnchorEntry>());
+  /** Zero-size CSS3D anchors hosting each ghost's DOM chip (value/toolbar/slider). */
+  const ghostChipAnchorsRef = useRef(new Map<string, HTMLDivElement>());
+  const ringDragRef = useRef<RingDrag | null>(null);
+  const ghostDragRef = useRef<GhostDrag | null>(null);
   const onContextFailedRef = useRef(onContextFailed);
   onContextFailedRef.current = onContextFailed;
   /** The starvation-proof playback driver (rAF + timer fallback); null when not playing. */
@@ -287,6 +377,32 @@ export function Graph3DView({ onContextFailed }: Props) {
     return resolved;
   }, []);
 
+  // ---- field profile helpers (curated field — NOT a trained model) ---------
+  /** Model family from the current Model capsule's checkpoint id (SD1.5/2.1/XL). */
+  const currentFamily = useCallback((): ControlNetFamily => {
+    const model = workflow.nodes.find((n) => n.kind === 'model');
+    return estimateFamilyFromModelId(String(model?.params.assetId ?? ''));
+  }, [workflow]);
+
+  /** Prompt text (positive) feeding the field's prompt-marker adaptation. */
+  const currentPromptText = useCallback((): string => {
+    const prompt = workflow.nodes.find((n) => n.kind === 'prompt');
+    return String(prompt?.params.positive ?? '');
+  }, [workflow]);
+
+  /** The curated field profile for a node id (empty profile => ghost disabled). */
+  const profileFor = useCallback((nodeId: string): FieldProfile => {
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return {};
+    return fieldProfile(node.kind, currentFamily(), node.params, currentPromptText());
+  }, [workflow, currentFamily, currentPromptText]);
+
+  /** True when a node has at least one field axis (ghost is meaningful). */
+  const hasProfile = useCallback((nodeId: string): boolean => {
+    const p = profileFor(nodeId);
+    return !!(p.x || p.y || p.z);
+  }, [profileFor]);
+
   // ---- three.js lifecycle -------------------------------------------------
   useEffect(() => {
     const host = viewportRef.current;
@@ -321,6 +437,12 @@ export function Graph3DView({ onContextFailed }: Props) {
       scene.add(wireGroup);
       const orbGroup = new THREE.Group();
       scene.add(orbGroup);
+      // Ghost + anchor overlays live in their own groups so the v0.13/15 orb and
+      // wire sync paths are never disturbed (added/removed alongside, not within).
+      const ghostGroup = new THREE.Group();
+      scene.add(ghostGroup);
+      const anchorGroup = new THREE.Group();
+      scene.add(anchorGroup);
       const orbGeometry = makeOrbGeometry(ORB_RADIUS);
 
       const raycaster = new THREE.Raycaster();
@@ -328,7 +450,7 @@ export function Graph3DView({ onContextFailed }: Props) {
 
       host.appendChild(renderer.domElement);
       host.appendChild(cssRenderer.domElement);
-      threeRef.current = { renderer, cssRenderer, scene, camera, wireGroup, orbGroup, orbGeometry, nodeObjects: new Map(), draftLine: null, raycaster };
+      threeRef.current = { renderer, cssRenderer, scene, camera, wireGroup, orbGroup, ghostGroup, anchorGroup, orbGeometry, nodeObjects: new Map(), draftLine: null, raycaster };
 
       // Pre-resolve every socket color once (bug guard: THREE.Color must never
       // see a raw var() token, and sync effects must not hit getComputedStyle).
@@ -370,11 +492,19 @@ export function Graph3DView({ onContextFailed }: Props) {
 
       setReady(true);
       return () => {
+        // Leaving the 3D view must stop any headless ghost-recording timers, or
+        // they sample forever and produce a bogus over-long clip on return.
+        useStudio.getState().cancelAllGhostRecordings();
         ro?.disconnect();
         host.removeEventListener('wheel', onWheel);
         host.removeEventListener('scroll', resetScroll, true);
         flushRef.current?.cancel();
         orbsRef.current.clear();
+        // Ghost/anchor overlays are disposed by the scene traversal below (their
+        // geometries/materials live under the scene); just drop the id maps.
+        ghostsSceneRef.current.clear();
+        anchorsSceneRef.current.clear();
+        ghostChipAnchorsRef.current.clear();
         disposeObject3D(scene); // also disposes orb materials/rings still in the scene
         orbGeometry.dispose();
         renderer.dispose();
@@ -496,6 +626,149 @@ export function Graph3DView({ onContextFailed }: Props) {
     }
     requestRender();
   }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender]);
+
+  // ---- ghost chip DOM anchors (value chip + toolbar + intensity slider) -----
+  const getGhostChipAnchor = useCallback((id: string): HTMLDivElement => {
+    let el = ghostChipAnchorsRef.current.get(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'graph3d-ghost-anchor';
+      ghostChipAnchorsRef.current.set(id, el);
+    }
+    return el;
+  }, []);
+
+  /** World center a ghost's field position resolves to (origin orb + field offset). */
+  const ghostWorldCenter = useCallback((ghost: Ghost): WorldPoint => {
+    const node = workflow.nodes.find((n) => n.id === ghost.nodeId);
+    const origin = node ? orbWorldCenter(node) : { x: 0, y: 0, z: 0 };
+    return fieldPosToWorld(ghost.pos, origin);
+  }, [workflow]);
+
+  // ---- sync ghost controllers (translucent orbs + axis guides + chips) ------
+  // Reconciled EXACTLY like the orb sync: add on spawn, re-position on move,
+  // remove/dispose on collapse. The DOM chip rides a CSS3DObject at the ghost
+  // center. Never touches orbGroup/wireGroup, so the v0.13/15 paths are intact.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    const scene = ghostsSceneRef.current;
+    const seen = new Set<string>();
+    for (const ghost of ghosts) {
+      seen.add(ghost.id);
+      const profile = profileFor(ghost.nodeId);
+      const axes = [profile.x, profile.y, profile.z];
+      const profileKey = axes.map((a) => a?.label ?? '-').join('|');
+      let entry = scene.get(ghost.id);
+      if (!entry) {
+        const group = new THREE.Group();
+        // Translucent, wireframe-ish duplicate of the orb (reuse shared geometry).
+        const material = makeOrbMaterial(gradientStops(0.5), capsuleAccent(
+          workflow.nodes.find((n) => n.id === ghost.nodeId)?.kind ?? 'note',
+        ), ORB_RADIUS);
+        material.transparent = true;
+        material.opacity = GHOST_OPACITY;
+        material.wireframe = true;
+        material.depthWrite = false;
+        const sphere = new THREE.Mesh(t.orbGeometry, material);
+        sphere.userData.ghostId = ghost.id;
+        sphere.scale.setScalar(0.72);
+        group.add(sphere);
+        // A CSS3D object hosts the ghost's DOM chip (value/toolbar/slider).
+        const chip = new CSS3DObject(getGhostChipAnchor(ghost.id));
+        chip.userData.ghostChip = ghost.id;
+        group.add(chip);
+        t.ghostGroup.add(group);
+        entry = { group, material, profileKey: '' };
+        scene.set(ghost.id, entry);
+      }
+      // (Re)build the faint labeled axis guides when the profile changes.
+      if (entry.profileKey !== profileKey) {
+        for (const child of [...entry.group.children]) {
+          if (child.userData.axisGuide) {
+            entry.group.remove(child);
+            disposeObject3D(child);
+          }
+        }
+        const axisColor: [string, string, string] = ['#34d6f4', '#7c3aed', '#ff8a3d'];
+        const dirs: Vec3[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+        axes.forEach((axis, i) => {
+          if (!axis) return;
+          const [dx, dy, dz] = dirs[i];
+          const len = ORB_RADIUS + 34;
+          const line = makeWireLine(
+            { x: -dx * len, y: -dy * len, z: -dz * len },
+            { x: dx * len, y: dy * len, z: dz * len },
+            axisColor[i],
+            true,
+          );
+          line.userData.axisGuide = true;
+          entry.group.add(line);
+        });
+        entry.profileKey = profileKey;
+      }
+      const c = ghostWorldCenter(ghost);
+      entry.group.position.set(c.x, c.y, c.z);
+    }
+    for (const [id, entry] of scene) {
+      if (seen.has(id)) continue;
+      t.ghostGroup.remove(entry.group);
+      entry.material.dispose();
+      // The ghost sphere REUSES the shared t.orbGeometry; strip it before
+      // disposeObject3D so it can't dispose geometry every orb + other ghost
+      // still references (that would blank the whole scene).
+      const sphere = entry.group.children.find(
+        (c) => (c as { userData?: { ghostId?: string } }).userData?.ghostId,
+      );
+      if (sphere) entry.group.remove(sphere);
+      disposeObject3D(entry.group); // axis guides (own geometry) + chip
+      scene.delete(id);
+      ghostChipAnchorsRef.current.delete(id);
+    }
+    requestRender();
+  }, [ready, ghosts, workflow, profileFor, capsuleAccent, ghostWorldCenter, getGhostChipAnchor, requestRender]);
+
+  // ---- sync anchor markers (clickable saved sweet-spots) --------------------
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    const scene = anchorsSceneRef.current;
+    const seen = new Set<string>();
+    for (const anchor of anchors) {
+      seen.add(anchor.id);
+      let entry = scene.get(anchor.id);
+      if (!entry) {
+        const group = new THREE.Group();
+        const geometry = new THREE.OctahedronGeometry(ANCHOR_RADIUS, 0);
+        const material = new THREE.MeshBasicMaterial({
+          color: new THREE.Color('#ffd27a'),
+          transparent: true,
+          opacity: 0.9,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.userData.anchorId = anchor.id;
+        group.add(mesh);
+        t.anchorGroup.add(group);
+        entry = { group, mesh };
+        scene.set(anchor.id, entry);
+      }
+      const node = workflow.nodes.find((n) => n.id === anchor.nodeId);
+      const origin = node ? orbWorldCenter(node) : { x: 0, y: 0, z: 0 };
+      const c = fieldPosToWorld(anchor.pos, origin);
+      entry.group.position.set(c.x, c.y, c.z);
+    }
+    for (const [id, entry] of scene) {
+      if (seen.has(id)) continue;
+      t.anchorGroup.remove(entry.group);
+      disposeObject3D(entry.group);
+      scene.delete(id);
+    }
+    requestRender();
+  }, [ready, anchors, workflow, requestRender]);
 
   // ---- sync wires (3D bezier lines) with the workflow edges ----------------
   // Lines are keyed by edge id and REUSED across commits: routine changes
@@ -936,9 +1209,101 @@ export function Graph3DView({ onContextFailed }: Props) {
     if (hit) disconnectEdge(hit.object.userData.edgeId as string);
   };
 
+  /** Raycast the ghost spheres; returns the hit ghost id (drag = fly the ghost). */
+  const tryPickGhostAt = (clientX: number, clientY: number): string | null => {
+    const t = threeRef.current;
+    if (!t || t.ghostGroup.children.length === 0) return null;
+    const ray = pointerRay(clientX, clientY);
+    if (!ray) return null;
+    t.raycaster.setFromCamera(ray.ndc, t.camera);
+    const hits = t.raycaster.intersectObjects(t.ghostGroup.children, true);
+    const hit = hits.find((h) => typeof h.object.userData.ghostId === 'string');
+    return hit ? (hit.object.userData.ghostId as string) : null;
+  };
+
+  /** Raycast the anchor markers; returns the hit anchor id (click = restore). */
+  const tryPickAnchorAt = (clientX: number, clientY: number): string | null => {
+    const t = threeRef.current;
+    if (!t || t.anchorGroup.children.length === 0) return null;
+    const ray = pointerRay(clientX, clientY);
+    if (!ray) return null;
+    t.raycaster.setFromCamera(ray.ndc, t.camera);
+    const hits = t.raycaster.intersectObjects(t.anchorGroup.children, true);
+    const hit = hits.find((h) => typeof h.object.userData.anchorId === 'string');
+    return hit ? (hit.object.userData.anchorId as string) : null;
+  };
+
+  /** Project a world point to viewport-relative screen px (for the ring dial pivot). */
+  const worldToScreen = (p: WorldPoint): { x: number; y: number } | null => {
+    const t = threeRef.current;
+    const host = viewportRef.current;
+    if (!t || !host) return null;
+    const rect = host.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return null;
+    const v = new THREE.Vector3(p.x, p.y, p.z).project(t.camera);
+    return {
+      x: rect.left + ((v.x + 1) / 2) * rect.width,
+      y: rect.top + ((1 - v.y) / 2) * rect.height,
+    };
+  };
+
+  /**
+   * Start a ring-dial drag if the pointer landed on an orb's equatorial ring
+   * band (projected). Returns true when a dial drag was started (so the caller
+   * suppresses orbit/expand). The ring is the node's PRIMARY value dial (§1),
+   * always on and independent of any ghost.
+   */
+  const tryStartRingDrag = (clientX: number, clientY: number): boolean => {
+    const nodeId = tryPickOrbAt(clientX, clientY);
+    if (!nodeId) return false;
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return false;
+    const pw = primaryWeight(node.kind, node.params);
+    const param = primaryParamId(node.kind, node.params);
+    if (!pw || pw.max <= pw.min || !param) return false; // weightless / derived-mean orb: no dial
+    const orbCenter = orbWorldCenter(node);
+    const center = worldToScreen(orbCenter);
+    if (!center) return false;
+    // Approximate the ring's screen radius from a surface point offset from center.
+    const surf = worldToScreen({ x: orbCenter.x + ORB_RADIUS, y: orbCenter.y, z: orbCenter.z });
+    const screenRadius = surf ? Math.hypot(surf.x - center.x, surf.y - center.y) : ORB_RADIUS;
+    const band = { inner: RING_BAND.inner + screenRadius * 0.18, outer: RING_BAND.outer + screenRadius * 0.18 };
+    if (hitRingBand(center.x, center.y, clientX, clientY, screenRadius, band) !== 'ring') return false;
+    ringDragRef.current = { nodeId, param, min: pw.min, max: pw.max, cx: center.x, cy: center.y };
+    // Set the value immediately from the press angle.
+    updateParam(nodeId, param, angleToValue(pointerAngle(center.x, center.y, clientX, clientY), pw.min, pw.max));
+    return true;
+  };
+
   const onBgPointerDown = (e: React.PointerEvent) => {
     if (!isBackgroundTarget(e.target)) return;
     if (e.button !== 0 && e.button !== 1) return;
+    // v0.16 overlays claim the press FIRST (before orbit/expand): a ghost sphere
+    // drag flies the ghost through the field; an orb's equatorial ring band turns
+    // the value dial. Both are left-button only; neither disturbs camera control.
+    if (e.button === 0) {
+      const ghostId = tryPickGhostAt(e.clientX, e.clientY);
+      if (ghostId) {
+        const ghost = ghosts.find((g) => g.id === ghostId);
+        const node = ghost ? workflow.nodes.find((n) => n.id === ghost.nodeId) : undefined;
+        if (ghost && node) {
+          ghostDragRef.current = {
+            id: ghostId,
+            nodeId: ghost.nodeId,
+            planeZ: ghostWorldCenter(ghost).z,
+            shift: e.shiftKey,
+            shiftStartY: e.clientY,
+            shiftStartFieldY: ghost.pos.y,
+          };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          return;
+        }
+      }
+      if (tryStartRingDrag(e.clientX, e.clientY)) {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+    }
     selectNode(null);
     interactionRef.current = {
       mode: e.button === 1 || e.shiftKey ? 'pan' : 'orbit',
@@ -950,6 +1315,38 @@ export function Graph3DView({ onContextFailed }: Props) {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // Ring dial: turn the pointer angle around the orb center into the primary
+    // value across its range (0deg=min .. ~360deg=max), writing it live.
+    const ring = ringDragRef.current;
+    if (ring) {
+      updateParam(ring.nodeId, ring.param, angleToValue(pointerAngle(ring.cx, ring.cy, e.clientX, e.clientY), ring.min, ring.max));
+      return;
+    }
+    // Ghost drag: ground-plane pointer sets X/Z; Shift-drag sets Y (height). The
+    // dragged world pos is normalized to the field's [0,1] space, then moveGhost
+    // writes the node params through applyField in one commit.
+    const gd = ghostDragRef.current;
+    if (gd) {
+      const ghost = ghosts.find((g) => g.id === gd.id);
+      const node = ghost ? workflow.nodes.find((n) => n.id === gd.nodeId) : undefined;
+      if (ghost && node) {
+        const origin = orbWorldCenter(node);
+        if (e.shiftKey || gd.shift) {
+          // Vertical Shift-drag maps screen-y delta to field Y (up = higher).
+          const dyPx = gd.shiftStartY - e.clientY; // up is positive
+          const nextY = clamp(gd.shiftStartFieldY + dyPx / GHOST_SHIFT_PX_PER_AXIS, 0, 1);
+          moveGhost(gd.id, { ...ghost.pos, y: nextY });
+        } else {
+          const p = workflowPointAt(e.clientX, e.clientY, gd.planeZ);
+          if (p) {
+            const w = worldFromCanvas(p, gd.planeZ);
+            const pos = worldToFieldPos({ x: w.x, y: origin.y, z: w.z }, origin);
+            moveGhost(gd.id, { x: pos.x, y: ghost.pos.y, z: pos.z });
+          }
+        }
+      }
+      return;
+    }
     const drag = dragRef.current;
     if (drag) {
       const p = workflowPointAt(e.clientX, e.clientY, drag.planeZ);
@@ -989,15 +1386,31 @@ export function Graph3DView({ onContextFailed }: Props) {
   };
 
   const onBgPointerUp = (e: React.PointerEvent) => {
+    // End a ring-dial / ghost drag first (they own the press exclusively).
+    if (ringDragRef.current || ghostDragRef.current) {
+      const el = e.currentTarget as HTMLElement;
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      ringDragRef.current = null;
+      ghostDragRef.current = null;
+      return;
+    }
     const act = interactionRef.current;
-    // A press+release on empty space without movement is a click: first try
-    // the orbs (click = expand into the editor card), then fall back to the
-    // wire lines (forgiving threshold) and disconnect a hit, exactly like the
-    // 2D editor's click-on-wire behavior.
+    // A press+release on empty space without movement is a click: first try an
+    // anchor marker (click = restore the ghost to that saved spot), then the
+    // orbs (click = expand into the editor card), then fall back to the wire
+    // lines (forgiving threshold) and disconnect a hit, exactly like the 2D
+    // editor's click-on-wire behavior.
     if (act && act.moved < CLICK_SLOP) {
-      const orbNodeId = tryPickOrbAt(e.clientX, e.clientY);
-      if (orbNodeId) expandNode(orbNodeId);
-      else tryDisconnectAt(e.clientX, e.clientY);
+      const anchorId = tryPickAnchorAt(e.clientX, e.clientY);
+      if (anchorId) {
+        // Plain click restores the saved sweet-spot; Shift+click deletes it.
+        if (e.shiftKey) deleteAnchor(anchorId);
+        else restoreAnchor(anchorId);
+      } else {
+        const orbNodeId = tryPickOrbAt(e.clientX, e.clientY);
+        if (orbNodeId) expandNode(orbNodeId);
+        else tryDisconnectAt(e.clientX, e.clientY);
+      }
     }
     if (act) {
       const el = e.currentTarget as HTMLElement;
@@ -1011,6 +1424,8 @@ export function Graph3DView({ onContextFailed }: Props) {
   const endInteractions = () => {
     interactionRef.current = null;
     dragRef.current = null;
+    ringDragRef.current = null;
+    ghostDragRef.current = null;
     setWire(null);
   };
 
@@ -1032,6 +1447,8 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, [category, query]);
 
   const selectedNode = workflow.nodes.find((node) => node.id === selectedNodeId);
+  /** Node ids that already have a ghost (one per node) — for the orb spawn button. */
+  const ghostNodeIds = useMemo(() => new Set(ghosts.map((g) => g.nodeId)), [ghosts]);
 
   return (
     <div
@@ -1123,6 +1540,9 @@ export function Graph3DView({ onContextFailed }: Props) {
               onPortUp={onPortUp(node.id)}
               candidatePorts={ok}
               invalidPorts={bad}
+              onSpawnGhost={() => spawnGhost(node.id)}
+              ghostDisabledReason={hasProfile(node.id) ? null : 'This node has no numeric params to control in 3D'}
+              hasGhost={ghostNodeIds.has(node.id)}
             />
           ) : (
             <GraphNode
@@ -1142,6 +1562,41 @@ export function Graph3DView({ onContextFailed }: Props) {
           node.id,
         );
       })}
+
+      {/* Ghost controller chips (v0.16): each rides a CSS3DObject at its ghost's
+          world center. Rendered here (portaled into the ghost's zero-size CSS3D
+          anchor) so React owns the DOM while three positions it. */}
+      {ghosts.map((ghost) => {
+        const node = workflow.nodes.find((n) => n.id === ghost.nodeId);
+        if (!node) return null;
+        const profile = profileFor(ghost.nodeId);
+        const patches = applyField(ghost.pos, ghost.intensity, profile, ghost.nodeId);
+        return createPortal(
+          <GhostChip
+            ghostId={ghost.id}
+            node={node}
+            profile={profile}
+            intensity={ghost.intensity}
+            pinned={ghost.pinned}
+            recording={ghost.recording}
+            patches={patches}
+            onIntensity={(v) => setGhostIntensity(ghost.id, v)}
+            onPin={() => pinGhost(ghost.id)}
+            onSaveAnchor={(name) => saveAnchor(ghost.id, name)}
+            onRecordToggle={() => (ghost.recording ? stopGhostRecording(ghost.id) : startGhostRecording(ghost.id))}
+            onCollapse={() => collapseGhost(ghost.id)}
+            onNudge={(axis, delta) => moveGhost(ghost.id, nudgeFieldPos(ghost.pos, axis, delta))}
+          />,
+          getGhostChipAnchor(ghost.id),
+          ghost.id,
+        );
+      })}
+
+      {/* Honest one-line note: how the controller maps to values, and that the
+          field is curated (deterministic), not a trained/learned model. */}
+      <div className="graph3d-ghost-note" aria-live="polite">
+        Ghost drives values by position; ring = value; intensity = ghost slider. Curated field, not a trained model.
+      </div>
 
       {/* Motion Timeline overlay — collapsible bottom dock. Rendered inside the
           3D workspace (where the playback rAF lives) so Play choreographs the

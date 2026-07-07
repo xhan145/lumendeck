@@ -64,6 +64,15 @@ import { sampleClip, trackKey } from '../core/motion/interpolate';
 import { buildMotionRenderJobs } from '../core/motion/renderPlan';
 import { isBindable } from '../core/motion/binding';
 import type { Keyframe, MotionClip, MotionState, MotionTrack, OrbMotion, TransportState } from '../core/motion/types';
+import { hydrateField, type Anchor, type FieldState, type Ghost } from './field';
+import { fieldProfile, profileHasAxes, type FieldProfile } from '../core/field/fieldProfile';
+import { applyField } from '../core/field/applyField';
+import { pathToClip, type PathSample } from '../core/field/pathToClip';
+import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
+
+// Re-export the field slice types so the 3D UI (Graph3DView) imports them from the
+// store alongside the actions, matching the motion slice's ergonomics.
+export type { Ghost, Anchor, FieldState } from './field';
 
 export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance';
 
@@ -114,6 +123,8 @@ interface StudioState {
   promptTools: PromptToolsState;
   /** Persisted motion clips + active clip (see src/state/motion.ts). */
   motion: MotionState;
+  /** Render-Space Ghost Controller: ghosts + anchors (see src/state/field.ts). */
+  field: FieldState;
   /**
    * Ephemeral playhead/transport — NEVER persisted. Carries both the live state
    * (playing/t/playbackRate) and the transport actions; the 3D/UI layer runs the
@@ -215,6 +226,32 @@ interface StudioState {
     onProgress?: RenderProgressCallback,
   ): Promise<{ fallbackReason: string | null }>;
 
+  // Render-Space Ghost Controller — spatial parameter control + path recording.
+  /** The curated field profile for a node (empty {} when it has no numeric params). */
+  fieldProfileFor(nodeId: string): FieldProfile;
+  /** Spawn one ghost for a node (no-op if it has no drivable params or already has a ghost). */
+  spawnGhost(nodeId: string): void;
+  /** Move a ghost to a normalized position; writes the node's params via applyField in ONE commit. */
+  moveGhost(id: string, pos: { x: number; y: number; z: number }): void;
+  /** Set a ghost's [0,1] intensity; re-applies its position so params re-tint live. */
+  setGhostIntensity(id: string, v: number): void;
+  /** Toggle a ghost's pinned flag. */
+  pinGhost(id: string): void;
+  /** Remove a ghost; the node's params stay where the ghost left them. */
+  collapseGhost(id: string): void;
+  /** Save the ghost's current position + resolved param values as a named anchor. */
+  saveAnchor(id: string, name: string): void;
+  /** Restore an anchor: move its node's ghost there + write the saved values in one commit. */
+  restoreAnchor(anchorId: string): void;
+  /** Delete a saved anchor. */
+  deleteAnchor(id: string): void;
+  /** Start sampling a ghost's position over wall-clock time (starvation-safe timer). */
+  startGhostRecording(id: string): void;
+  /** Stop recording -> pathToClip -> add the clip to the motion slice + set active. */
+  stopGhostRecording(id: string): void;
+  /** Cancel all in-progress ghost recordings (no clip) — called on 3D-view unmount. */
+  cancelAllGhostRecordings(): void;
+
   setAdapter(id: RenderBackendId): void;
   updateBackendSettings(settings: Partial<BackendSettings>): void;
   testSelectedBackend(): Promise<void>;
@@ -267,6 +304,26 @@ let userPinnedModel = false;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Active ghost-recording sessions, keyed by ghost id. Kept OUTSIDE store state
+ * (never persisted, never part of the render projection) — the samples buffer and
+ * the timer handle are pure runtime plumbing. The stepper is wall-clock based (a
+ * plain interval sampling performance.now() deltas), NOT a bare rAF loop, so a
+ * hidden/occluded/headless window still records the path (mirrors the Motion
+ * Engine's starvation-safe stepper rationale in playbackClock.ts).
+ */
+interface GhostRecording {
+  samples: PathSample[];
+  timer: ReturnType<typeof setInterval>;
+  startedAt: number;
+}
+const ghostRecordings = new Map<string, GhostRecording>();
+/** Sample cadence for ghost path recording (~15Hz — plenty for value curves). */
+const GHOST_RECORD_INTERVAL_MS = 66;
+/** Monotonic wall clock in ms (performance.now when present, else Date.now). */
+const wallNow = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+
 /** Prefer a real (diffusers) installed checkpoint, else the first installed one. */
 function pickCheckpoint(shelf: ModelAsset[]): string {
   const installed = shelf.filter((a) => a.assetType === 'checkpoint' && a.installed);
@@ -311,6 +368,7 @@ const persisted = loadPersisted();
 const initialPromptTools = hydratePromptTools(persisted.promptTools);
 const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
 const initialMotion = hydrateMotion(persisted.motion, initialWorkflow);
+const initialField = hydrateField(persisted.field);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
@@ -342,6 +400,34 @@ export const useStudio = create<StudioState>((set, get) => {
   const patchTransport = (patch: Partial<TransportState>) =>
     set({ transport: { ...get().transport, ...patch } });
 
+  // ---- Field / Ghost helpers ----
+  const setField = (field: FieldState) => set({ field });
+  const editGhost = (id: string, fn: (g: Ghost) => Ghost) =>
+    setField({ ...get().field, ghosts: get().field.ghosts.map((g) => (g.id === id ? fn(g) : g)) });
+  const findGhost = (id: string): Ghost | undefined => get().field.ghosts.find((g) => g.id === id);
+  /** The model family for range adaptation, derived from the Model capsule's asset id. */
+  const currentFamily = (): ControlNetFamily => {
+    const model = findNode(get().workflow, 'model');
+    return estimateFamilyFromModelId(String(model?.params.assetId ?? ''));
+  };
+  /** The positive prompt text for prompt-marker biasing (empty when absent). */
+  const currentPromptText = (): string =>
+    String(findNode(get().workflow, 'prompt')?.params.positive ?? '');
+  /** Build a node's curated field profile from its live kind/params + family/prompt. */
+  const profileForNode = (nodeId: string): FieldProfile => {
+    const node = get().workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return {};
+    return fieldProfile(node.kind, currentFamily(), node.params, currentPromptText());
+  };
+  /** Write a ghost's field patches into the workflow in ONE commit (gradient/ring re-tint). */
+  const applyGhostToWorkflow = (ghost: Ghost) => {
+    const patches = applyField(ghost.pos, ghost.intensity, profileForNode(ghost.nodeId), ghost.nodeId);
+    if (patches.length === 0) return;
+    let next = get().workflow;
+    for (const p of patches) next = updateNodeParam(next, p.nodeId, p.param, p.value);
+    commit(next);
+  };
+
   return {
     workflow: initialWorkflow,
     shelf: DEMO_SHELF,
@@ -352,6 +438,7 @@ export const useStudio = create<StudioState>((set, get) => {
     rackPresets: persisted.rackPresets ?? [],
     promptTools: initialPromptTools,
     motion: initialMotion,
+    field: initialField,
     transport: {
       ...defaultTransport(),
       // Transport actions only mutate the ephemeral playhead (they preserve these
@@ -418,10 +505,27 @@ export const useStudio = create<StudioState>((set, get) => {
     },
     autoLayoutGraph: () => commit(autoLayout(get().workflow)),
     removeCapsule: (nodeId) => {
+      // Tear down any ghost/anchors + live recording timer bound to the removed
+      // node, or they orphan the field slice and leak a setInterval forever.
+      for (const g of get().field.ghosts.filter((g) => g.nodeId === nodeId)) {
+        const r = ghostRecordings.get(g.id);
+        if (r) { clearInterval(r.timer); ghostRecordings.delete(g.id); }
+      }
+      setField({
+        ...get().field,
+        ghosts: get().field.ghosts.filter((g) => g.nodeId !== nodeId),
+        anchors: get().field.anchors.filter((a) => a.nodeId !== nodeId),
+      });
       commit(removeNode(get().workflow, nodeId));
       if (get().selectedNodeId === nodeId) set({ selectedNodeId: null });
     },
-    resetWorkflow: () => commit(createDefaultWorkflow()),
+    resetWorkflow: () => {
+      // A fresh workflow orphans every ghost/anchor; clear them + all timers.
+      for (const [, r] of ghostRecordings) clearInterval(r.timer);
+      ghostRecordings.clear();
+      setField({ ...get().field, ghosts: [], anchors: [] });
+      commit(createDefaultWorkflow());
+    },
 
     rackSlots: () => {
       const rack = findNode(get().workflow, 'loraRack');
@@ -714,6 +818,148 @@ export const useStudio = create<StudioState>((set, get) => {
           : `Rendered motion clip "${clip.name}" (${frames} frames) into the Gallery.`,
       });
       return { fallbackReason };
+    },
+
+    // ---- Render-Space Ghost Controller ----
+    fieldProfileFor: (nodeId) => profileForNode(nodeId),
+
+    spawnGhost: (nodeId) => {
+      // One ghost per node; never spawn onto a node with no drivable params.
+      if (get().field.ghosts.some((g) => g.nodeId === nodeId)) return;
+      if (!profileHasAxes(profileForNode(nodeId))) return;
+      const ghost: Ghost = {
+        id: uid('ghost'),
+        nodeId,
+        // Start centered (midpoint) at full intensity so it parks on the node's
+        // current "middle" without lurching the params on spawn.
+        pos: { x: 0.5, y: 0.5, z: 0.5 },
+        intensity: 1,
+        pinned: false,
+        recording: false,
+      };
+      setField({ ...get().field, ghosts: [...get().field.ghosts, ghost] });
+    },
+
+    moveGhost: (id, pos) => {
+      const ghost = findGhost(id);
+      if (!ghost) return;
+      const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+      const next: Ghost = { ...ghost, pos: { x: clamp01(pos.x), y: clamp01(pos.y), z: clamp01(pos.z) } };
+      editGhost(id, () => next);
+      // Write the node's params via applyField in ONE commit (gradient + ring re-tint).
+      applyGhostToWorkflow(next);
+    },
+
+    setGhostIntensity: (id, v) => {
+      const ghost = findGhost(id);
+      if (!ghost) return;
+      const intensity = v < 0 ? 0 : v > 1 ? 1 : v;
+      const next: Ghost = { ...ghost, intensity };
+      editGhost(id, () => next);
+      // Intensity scales displacement from the midpoint, so re-apply so params re-tint.
+      applyGhostToWorkflow(next);
+    },
+
+    pinGhost: (id) => editGhost(id, (g) => ({ ...g, pinned: !g.pinned })),
+
+    collapseGhost: (id) => {
+      // A recording in progress must be torn down cleanly (no orphaned timer).
+      const rec = ghostRecordings.get(id);
+      if (rec) {
+        clearInterval(rec.timer);
+        ghostRecordings.delete(id);
+      }
+      // Params stay where the ghost left them — only the ghost is removed.
+      setField({ ...get().field, ghosts: get().field.ghosts.filter((g) => g.id !== id) });
+    },
+
+    saveAnchor: (id, name) => {
+      const ghost = findGhost(id);
+      if (!ghost) return;
+      const values = applyField(ghost.pos, ghost.intensity, profileForNode(ghost.nodeId), ghost.nodeId);
+      const anchor: Anchor = {
+        id: uid('anchor'),
+        nodeId: ghost.nodeId,
+        name: name && name.trim() ? name.trim() : 'Anchor',
+        pos: { ...ghost.pos },
+        values,
+      };
+      setField({ ...get().field, anchors: [...get().field.anchors, anchor] });
+      set({ controlStatus: `Saved anchor "${anchor.name}".` });
+    },
+
+    restoreAnchor: (anchorId) => {
+      const anchor = get().field.anchors.find((a) => a.id === anchorId);
+      if (!anchor) return;
+      // Move the node's ghost (if any) back to the anchor position, then write the
+      // saved param values in ONE commit so restore is exact + undo-safe.
+      const ghost = get().field.ghosts.find((g) => g.nodeId === anchor.nodeId);
+      if (ghost) editGhost(ghost.id, (g) => ({ ...g, pos: { ...anchor.pos } }));
+      if (anchor.values.length > 0) {
+        let next = get().workflow;
+        for (const v of anchor.values) next = updateNodeParam(next, v.nodeId, v.param, v.value);
+        commit(next);
+      }
+      set({ controlStatus: `Restored anchor "${anchor.name}".` });
+    },
+
+    deleteAnchor: (id) =>
+      setField({ ...get().field, anchors: get().field.anchors.filter((a) => a.id !== id) }),
+
+    startGhostRecording: (id) => {
+      const ghost = findGhost(id);
+      if (!ghost) return;
+      // Idempotent: a second start on an already-recording ghost is a no-op.
+      if (ghostRecordings.has(id)) return;
+      const startedAt = wallNow();
+      // Seed with the current position at t=0 so a clip always has an opening frame.
+      const samples: PathSample[] = [{ t: 0, pos: { ...ghost.pos } }];
+      const timer = setInterval(() => {
+        const g = findGhost(id);
+        const rec = ghostRecordings.get(id);
+        if (!g || !rec) return;
+        // Wall-clock time: sample WHERE the ghost is NOW at REAL elapsed seconds,
+        // independent of how many timer ticks fired (starvation-safe).
+        rec.samples.push({ t: (wallNow() - rec.startedAt) / 1000, pos: { ...g.pos } });
+      }, GHOST_RECORD_INTERVAL_MS);
+      ghostRecordings.set(id, { samples, timer, startedAt });
+      editGhost(id, (g) => ({ ...g, recording: true }));
+    },
+
+    stopGhostRecording: (id) => {
+      const rec = ghostRecordings.get(id);
+      const ghost = findGhost(id);
+      if (rec) {
+        clearInterval(rec.timer);
+        ghostRecordings.delete(id);
+      }
+      if (ghost) editGhost(id, (g) => ({ ...g, recording: false }));
+      if (!rec || !ghost) return;
+      // Capture a final sample at the true stop time so the last drag position lands.
+      const samples = [...rec.samples, { t: (wallNow() - rec.startedAt) / 1000, pos: { ...ghost.pos } }];
+      const clip = pathToClip(samples, profileForNode(ghost.nodeId), ghost.nodeId);
+      if (clip.tracks.length === 0) {
+        set({ controlStatus: 'Ghost recording produced no drivable tracks.' });
+        return;
+      }
+      // Land the recorded clip in the motion slice + make it active (plays via
+      // Phase 1, renders via Phase 2 unchanged — spatial performance -> animation).
+      setMotion({ clips: [...get().motion.clips, clip], activeClipId: clip.id });
+      set({ controlStatus: `Recorded ghost path into "${clip.name}" (${samples.length} samples).` });
+    },
+
+    cancelAllGhostRecordings: () => {
+      // Called when the 3D view unmounts (view switch / 2D-3D toggle): stop the
+      // module-level sampler timers so they don't run headless forever, and clear
+      // the transient recording flags. Discards in-progress paths (no clip) — you
+      // left the view, so nothing is finalized.
+      if (ghostRecordings.size === 0) return;
+      for (const [, r] of ghostRecordings) clearInterval(r.timer);
+      ghostRecordings.clear();
+      setField({
+        ...get().field,
+        ghosts: get().field.ghosts.map((g) => (g.recording ? { ...g, recording: false } : g)),
+      });
     },
 
     setAdapter: (adapterId) => {
