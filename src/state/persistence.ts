@@ -3,6 +3,7 @@ import type { AppSettings } from './appSettings';
 import type { BackendSettings } from '../turboForge/backends/backendSettings';
 import type { GalleryItem } from './store';
 import type { PromptToolsState } from './promptTools';
+import type { MotionState } from '../core/motion/types';
 
 const KEY = 'lumendeck.v1';
 
@@ -24,6 +25,40 @@ export interface PersistedState {
    * seeded defaults in the store (additive, backward-compatible migration).
    */
   promptTools?: PromptToolsState;
+  /**
+   * Motion Engine slice: authored clips + active clip id. Optional so state saved
+   * before this feature still loads — a missing slice is seeded with an empty
+   * state plus the demo clip (see hydrateMotion). Only the persisted `clips`/
+   * `activeClipId` live here; the ephemeral transport playhead is NEVER persisted.
+   */
+  motion?: MotionState;
+}
+
+/**
+ * The subset of the store that gets persisted. Deliberately EXCLUDES the
+ * ephemeral transport (playhead) so that transport writes during playback never
+ * change the projection — the persistence subscription bails on an unchanged
+ * projection, so playback can no longer starve the trailing-debounce save
+ * (BUG 2a). Pure + structural so it is unit-testable without the store.
+ */
+export function persistedProjection(state: {
+  workflow: Workflow;
+  rackPresets: RackPreset[];
+  backendSettings: BackendSettings;
+  appSettings: AppSettings;
+  promptTools: PromptToolsState;
+  motion: MotionState;
+}): PersistedState {
+  return {
+    workflow: state.workflow,
+    rackPresets: state.rackPresets,
+    // gallery is intentionally omitted — renders live in IndexedDB now.
+    backendSettings: state.backendSettings,
+    appSettings: state.appSettings,
+    promptTools: state.promptTools,
+    // Persist authored clips only; the ephemeral transport playhead is dropped.
+    motion: state.motion,
+  };
 }
 
 export function loadPersisted(): Partial<PersistedState> {

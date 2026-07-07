@@ -1,0 +1,325 @@
+/* Motion Timeline — the authoring/playback panel for the motion engine
+   (imported by MotionTimeline.tsx). Reuses shared chrome (.btn, .field-help,
+   .mono, .chip) and brand tokens from app.css/base.css so it matches the rest
+   of the studio; only motion-specific geometry (scrubber, keyframe lanes)
+   lives here. */
+
+.motion-timeline {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+/* ===== Motion Timeline overlay dock (inside the 3D graph workspace) ========
+   A bottom-docked collapsible panel: a slim tab at rest, expanding upward into
+   a scrollable timeline body. Sits above the WebGL/CSS3D layers; its own
+   pointer events are stopped from reaching the camera-orbit handler. */
+.motion-panel {
+  position: absolute;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  bottom: var(--sp-3);
+  z-index: 8;
+  display: grid;
+  justify-items: start;
+  gap: 0;
+  pointer-events: none; /* only the tab + body take events */
+}
+.motion-panel-tab,
+.motion-panel-body { pointer-events: auto; }
+.motion-panel-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ld-text);
+  background: color-mix(in srgb, var(--ld-surface) 90%, transparent);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-pill);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+.motion-panel-tab svg { color: var(--ld-cyan); }
+.motion-panel-tab:hover { border-color: var(--ld-border-strong); }
+.motion-panel-tab:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.motion-panel.open .motion-panel-tab {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.motion-panel-body {
+  align-self: stretch;
+  max-height: min(46vh, 460px);
+  overflow-y: auto;
+  margin-top: -1px;
+  padding: var(--sp-3);
+  background: color-mix(in srgb, var(--ld-surface) 94%, transparent);
+  border: 1px solid var(--ld-border);
+  border-radius: 0 var(--rad-2) var(--rad-2) var(--rad-2);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-1);
+}
+
+.mt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.mt-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--ld-text);
+}
+.mt-title svg { color: var(--ld-cyan); }
+
+.mt-clip-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.mt-empty { margin: 0; }
+
+/* ---- shared inline label+control cluster -------------------------------- */
+.mt-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mt-inline-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text-faint);
+  white-space: nowrap;
+}
+.mt-inline-val {
+  min-width: 2.4ch;
+  text-align: right;
+  font-size: 11px;
+  color: var(--ld-text-dim);
+}
+.mt-inline select,
+.mt-inline input[type='number'] {
+  min-width: 0;
+}
+/* Visually-hidden label text that stays available to screen readers. */
+.sr-only-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- transport ---------------------------------------------------------- */
+.mt-transport {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.mt-play[aria-pressed='true'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ld-cyan) 60%, transparent);
+}
+/* Pure-CSS pause/stop glyphs so no extra icons are needed. */
+.mt-pause-glyph {
+  display: inline-block;
+  width: 10px;
+  height: 12px;
+  border-left: 3px solid currentColor;
+  border-right: 3px solid currentColor;
+}
+.mt-stop-glyph {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.mt-time {
+  font-size: 12px;
+  color: var(--ld-text-dim);
+  padding: 0 4px;
+}
+.mt-rate select { min-width: 4.5ch; }
+
+/* ---- scrubber ----------------------------------------------------------- */
+.mt-scrub {
+  position: relative;
+  height: 22px;
+  cursor: pointer;
+  touch-action: none;
+  border-radius: var(--rad-pill);
+  outline: none;
+}
+.mt-scrub:focus-visible { box-shadow: var(--focus-ring); }
+.mt-scrub-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: var(--rad-pill);
+  background: color-mix(in srgb, var(--ld-surface-2) 80%, transparent);
+  border: 1px solid var(--ld-border);
+}
+.mt-scrub-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: var(--rad-pill);
+  background: linear-gradient(90deg, var(--ld-cyan), var(--ld-violet));
+  pointer-events: none;
+}
+.mt-scrub-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--ld-cyan);
+  box-shadow: 0 0 10px -2px var(--ld-cyan);
+  pointer-events: none;
+}
+
+/* ---- clip settings ------------------------------------------------------ */
+.mt-clip-settings {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.mt-clip-settings input[type='number'] { width: 6ch; }
+
+/* ---- tracks ------------------------------------------------------------- */
+.mt-tracks {
+  display: grid;
+  gap: var(--sp-2);
+}
+.mt-track {
+  display: grid;
+  gap: 6px;
+  padding: var(--sp-2);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  background: var(--ld-surface-2);
+}
+.mt-track-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.mt-track-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ld-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mt-track-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- keyframe lane ------------------------------------------------------ */
+.mt-lane {
+  position: relative;
+  height: 26px;
+  border-radius: var(--rad-2);
+  background:
+    repeating-linear-gradient(90deg, transparent 0, transparent calc(20% - 1px),
+      color-mix(in srgb, var(--ld-border) 50%, transparent) calc(20% - 1px), color-mix(in srgb, var(--ld-border) 50%, transparent) 20%),
+    color-mix(in srgb, var(--ld-bg) 60%, transparent);
+  border: 1px solid var(--ld-border);
+  cursor: copy;
+}
+.mt-lane-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--ld-cyan) 70%, transparent);
+  pointer-events: none;
+}
+.mt-kf {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--ld-violet);
+  border: 1px solid color-mix(in srgb, var(--ld-cyan) 60%, white 10%);
+  border-radius: 2px;
+  cursor: grab;
+  transition: box-shadow 120ms ease, background 120ms ease;
+}
+.mt-kf:hover { background: var(--ld-cyan); }
+.mt-kf:active { cursor: grabbing; }
+.mt-kf:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring), 0 0 8px -1px var(--ld-cyan);
+}
+
+/* ---- add-track picker --------------------------------------------------- */
+.mt-add-track {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+/* ---- orb motion --------------------------------------------------------- */
+.mt-orb-motion {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  background: var(--ld-surface-2);
+}
+.mt-orb-head { display: flex; align-items: center; justify-content: space-between; }
+.mt-orb-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ld-text);
+}
+.mt-orb-icon { display: inline-flex; color: var(--ld-cyan); }
+.mt-orb-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.mt-orb-controls input[type='range'] { width: 120px; }
+
+/* ---- reduced motion: transitions instant; never any implied auto-play --- */
+@media (prefers-reduced-motion: reduce) {
+  .mt-kf,
+  .mt-scrub-fill,
+  .mt-scrub-thumb {
+    transition: none !important;
+  }
+}

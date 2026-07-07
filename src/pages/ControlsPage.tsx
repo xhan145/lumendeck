@@ -8,6 +8,7 @@ import { QueuePanel } from '../components/queue/QueuePanel';
 import { ControlNetRack } from '../components/rack/ControlNetRack';
 import { LoraRack } from '../components/rack/LoraRack';
 import { PromptStudio } from '../components/prompt/PromptStudio';
+import { MotionTimeline } from '../components/motion/MotionTimeline';
 import { TURBO_PRESETS } from '../turboForge/presets';
 import type { RenderBackendId } from '../turboForge/backends/backendSettings';
 import type { TurboPresetId } from '../turboForge/types';
@@ -59,6 +60,7 @@ export function ControlsPage() {
     workflow,
   } = useStudio();
   const [batchCount, setBatchCount] = useState(2);
+  const [motionOpen, setMotionOpen] = useState(true);
 
   const errors = health.filter((issue) => issue.severity === 'error');
   const warnings = health.filter((issue) => issue.severity !== 'error');
@@ -273,6 +275,28 @@ export function ControlsPage() {
               <span className="chip">selected capsule</span>
             </div>
             <Inspector />
+          </article>
+
+          <article className="card page-card wide">
+            <div className="page-card-head">
+              <h2>
+                <button
+                  type="button"
+                  className="ps-toggle"
+                  aria-expanded={motionOpen}
+                  aria-controls="controls-motion-body"
+                  onClick={() => setMotionOpen((v) => !v)}
+                >
+                  Motion Timeline
+                </button>
+              </h2>
+              <span className="chip">living constellation</span>
+            </div>
+            {motionOpen ? (
+              <div id="controls-motion-body">
+                <MotionTimeline />
+              </div>
+            ) : null}
           </article>
 
           <article className="card page-card wide">

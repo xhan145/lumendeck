@@ -5,9 +5,9 @@ import * as THREE from 'three';
 import { CSS3DObject, CSS3DRenderer } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { CAPSULES, CAPSULE_CATEGORY_LABELS, CAPSULE_KINDS } from '../../core/capsules';
 import { canConnect } from '../../core/workflow';
-import type { CapsuleCategory, CapsuleKind, SocketDef, SocketType } from '../../core/types';
+import type { CapsuleCategory, CapsuleKind, SocketDef, SocketType, WorkflowNode } from '../../core/types';
 import { useStudio } from '../../state/store';
-import { CapsuleIcon } from '../icons';
+import { CapsuleIcon, Icon } from '../icons';
 import { CollapsiblePalette } from './CollapsiblePalette';
 import { GraphNode } from './GraphNode';
 import { OrbChip } from './OrbChip';
@@ -28,6 +28,11 @@ import {
 } from './graph3d/projection';
 import { gradientStops, weightT } from './graph3d/orbWeight';
 import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
+import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
+import { sampleClip, trackKey } from '../../core/motion/interpolate';
+import { motionOffset } from '../../core/motion/orbMotion';
+import type { MotionClip } from '../../core/motion/types';
+import { MotionTimeline } from '../motion/MotionTimeline';
 import {
   buildNeonGrid,
   disposeObject3D,
@@ -116,6 +121,15 @@ const PAN_SPEED = 0.0016;
 /** Pointer travel (px) below which a background press counts as a click. */
 const CLICK_SLOP = 5;
 
+/**
+ * Cap on how often the playback loop writes transport.t back to the store. The
+ * authoritative playhead lives in the loop's wall-clock ref and drives orbs +
+ * the scrubber every frame; the store write only feeds the coarse UI time
+ * readout, so a low rate is plenty and avoids a 30Hz write storm that would (a)
+ * churn the store and (b) starve the trailing-debounce persistence save.
+ */
+const TRANSPORT_WRITE_HZ = 6;
+
 const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [
   'all',
   'core',
@@ -135,7 +149,7 @@ const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [
 function isBackgroundTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || typeof el.closest !== 'function') return false;
-  return !el.closest('.gnode, .orb-chip, .collapsible-palette, .graph-toolbar, .graph-hint, .graph-mode-toggle, .graph3d-note');
+  return !el.closest('.gnode, .orb-chip, .collapsible-palette, .graph-toolbar, .graph-hint, .graph-mode-toggle, .graph3d-note, .motion-panel');
 }
 
 export function Graph3DView({ onContextFailed }: Props) {
@@ -151,6 +165,13 @@ export function Graph3DView({ onContextFailed }: Props) {
   const duplicateCapsule = useStudio((s) => s.duplicateCapsule);
   const autoLayoutGraph = useStudio((s) => s.autoLayoutGraph);
   const removeCapsule = useStudio((s) => s.removeCapsule);
+  // Motion playback: subscribe only to the play flag (a boolean) so this heavy
+  // 3D view re-renders when playback starts/stops — never per animated frame.
+  // The loop reads the live clip/transport/workflow via useStudio.getState().
+  const transportPlaying = useStudio((s) => s.transport.playing);
+  // Subscribe to the active clip id so the playback effect tears down + re-arms
+  // when the clip changes or disappears (e.g. the active clip is deleted mid-play).
+  const activeClipId = useStudio((s) => s.motion.activeClipId);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeCtx | null>(null);
@@ -164,11 +185,15 @@ export function Graph3DView({ onContextFailed }: Props) {
   const interactionRef = useRef<{ mode: 'orbit' | 'pan'; x: number; y: number; moved: number } | null>(null);
   const onContextFailedRef = useRef(onContextFailed);
   onContextFailedRef.current = onContextFailed;
+  /** The starvation-proof playback driver (rAF + timer fallback); null when not playing. */
+  const playbackDriver = useRef<PlaybackDriver | null>(null);
 
   const [ready, setReady] = useState(false);
   const [wire, setWire] = useState<WireDraft | null>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | CapsuleCategory>('all');
+  /** Motion Timeline overlay: collapsed by default so it never obscures the graph. */
+  const [motionPanelOpen, setMotionPanelOpen] = useState(false);
 
   /** Detached portal containers — one live DOM card per node, keyed and stable. */
   const getAnchor = (id: string): HTMLDivElement => {
@@ -549,6 +574,243 @@ export function Graph3DView({ onContextFailed }: Props) {
     requestRender();
   }, [ready, wire, workflow, selectedNodeId, isOrbNode, wireColor, requestRender]);
 
+  // ---- motion playback loop ------------------------------------------------
+  // A CONTINUOUS rAF that runs ONLY while transport.playing. It advances a
+  // local clock, samples the active clip, and overlays orb-motion offsets /
+  // value-tints on top of the static v0.13 orb state — then renders directly
+  // (bypassing the dirty-flag scheduler). When playback stops the orbs are
+  // restored to their static positions/values with one final idle flush, and
+  // the scene returns to the dirty-flag idle loop untouched.
+
+  /**
+   * Reroute every wire from the orbs' CURRENT world centers (moved during
+   * playback) so links follow the animated orbs. The selected node has no orb
+   * entry — it falls back to its socket/orb base position.
+   */
+  const routeWiresLive = useCallback(() => {
+    const t = threeRef.current;
+    if (!t) return;
+    const wf = useStudio.getState().workflow;
+    const sel = useStudio.getState().selectedNodeId;
+    const orbs = orbsRef.current;
+    const orbCenter = (node: WorkflowNode): WorldPoint => {
+      const entry = orbs.get(node.id);
+      if (entry) {
+        const p = entry.group.position;
+        return { x: p.x, y: p.y, z: p.z };
+      }
+      return orbWorldCenter(node);
+    };
+    for (const child of t.wireGroup.children) {
+      const edgeId = child.userData.edgeId as string | undefined;
+      if (!edgeId) continue;
+      const edge = wf.edges.find((e) => e.id === edgeId);
+      if (!edge) continue;
+      const fromNode = wf.nodes.find((n) => n.id === edge.from.node);
+      const toNode = wf.nodes.find((n) => n.id === edge.to.node);
+      if (!fromNode || !toNode) continue;
+      const fromOrb = graph3dStyle === 'orbs' && fromNode.id !== sel;
+      const toOrb = graph3dStyle === 'orbs' && toNode.id !== sel;
+      const aAnchor: WorldPoint = fromOrb ? orbCenter(fromNode) : socketWorldPoint(fromNode, edge.from.socket, 'out', fromNode.id === sel);
+      const bAnchor: WorldPoint = toOrb ? orbCenter(toNode) : socketWorldPoint(toNode, edge.to.socket, 'in', toNode.id === sel);
+      const a = fromOrb ? orbSurfacePoint(aAnchor, bAnchor, ORB_RADIUS) : aAnchor;
+      const b = toOrb ? orbSurfacePoint(bAnchor, aAnchor, ORB_RADIUS) : bAnchor;
+      updateWireLine(child as THREE.Line, a, b);
+    }
+  }, [graph3dStyle]);
+
+  /** Apply one animated frame (positions, scale, tint, ring) to every orb. */
+  const applyPlaybackFrame = useCallback((clip: MotionClip, time: number) => {
+    const t = threeRef.current;
+    if (!t) return;
+    const wf = useStudio.getState().workflow;
+    const sel = useStudio.getState().selectedNodeId;
+    const sampled = sampleClip(clip, time);
+    for (const node of wf.nodes) {
+      if (node.id === sel) continue; // the expanded card never moves
+      const entry = orbsRef.current.get(node.id);
+      if (!entry) continue;
+      // Overlay any sampled track values onto the node's live params, then
+      // normalize with the SAME per-kind weight rule the static tint uses.
+      let params = node.params;
+      let overlaid = false;
+      for (const paramId of Object.keys(node.params)) {
+        const v = sampled.get(trackKey(node.id, paramId));
+        if (v != null) { if (!overlaid) { params = { ...node.params }; overlaid = true; } params[paramId] = v; }
+      }
+      // Also honor bound params not already present in node.params.
+      for (const track of clip.tracks) {
+        if (track.nodeId !== node.id) continue;
+        const v = sampled.get(trackKey(node.id, track.param));
+        if (v != null && params[track.param] !== v) { if (!overlaid) { params = { ...node.params }; overlaid = true; } params[track.param] = v; }
+      }
+      const tw = weightT(node.kind, params);
+      const valueT = tw ?? 0;
+      const orb = clip.orbMotions[node.id] ?? { style: 'still' as const, speed: 1, amplitude: 1 };
+      // motionOffset returns offsets already in WORLD units (the demo authors
+      // amplitude ~= world units, e.g. orbit amplitude 60). Applied directly.
+      const off = motionOffset(orb, valueT, time);
+      const base = orbWorldCenter(node);
+      entry.group.position.set(base.x + off.dx, base.y + off.dy, base.z + off.dz);
+      entry.group.scale.setScalar(off.scale);
+      // Re-tint gradient + ring from the sampled value (reuse the static path).
+      const stops = tw == null ? NEUTRAL_ORB_STOPS : gradientStops(tw);
+      const accent = capsuleAccent(node.kind);
+      const tintKey = `${stops[0]}|${stops[1]}|${stops[2]}|${accent}`;
+      if (entry.tintKey !== tintKey) {
+        updateOrbMaterial(entry.material, stops, accent);
+        entry.tintKey = tintKey;
+      }
+      const ringT = tw ?? -1;
+      if (entry.ringT !== ringT) {
+        if (entry.ring) { entry.group.remove(entry.ring); disposeObject3D(entry.ring); entry.ring = null; }
+        if (tw != null) {
+          entry.ring = makeOrbRing(ORB_RADIUS, tw, stops[1]);
+          if (entry.ring) entry.group.add(entry.ring);
+        }
+        entry.ringT = ringT;
+      }
+    }
+    routeWiresLive();
+  }, [capsuleAccent, routeWiresLive]);
+
+  /** Restore every orb to its STATIC position/scale/tint (one idle flush). */
+  const restoreStaticOrbs = useCallback(() => {
+    const t = threeRef.current;
+    if (!t) return;
+    const wf = useStudio.getState().workflow;
+    const sel = useStudio.getState().selectedNodeId;
+    for (const node of wf.nodes) {
+      if (node.id === sel) continue;
+      const entry = orbsRef.current.get(node.id);
+      if (!entry) continue;
+      const tw = weightT(node.kind, node.params);
+      const stops = tw == null ? NEUTRAL_ORB_STOPS : gradientStops(tw);
+      const accent = capsuleAccent(node.kind);
+      const tintKey = `${stops[0]}|${stops[1]}|${stops[2]}|${accent}`;
+      if (entry.tintKey !== tintKey) { updateOrbMaterial(entry.material, stops, accent); entry.tintKey = tintKey; }
+      const ringT = tw ?? -1;
+      if (entry.ringT !== ringT) {
+        if (entry.ring) { entry.group.remove(entry.ring); disposeObject3D(entry.ring); entry.ring = null; }
+        if (tw != null) { entry.ring = makeOrbRing(ORB_RADIUS, tw, stops[1]); if (entry.ring) entry.group.add(entry.ring); }
+        entry.ringT = ringT;
+      }
+      const c = orbWorldCenter(node);
+      entry.group.position.set(c.x, c.y, c.z);
+      entry.group.scale.setScalar(1);
+    }
+    routeWiresLive();
+    requestRender();
+  }, [capsuleAccent, routeWiresLive, requestRender]);
+
+  useEffect(() => {
+    if (!ready || !transportPlaying) return;
+    const store = useStudio.getState;
+    const first = store();
+    const clip = first.motion.clips.find((c) => c.id === first.motion.activeClipId) ?? null;
+    // Guard: nothing to play (no active clip) => leave the idle loop alone.
+    if (!clip) return;
+    const clipId = clip.id;
+
+    // AUTHORITATIVE PLAYHEAD lives here in a wall-clock ref, NOT in the store.
+    let localT = first.transport.t;
+    // Pressing Play at (or past) the end of a non-looping clip restarts from 0
+    // rather than instantly re-ending.
+    if (!clip.loop && clip.duration > 0 && localT >= clip.duration) localT = 0;
+    const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    let last = nowMs();
+    let lastWrite = last;
+
+    // The tick is driven by BOTH rAF (smooth when visible) AND a ~30ms timer
+    // fallback via createPlaybackDriver, so the playhead keeps advancing on a
+    // real WALL clock even when rAF is starved (hidden/minimized/occluded/
+    // headless) — the invariant that playback must survive occluded windows.
+    const step = (): boolean => {
+      const t = threeRef.current;
+      const s = store();
+      // Resolve the STILL-LIVE active clip by id every tick — NO stale fallback.
+      // If the clip we started on is gone (deleted / deactivated mid-play), stop
+      // the loop and clear transport so nothing is left "playing" a dead clip.
+      const active = s.motion.clips.find((c) => c.id === clipId) ?? null;
+      if (!t || !active || s.motion.activeClipId !== clipId) {
+        s.transport.stop();
+        return false; // self-cancel; cleanup restores the idle scene
+      }
+      const now = nowMs();
+      const dt = (now - last) / 1000;
+      last = now;
+      const { t: nextT, ended } = advancePlayback({
+        t: localT,
+        dt,
+        rate: s.transport.playbackRate || 1,
+        duration: active.duration,
+        loop: active.loop,
+      });
+      localT = nextT;
+      applyPlaybackFrame(active, localT);
+      t.renderer.render(t.scene, t.camera);
+      t.cssRenderer.render(t.scene, t.camera);
+      if (ended) {
+        // Non-looping clip reached the end: settle the playhead AT the end (so
+        // the scrubber shows the final frame) and pause. Cleanup restores idle.
+        s.transport.pause();
+        s.transport.seek(localT);
+        return false;
+      }
+      // Throttle the store write (coarse UI readout only); the authoritative
+      // playhead is `localT` above. A low HZ keeps the persistence debounce alive.
+      if (now - lastWrite >= 1000 / TRANSPORT_WRITE_HZ) {
+        lastWrite = now;
+        s.transport.seek(localT);
+      }
+      return true;
+    };
+
+    playbackDriver.current = createPlaybackDriver(step, {
+      requestFrame: (cb) => requestAnimationFrame(cb),
+      cancelFrame: (id) => cancelAnimationFrame(id),
+      setTimer: (cb, ms) => setTimeout(cb, ms) as unknown as number,
+      clearTimer: (id) => clearTimeout(id),
+    });
+
+    return () => {
+      if (playbackDriver.current) {
+        playbackDriver.current.stop();
+        playbackDriver.current = null;
+      }
+      // Final EXACT playhead write. The loop only wrote transport.t at ~6Hz, so
+      // the store readout can be up to ~166ms stale when playback stops. On a
+      // PAUSE (playing false, t != 0) commit the authoritative localT so the
+      // scrubber/readout land precisely; a STOP (t === 0) and non-looping END
+      // (already seeked to duration) are left untouched.
+      const tr = useStudio.getState().transport;
+      if (!tr.playing && tr.t !== 0 && tr.t !== localT) tr.seek(localT);
+      restoreStaticOrbs();
+    };
+  }, [ready, transportPlaying, activeClipId, applyPlaybackFrame, restoreStaticOrbs]);
+
+  // ---- scrub preview (paused): seeking updates orbs live -------------------
+  // A transient store subscription (NOT a React subscription) so scrubbing the
+  // playhead while PAUSED repaints the orbs at that time without re-rendering
+  // this heavy component. During playback the rAF owns the frame, so this
+  // listener early-returns. Fully idle otherwise (fires only on state changes).
+  useEffect(() => {
+    if (!ready) return;
+    let lastT = useStudio.getState().transport.t;
+    const unsub = useStudio.subscribe((s) => {
+      if (s.transport.playing) { lastT = s.transport.t; return; } // rAF owns it
+      if (s.transport.t === lastT) return; // not a seek
+      lastT = s.transport.t;
+      const clip = s.motion.clips.find((c) => c.id === s.motion.activeClipId) ?? null;
+      const t = threeRef.current;
+      if (!clip || !t) return;
+      applyPlaybackFrame(clip, s.transport.t);
+      t.renderer.render(t.scene, t.camera);
+      t.cssRenderer.render(t.scene, t.camera);
+    });
+    return unsub;
+  }, [ready, applyPlaybackFrame]);
+
   // ---- camera actions ------------------------------------------------------
   const resetCamera = () => {
     camRef.current = { tx: 0, ty: 0, tz: 0, ...DEFAULT_CAM };
@@ -880,6 +1142,31 @@ export function Graph3DView({ onContextFailed }: Props) {
           node.id,
         );
       })}
+
+      {/* Motion Timeline overlay — collapsible bottom dock. Rendered inside the
+          3D workspace (where the playback rAF lives) so Play choreographs the
+          orbs directly. Stops pointer events from reaching the orbit handler. */}
+      <div
+        className={`motion-panel ${motionPanelOpen ? 'open' : 'collapsed'}`}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="motion-panel-tab"
+          aria-expanded={motionPanelOpen}
+          aria-controls="graph-motion-body"
+          title={motionPanelOpen ? 'Hide the motion timeline' : 'Show the motion timeline'}
+          onClick={() => setMotionPanelOpen((v) => !v)}
+        >
+          {Icon.pulse({ size: 14 })}
+          <span>Motion</span>
+        </button>
+        {motionPanelOpen ? (
+          <div id="graph-motion-body" className="motion-panel-body scroll">
+            <MotionTimeline />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

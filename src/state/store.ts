@@ -39,7 +39,7 @@ import {
   type BackendSettings,
   type RenderBackendId,
 } from '../turboForge/backends/backendSettings';
-import { loadPersisted, savePersisted, takeLegacyGallery, clearLegacyGallery } from './persistence';
+import { loadPersisted, savePersisted, persistedProjection, takeLegacyGallery, clearLegacyGallery } from './persistence';
 import { resolveGalleryStore, type Collection } from './galleryDb';
 import {
   addRender as addRenderOp,
@@ -59,6 +59,10 @@ import { deletePreset as deletePresetPure, savePreset as savePresetPure, findPre
 import type { WildcardSet } from '../core/prompt/wildcards';
 import { record as recordHistoryPure, toggleFavorite as toggleFavoritePure, type PromptHistoryEntry } from '../core/prompt/history';
 import { planVariations, type VariationAxis } from '../core/prompt/variations';
+import { defaultTransport, hydrateMotion, makeClip } from './motion';
+import { sampleClip, trackKey } from '../core/motion/interpolate';
+import { isBindable } from '../core/motion/binding';
+import type { Keyframe, MotionClip, MotionState, MotionTrack, OrbMotion, TransportState } from '../core/motion/types';
 
 export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance';
 
@@ -107,6 +111,20 @@ interface StudioState {
   selectedNodeId: string | null;
   rackPresets: RackPreset[];
   promptTools: PromptToolsState;
+  /** Persisted motion clips + active clip (see src/state/motion.ts). */
+  motion: MotionState;
+  /**
+   * Ephemeral playhead/transport — NEVER persisted. Carries both the live state
+   * (playing/t/playbackRate) and the transport actions; the 3D/UI layer runs the
+   * actual rAF advance and calls seek. Playback never auto-writes workflow params.
+   */
+  transport: TransportState & {
+    play(): void;
+    pause(): void;
+    stop(): void;
+    seek(t: number): void;
+    setRate(r: number): void;
+  };
   gallery: GalleryItem[];
   collections: Collection[];
   /** false until the gallery has been hydrated from IndexedDB at startup. */
@@ -165,6 +183,25 @@ interface StudioState {
   toggleFavorite(id: string): void;
   loadHistoryEntry(id: string): void;
   enqueueVariations(axis: VariationAxis, count: number): Promise<void>;
+
+  // Motion Engine — clip/track authoring (persisted) + ephemeral transport.
+  createClip(name?: string): void;
+  deleteClip(id: string): void;
+  setActiveClip(id: string | null): void;
+  addTrack(nodeId: string, param: string): void;
+  removeTrack(trackId: string): void;
+  /** Add a keyframe (id auto-generated). Returns the new keyframe's stable id. */
+  addKeyframe(trackId: string, t: number, value: number): string;
+  /** Patch a keyframe found BY STABLE ID (drag/re-sort safe — never by index). */
+  updateKeyframe(trackId: string, kfId: string, patch: Partial<Keyframe>): void;
+  /** Remove a keyframe found BY STABLE ID. */
+  removeKeyframe(trackId: string, kfId: string): void;
+  setClipDuration(id: string, duration: number): void;
+  setClipFps(id: string, fps: number): void;
+  setClipLoop(id: string, loop: boolean): void;
+  setOrbMotion(nodeId: string, orbMotion: OrbMotion): void;
+  /** Sample the active clip at `atT` and commit each track's value into its capsule param (undo-safe, one commit). */
+  bakeClipToWorkflow(atT: number): void;
 
   setAdapter(id: RenderBackendId): void;
   updateBackendSettings(settings: Partial<BackendSettings>): void;
@@ -261,6 +298,7 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
 const persisted = loadPersisted();
 const initialPromptTools = hydratePromptTools(persisted.promptTools);
 const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultWorkflow(), DEMO_SHELF);
+const initialMotion = hydrateMotion(persisted.motion, initialWorkflow);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
@@ -273,6 +311,25 @@ export const useStudio = create<StudioState>((set, get) => {
   const commit = (wf: Workflow) =>
     set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null });
 
+  // ---- Motion helpers (keep the actions terse; all pure list edits) ----
+  const setMotion = (motion: MotionState) => set({ motion });
+  const mapClips = (fn: (clip: MotionClip) => MotionClip) =>
+    setMotion({ ...get().motion, clips: get().motion.clips.map(fn) });
+  /** Edit exactly the clip with `id`, leaving others untouched. */
+  const editClip = (id: string, fn: (clip: MotionClip) => MotionClip) =>
+    mapClips((c) => (c.id === id ? fn(c) : c));
+  /** Edit whichever clip owns `trackId` (and that track), leaving others untouched. */
+  const editTrack = (trackId: string, fn: (track: MotionTrack) => MotionTrack) =>
+    mapClips((c) =>
+      c.tracks.some((t) => t.id === trackId)
+        ? { ...c, tracks: c.tracks.map((t) => (t.id === trackId ? fn(t) : t)) }
+        : c,
+    );
+  const activeClip = () => get().motion.clips.find((c) => c.id === get().motion.activeClipId) ?? null;
+  /** Replace transport state while preserving the bound method references. */
+  const patchTransport = (patch: Partial<TransportState>) =>
+    set({ transport: { ...get().transport, ...patch } });
+
   return {
     workflow: initialWorkflow,
     shelf: DEMO_SHELF,
@@ -282,6 +339,18 @@ export const useStudio = create<StudioState>((set, get) => {
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
     promptTools: initialPromptTools,
+    motion: initialMotion,
+    transport: {
+      ...defaultTransport(),
+      // Transport actions only mutate the ephemeral playhead (they preserve these
+      // method refs via patchTransport). The 3D/UI layer runs the rAF advance and
+      // calls seek. Playback NEVER commits sampled values (see bakeClipToWorkflow).
+      play: () => patchTransport({ playing: true }),
+      pause: () => patchTransport({ playing: false }),
+      stop: () => patchTransport({ playing: false, t: 0 }),
+      seek: (t) => patchTransport({ t: Math.max(0, t) }),
+      setRate: (r) => patchTransport({ playbackRate: Math.max(0, r) }),
+    },
     gallery: [],
     collections: [],
     galleryReady: false,
@@ -476,6 +545,95 @@ export const useStudio = create<StudioState>((set, get) => {
       }
       if (p && original.positive !== undefined) restored = updateNodeParam(restored, p.id, 'positive', original.positive);
       commit(restored);
+    },
+
+    // ---- Motion Engine ----
+    createClip: (name) => {
+      const clip = makeClip(name);
+      setMotion({ clips: [...get().motion.clips, clip], activeClipId: clip.id });
+    },
+    deleteClip: (id) => {
+      const wasActive = get().motion.activeClipId === id;
+      const clips = get().motion.clips.filter((c) => c.id !== id);
+      const activeClipId = wasActive ? (clips[0]?.id ?? null) : get().motion.activeClipId;
+      setMotion({ clips, activeClipId });
+      // Deleting the clip that is currently playing must never leave the transport
+      // "playing" a clip that no longer exists (which would strand the playback
+      // loop). Stop + rewind so we cleanly return to idle.
+      if (wasActive && get().transport.playing) patchTransport({ playing: false, t: 0 });
+    },
+    setActiveClip: (id) => setMotion({ ...get().motion, activeClipId: id }),
+
+    addTrack: (nodeId, param) => {
+      const clip = activeClip();
+      if (!clip) return;
+      const node = get().workflow.nodes.find((n) => n.id === nodeId);
+      // Only bind to a real numeric ParamDef on the node's capsule.
+      if (!node || !isBindable(node.kind, param)) return;
+      // One track per (node, param); don't duplicate.
+      if (clip.tracks.some((t) => t.nodeId === nodeId && t.param === param)) return;
+      const track: MotionTrack = { id: uid('track'), nodeId, param, keyframes: [] };
+      editClip(clip.id, (c) => ({ ...c, tracks: [...c.tracks, track] }));
+    },
+    removeTrack: (trackId) =>
+      mapClips((c) => ({ ...c, tracks: c.tracks.filter((t) => t.id !== trackId) })),
+
+    addKeyframe: (trackId, t, value) => {
+      // Mint the stable id up front so we can return it to the caller (the UI
+      // may want to focus/select the freshly-added keyframe).
+      const id = uid('kf');
+      editTrack(trackId, (track) => {
+        // Replace an existing keyframe at the same time; else insert in t-order.
+        const rest = track.keyframes.filter((k) => k.t !== t);
+        const kf: Keyframe = { id, t, value };
+        const keyframes = [...rest, kf].sort((a, b) => a.t - b.t);
+        return { ...track, keyframes };
+      });
+      return id;
+    },
+    updateKeyframe: (trackId, kfId, patch) =>
+      editTrack(trackId, (track) => {
+        if (!track.keyframes.some((k) => k.id === kfId)) return track;
+        // Find BY ID (never index): the array is sorted by t, so a dragged/nudged
+        // keyframe's index shifts when it crosses a neighbor — index-based edits
+        // would corrupt the wrong keyframe. `id` is drag/re-sort safe.
+        const keyframes = track.keyframes.map((k) => (k.id === kfId ? { ...k, ...patch } : k));
+        // A time edit may reorder keyframes; keep them sorted by t.
+        if (patch.t !== undefined) keyframes.sort((a, b) => a.t - b.t);
+        return { ...track, keyframes };
+      }),
+    removeKeyframe: (trackId, kfId) =>
+      editTrack(trackId, (track) => ({
+        ...track,
+        keyframes: track.keyframes.filter((k) => k.id !== kfId),
+      })),
+
+    setClipDuration: (id, duration) =>
+      editClip(id, (c) => ({ ...c, duration: Math.max(0, duration) })),
+    setClipFps: (id, fps) =>
+      editClip(id, (c) => ({ ...c, fps: Math.max(1, Math.round(fps)) })),
+    setClipLoop: (id, loop) => editClip(id, (c) => ({ ...c, loop })),
+
+    setOrbMotion: (nodeId, orbMotion) => {
+      const clip = activeClip();
+      if (!clip) return;
+      editClip(clip.id, (c) => ({ ...c, orbMotions: { ...c.orbMotions, [nodeId]: orbMotion } }));
+    },
+
+    bakeClipToWorkflow: (atT) => {
+      const clip = activeClip();
+      if (!clip) return;
+      const values = sampleClip(clip, atT);
+      if (values.size === 0) return;
+      // Fold every sampled track value into ONE workflow commit so undo restores
+      // the whole bake at once (never auto-write during playback — bake is explicit).
+      let next = get().workflow;
+      for (const track of clip.tracks) {
+        const v = values.get(trackKey(track.nodeId, track.param));
+        if (v != null) next = updateNodeParam(next, track.nodeId, track.param, v);
+      }
+      commit(next);
+      set({ controlStatus: `Baked "${clip.name}" @ ${atT.toFixed(2)}s into the workflow.` });
     },
 
     setAdapter: (adapterId) => {
@@ -1051,19 +1209,26 @@ export const useStudio = create<StudioState>((set, get) => {
   };
 });
 
-// Persist on every relevant change (cheap JSON writes, debounced by microtask batching).
+// Persist on every relevant change (cheap JSON writes, trailing-debounced).
+//
+// CRITICAL: the persisted PROJECTION excludes the ephemeral transport (playhead)
+// entirely, and this subscription BAILS when the projection is byte-identical to
+// the last one. Without this bail, the 30Hz->now-6Hz transport.t writes during
+// playback would reset the 300ms trailing debounce on every tick, so savePersisted
+// would never actually fire while a clip plays (persistence starvation). Transport
+// is ephemeral and must NEVER trigger a persistence save.
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPersistedJson: string | null = null;
 useStudio.subscribe((state) => {
+  const projection = persistedProjection(state);
+  const json = JSON.stringify(projection);
+  // Nothing persisted changed (e.g. only transport.t advanced) -> do not touch
+  // the debounce timer, so a genuine save is never starved by playback writes.
+  if (json === lastPersistedJson) return;
+  lastPersistedJson = json;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    savePersisted({
-      workflow: state.workflow,
-      rackPresets: state.rackPresets,
-      // gallery is intentionally omitted — renders live in IndexedDB now.
-      backendSettings: state.backendSettings,
-      appSettings: state.appSettings,
-      promptTools: state.promptTools,
-    });
+    savePersisted(projection);
   }, 300);
 });
 
