@@ -9,9 +9,11 @@ import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { RecipeView } from './components/recipe/RecipeView';
 import { ControlsPage } from './pages/ControlsPage';
+import { CreditsPage } from './pages/CreditsPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { PerformancePage } from './pages/PerformancePage';
 import { SettingsPage } from './pages/SettingsPage';
+import { SupportPage } from './pages/SupportPage';
 import './styles/base.css';
 import './styles/app.css';
 
@@ -25,6 +27,8 @@ const VIEW_TITLES: Record<ViewId, string> = {
   settings: 'Settings',
   diagnostics: 'Diagnostics',
   performance: 'Performance',
+  support: 'Support',
+  credits: 'Credits',
 };
 
 function HealthChip() {
@@ -70,6 +74,8 @@ export function App() {
       : view === 'settings' ? <SettingsPage />
       : view === 'diagnostics' ? <DiagnosticsPage />
       : view === 'performance' ? <PerformancePage />
+      : view === 'support' ? <SupportPage />
+      : view === 'credits' ? <CreditsPage />
       : <GuideView onOpenControls={() => setView('controls')} />;
 
   return (

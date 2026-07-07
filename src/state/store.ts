@@ -93,7 +93,7 @@ export type { Ghost, Anchor, FieldState } from './field';
 export type { AudioState } from './audio';
 export type { AudioSource } from '../audio/engine';
 
-export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance';
+export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance' | 'support' | 'credits';
 
 export interface GalleryItem {
   id: string;

@@ -10,6 +10,7 @@
       "allow": [{ "name": "binaries/lumendeck-bridge", "sidecar": true, "args": ["--port", "8787"] }]
     },
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "opener:default"
   ]
 }

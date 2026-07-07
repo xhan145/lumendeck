@@ -266,6 +266,24 @@ Every gallery render stores a manifest with:
 - Benchmark data when available
 - Warnings and recommended fixes
 
+## Support LumenDeck
+
+LumenDeck is free, open source, and donation-supported. If it earns a place in your creative
+toolkit, you can support development on Ko-fi:
+
+**[Support LumenDeck on Ko-fi](https://ko-fi.com/mekhaneproductions)**
+
+Donations fund installer builds, documentation, preset packs, constellation system improvements,
+gradient engine and renderer polish, and long-term maintenance. Every core feature stays free and
+open — donations are optional and never unlock a paywall. Prefer to help another way? See
+[CONTRIBUTING.md](CONTRIBUTING.md) for bug reports, presets, docs, and code, and
+[ROADMAP.md](ROADMAP.md) for where the project is heading.
+
+## License
+
+LumenDeck is licensed under the [Apache License 2.0](LICENSE).
+Copyright 2026 MEKHANE Productions (Greg Molina).
+
 ## Git Remote
 
 If `git push` says no push destination is configured, create or choose a remote repository, then run:

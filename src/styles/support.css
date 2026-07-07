@@ -1,0 +1,99 @@
+/* ===== Support LumenDeck page ===== */
+.support-page .studio-page-inner {
+  max-width: 860px;
+}
+
+/* NOTE: page CSS is injected BEFORE base.css/app.css (import order in App.tsx),
+   so rules that collide with `.card`/`.btn` carry the `.support-page` ancestor
+   to win the cascade by specificity, not order. */
+.support-page .support-hero {
+  position: relative;
+  overflow: hidden;
+  padding: var(--sp-6);
+  display: grid;
+  gap: var(--sp-3);
+  background:
+    radial-gradient(120% 140% at 85% -20%, rgba(124, 58, 237, 0.18), transparent 55%),
+    radial-gradient(120% 140% at 0% 120%, rgba(52, 214, 244, 0.14), transparent 55%),
+    var(--ld-surface);
+  border-color: var(--ld-border-strong);
+}
+
+.support-constellation {
+  position: absolute;
+  inset: 0 0 auto auto;
+  width: min(48%, 260px);
+  aspect-ratio: 220 / 120;
+  pointer-events: none;
+  opacity: 0.7;
+}
+.support-constellation svg {
+  width: 100%;
+  height: 100%;
+}
+
+.support-hero h1 {
+  font-size: 30px;
+  line-height: 1.1;
+  background: linear-gradient(92deg, var(--ld-cyan), var(--ld-violet) 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.support-lead {
+  color: var(--ld-text-dim);
+  max-width: 62ch;
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.support-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.support-page .support-cta {
+  min-height: 42px;
+  padding-inline: 20px;
+  font-size: 15px;
+}
+.support-note {
+  color: var(--ld-text-faint);
+  font-size: 12.5px;
+}
+
+.support-funds .support-fund-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.support-fund-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  background: rgba(3, 9, 18, 0.22);
+  color: var(--ld-text);
+  font-size: 13.5px;
+}
+.support-fund-dot {
+  display: inline-flex;
+  color: var(--ld-cyan);
+  flex: none;
+}
+
+@media (max-width: 720px) {
+  .support-page .support-hero { padding: var(--sp-5); }
+  .support-hero h1 { font-size: 25px; }
+  .support-constellation { opacity: 0.4; }
+  .support-funds .support-fund-list { grid-template-columns: 1fr; }
+}

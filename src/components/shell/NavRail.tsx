@@ -18,6 +18,8 @@ const ITEMS: NavItem[] = [
   { id: 'settings', label: 'Settings', icon: () => Icon.gear({ size: 22 }) },
   { id: 'diagnostics', label: 'Diagnostics', icon: () => Icon.pulse({ size: 22 }) },
   { id: 'performance', label: 'Performance', icon: () => Icon.bolt({ size: 22 }) },
+  { id: 'support', label: 'Support', icon: () => Icon.heart({ size: 22 }) },
+  { id: 'credits', label: 'Credits', icon: () => Icon.sparkle({ size: 22 }) },
 ];
 
 export function NavRail({

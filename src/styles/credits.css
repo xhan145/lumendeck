@@ -1,0 +1,84 @@
+/* ===== Credits page — cinematic, centered ===== */
+.credits-page {
+  display: flex;
+}
+.credits-stage {
+  position: relative;
+  flex: 1;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6) var(--sp-5);
+  overflow: hidden;
+  background:
+    radial-gradient(90% 70% at 50% 0%, rgba(124, 58, 237, 0.16), transparent 60%),
+    radial-gradient(90% 80% at 50% 120%, rgba(52, 214, 244, 0.12), transparent 60%);
+}
+
+.credits-constellation {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.6;
+}
+.credits-constellation svg {
+  width: 100%;
+  height: 100%;
+}
+
+.credits-content {
+  position: relative;
+  z-index: 1;
+  max-width: 640px;
+  text-align: center;
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-4);
+}
+
+.credits-mark {
+  filter: drop-shadow(0 0 18px rgba(52, 214, 244, 0.32));
+}
+
+.credits-kicker {
+  margin: 0;
+  color: var(--ld-cyan);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.credits-lines {
+  display: grid;
+  gap: var(--sp-5);
+}
+
+.credits-line {
+  margin: 0;
+  color: var(--ld-text);
+  font-size: 19px;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+.credits-line:first-child {
+  font-size: 23px;
+  font-weight: 600;
+  background: linear-gradient(92deg, var(--ld-cyan), var(--ld-violet) 72%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.credits-line:last-child {
+  color: var(--ld-text-dim);
+  font-size: 16px;
+}
+
+@media (max-width: 720px) {
+  .credits-stage { padding: var(--sp-5) var(--sp-4); }
+  .credits-line { font-size: 17px; }
+  .credits-line:first-child { font-size: 20px; }
+  .credits-lines { gap: var(--sp-4); }
+}
