@@ -110,6 +110,42 @@ export function primaryWeight(kind: CapsuleKind, params: Record<string, unknown>
   }
 }
 
+/**
+ * The single writable ParamDef id whose value the primary-weight ring dial
+ * drives, or null when the kind's primary weight is a DERIVED aggregate (the
+ * rack means) with no single backing param — those orbs show a value ring but
+ * are not drag-to-set. Mirrors the per-kind table in `primaryWeight` exactly.
+ *
+ * (Kept separate from `primaryWeight` so its `{value,min,max,label}` shape — and
+ * the tests pinned to it — stay untouched; the ring dial in Graph3DView reads
+ * BOTH: `primaryWeight` for the range/label and this for the param to write.)
+ */
+export function primaryParamId(kind: CapsuleKind, _params: Record<string, unknown>): string | null {
+  switch (kind) {
+    case 'sampler':
+      return 'cfg';
+    case 'imageLoader':
+    case 'conditioningAverage':
+    case 'latentNoise':
+    case 'control':
+      return 'strength';
+    case 'video':
+      return 'motionStrength';
+    case 'hiresFix':
+      return 'denoise';
+    case 'loraRack':
+    case 'controlNetRack':
+      return null; // derived slot mean — no single param to write
+    default: {
+      // Generic fallback: the same first-usable-number ParamDef primaryWeight uses.
+      const def = CAPSULES[kind].params.find(
+        (p) => p.kind === 'number' && typeof p.min === 'number' && typeof p.max === 'number' && p.max > p.min,
+      );
+      return def?.id ?? null;
+    }
+  }
+}
+
 /** Normalized primary weight in 0..1 (clamped), or null for weightless kinds. */
 export function weightT(kind: CapsuleKind, params: Record<string, unknown>): number | null {
   const pw = primaryWeight(kind, params);

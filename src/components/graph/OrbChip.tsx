@@ -20,6 +20,12 @@ interface Props {
   onPortUp: (socket: SocketDef, dir: 'in' | 'out', e: React.PointerEvent) => void;
   candidatePorts: Set<string>;
   invalidPorts: Set<string>;
+  /** v0.16: spawn a Render-Space ghost controller for this node (curated field). */
+  onSpawnGhost?: () => void;
+  /** When set, the ghost button is disabled with this tooltip (empty profile). */
+  ghostDisabledReason?: string | null;
+  /** True while a ghost already exists for this node (button becomes a no-op label). */
+  hasGhost?: boolean;
 }
 
 /**
@@ -32,6 +38,7 @@ interface Props {
  */
 export function OrbChip({
   node, summary, onSelect, onKeyDown, onPortDown, onPortUp, candidatePorts, invalidPorts,
+  onSpawnGhost, ghostDisabledReason, hasGhost,
 }: Props) {
   const def = CAPSULES[node.kind];
 
@@ -84,6 +91,22 @@ export function OrbChip({
         <span className="orb-chip-title">{def.title}</span>
       </div>
       <div className="orb-chip-summary" title={summary}>{summary}</div>
+      {onSpawnGhost ? (
+        <button
+          type="button"
+          className="orb-chip-ghost-btn"
+          disabled={!!ghostDisabledReason || hasGhost}
+          title={ghostDisabledReason
+            ? ghostDisabledReason
+            : hasGhost
+              ? 'A 3D controller already exists for this node'
+              : 'Control this node in 3D (curated field, not a trained model)'}
+          onClick={(e) => { e.stopPropagation(); onSpawnGhost(); }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {hasGhost ? 'Controlling in 3D' : 'Control in 3D'}
+        </button>
+      ) : null}
       {def.inputs.length > 0 || def.outputs.length > 0 ? (
         <div className="orb-chip-ports">
           <div className="orb-chip-ports-in" aria-label="Inputs">

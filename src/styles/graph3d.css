@@ -164,3 +164,165 @@
   background: rgba(255, 107, 107, 0.3);
   cursor: not-allowed;
 }
+
+/* "Control in 3D" button on the orb chip — spawns a Render-Space ghost. */
+.orb-chip-ghost-btn {
+  margin-top: 2px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-cyan);
+  background: color-mix(in srgb, var(--ld-cyan) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ld-cyan) 45%, transparent);
+  border-radius: var(--rad-1);
+  cursor: pointer;
+}
+.orb-chip-ghost-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ld-cyan) 20%, transparent);
+}
+.orb-chip-ghost-btn:disabled {
+  color: var(--ld-text-faint);
+  border-color: var(--ld-border);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+/* ===== Render-Space Ghost Controller (v0.16.0) =============================
+   A ghost is a translucent WebGL orb (built in Graph3DView) with faint labeled
+   axis guides; this DOM chip rides a CSS3DObject at the ghost's center and
+   carries the live values, field axes, intensity slider, and toolbar. */
+.graph3d-ghost-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.graph3d-css3d .ghost-chip { pointer-events: auto; }
+.ghost-chip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 46px)); /* float above the ghost orb */
+  display: grid;
+  gap: 5px;
+  width: 194px;
+  padding: 8px 10px 9px;
+  background: rgba(10, 22, 40, 0.94);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--ld-cyan)) 55%, var(--ld-border));
+  border-radius: var(--rad-2);
+  box-shadow: var(--shadow-1), 0 0 18px -8px color-mix(in srgb, var(--accent, var(--ld-cyan)) 80%, transparent);
+  user-select: none;
+}
+.ghost-chip:focus-visible { box-shadow: var(--focus-ring), var(--shadow-1); outline: none; }
+.ghost-chip.pinned { border-style: dashed; }
+.ghost-chip.recording { border-color: var(--ld-danger); box-shadow: 0 0 18px -6px var(--ld-danger); }
+.ghost-chip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ld-text);
+}
+.ghost-chip-rec {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--ld-danger);
+  animation: ghost-rec-blink 1s steps(2, jump-none) infinite;
+}
+@keyframes ghost-rec-blink { 50% { opacity: 0.25; } }
+.ghost-chip-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--ld-text);
+}
+.ghost-chip-value { white-space: nowrap; }
+.ghost-chip-value em {
+  font-style: normal;
+  color: var(--ld-text-faint);
+  margin-right: 3px;
+}
+.ghost-chip-empty { font-size: 11px; color: var(--ld-text-faint); }
+.ghost-chip-axes {
+  display: grid;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--ld-text-dim);
+}
+.ghost-chip-axis::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-radius: 1px;
+}
+.ghost-chip-axis.axis-x::before { background: #34d6f4; }
+.ghost-chip-axis.axis-y::before { background: #7c3aed; }
+.ghost-chip-axis.axis-z::before { background: #ff8a3d; }
+.ghost-chip-intensity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--ld-text-dim);
+}
+.ghost-chip-intensity input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent, var(--ld-cyan));
+}
+.ghost-chip-intensity-val {
+  min-width: 30px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ld-text);
+}
+.ghost-chip-toolbar {
+  display: flex;
+  gap: 4px;
+}
+.ghost-chip-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.ghost-chip-btn[aria-pressed='true'] {
+  color: var(--ld-cyan);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ld-cyan) 55%, transparent);
+}
+.ghost-chip-btn.rec-on { color: var(--ld-danger); }
+.ghost-chip-nameform { display: flex; gap: 4px; }
+.ghost-chip-nameinput {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: var(--ld-text);
+  background: var(--ld-bg);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-1);
+}
+
+/* One-line honesty note, bottom-left of the 3D stage. */
+.graph3d-ghost-note {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  z-index: 6;
+  max-width: 340px;
+  padding: 5px 9px;
+  font-size: 11px;
+  color: var(--ld-text-dim);
+  background: color-mix(in srgb, var(--ld-surface) 82%, transparent);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-2);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}

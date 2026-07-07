@@ -4,6 +4,7 @@ import type { BackendSettings } from '../turboForge/backends/backendSettings';
 import type { GalleryItem } from './store';
 import type { PromptToolsState } from './promptTools';
 import type { MotionState } from '../core/motion/types';
+import type { FieldState } from './field';
 
 const KEY = 'lumendeck.v1';
 
@@ -32,6 +33,13 @@ export interface PersistedState {
    * `activeClipId` live here; the ephemeral transport playhead is NEVER persisted.
    */
   motion?: MotionState;
+  /**
+   * Render-Space Ghost Controller slice: ghosts + anchors. Optional so state saved
+   * before this feature still loads — a missing slice hydrates to an empty one
+   * (see hydrateField). The transient per-ghost `recording` flag is never resumed
+   * across a reload (it is reset on hydrate).
+   */
+  field?: FieldState;
 }
 
 /**
@@ -48,6 +56,8 @@ export function persistedProjection(state: {
   appSettings: AppSettings;
   promptTools: PromptToolsState;
   motion: MotionState;
+  /** Optional so callers assembled before this slice existed still typecheck. */
+  field?: FieldState;
 }): PersistedState {
   return {
     workflow: state.workflow,
@@ -58,6 +68,15 @@ export function persistedProjection(state: {
     promptTools: state.promptTools,
     // Persist authored clips only; the ephemeral transport playhead is dropped.
     motion: state.motion,
+    // Persist ghosts + anchors, but STRIP the transient per-ghost `recording`
+    // flag so toggling Record on/off never churns persistence (and a reload never
+    // resumes a mid-recording session — hydrateField also resets it defensively).
+    field: state.field
+      ? {
+          ghosts: state.field.ghosts.map(({ recording: _recording, ...g }) => ({ ...g, recording: false })),
+          anchors: state.field.anchors,
+        }
+      : { ghosts: [], anchors: [] },
   };
 }
 
