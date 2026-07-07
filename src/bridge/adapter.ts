@@ -75,6 +75,14 @@ export function normalizeProgress(update: RenderProgressUpdate): RenderProgress 
   return typeof update === 'number' ? { progress: update } : update;
 }
 
+/** Options for a motion-clip render: encode target for the assembled sequence. */
+export interface RenderMotionOptions {
+  fps: number;
+  format: 'mp4' | 'gif';
+  /** stable id for progress polling; adapters mint one when omitted. */
+  jobId?: string;
+}
+
 /**
  * Boundary between LumenDeck and any generation backend. Implementations:
  * MockAdapter (in-browser procedural), HttpAdapter (local FastAPI bridge),
@@ -85,6 +93,13 @@ export interface BackendAdapter {
   label: string;
   ping(): Promise<boolean>;
   generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult>;
+  /**
+   * Render a motion clip: `jobs` is one per-frame RenderJob (from
+   * buildMotionRenderJobs), rendered in sequence and assembled into a video.
+   * Returns a `RenderResult` with `mediaType:'video'`. On a diffusers-unavailable
+   * backend it returns procedural frames with `fallback:true` (never silent).
+   */
+  renderMotion(jobs: RenderJob[], opts: RenderMotionOptions, onProgress?: RenderProgressCallback): Promise<RenderResult>;
 }
 
 export function buildRenderJob(wf: Workflow, wildcardSets: WildcardSet[] = []): RenderJob {

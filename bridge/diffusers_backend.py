@@ -470,26 +470,15 @@ def do_preprocess(job):
     return {"map_base64": base64.b64encode(buf.getvalue()).decode("ascii")}
 
 
-def do_generate(job, state):
-    """Render one image, reusing state['pipe'] when the model hasn't changed.
+def _render_one_image(job, state, report):
+    """Render one PIL image from `job`, reusing state['pipe'] when the model matches.
 
-    `state` persists across calls in serve mode, so the (multi-GB) model loads once
-    and only reloads when you switch checkpoints. In one-shot mode it's a fresh dict.
+    Extracted from do_generate so the render_sequence op (motion render) can drive
+    the SAME text2img/img2img/inpaint/ControlNet/hires code per frame with the model
+    resident across frames. Returns (image, seed, dropped). Does NOT encode or write
+    the terminal 'done' progress — the caller owns that so do_generate's byte-for-byte
+    output and single-image progress protocol are unchanged.
     """
-    progress_path = job.get("progressPath")
-
-    def report(data):
-        if not progress_path:
-            return
-        try:
-            with open(progress_path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-        except OSError:
-            pass
-
-    if str(job.get("output", "image")) == "video":
-        return _animate(job, state, report)
-
     import torch
     model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}
     key = _ref_key(model_ref)
@@ -676,12 +665,167 @@ def do_generate(job, state):
         ).images[0]
 
     report({"phase": "done", "step": steps, "steps": steps})
+    return image, seed, dropped
+
+
+def _job_reporter(job):
+    """Build a progress reporter that writes to job['progressPath'] (or a no-op)."""
+    progress_path = job.get("progressPath")
+
+    def report(data):
+        if not progress_path:
+            return
+        try:
+            with open(progress_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError:
+            pass
+
+    return report
+
+
+def do_generate(job, state):
+    """Render one image, reusing state['pipe'] when the model hasn't changed.
+
+    `state` persists across calls in serve mode, so the (multi-GB) model loads once
+    and only reloads when you switch checkpoints. In one-shot mode it's a fresh dict.
+    """
+    report = _job_reporter(job)
+
+    if str(job.get("output", "image")) == "video":
+        return _animate(job, state, report)
+
+    image, seed, dropped = _render_one_image(job, state, report)
+
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     result = {"image_base64": base64.b64encode(buf.getvalue()).decode("ascii"), "seed": seed}
     if dropped:
         result["droppedControls"] = dropped
     return result
+
+
+def _encode_sequence(frames, fps, fmt, loop=True):
+    """Encode a list of PIL RGB frames into a base64 video.
+
+    Kept behaviorally identical to the module-level diffusers_backend._encode_sequence
+    (which is the unit-tested copy); this in-worker copy is what actually runs.
+    format 'mp4' (default): cv2.VideoWriter with the mp4v fourcc; frames are RGB PIL
+    converted to BGR numpy arrays. If cv2 import OR the writer fails, fall back to GIF.
+    format 'gif' (or the mp4 fallback): the proven AnimateDiff Pillow save_all path.
+    Returns {video_base64, mediaType, mimeType, extension}. Never silent — the caller
+    surfaces which path ran.
+    """
+    fmt = str(fmt or "mp4").lower()
+    if not frames:
+        raise RuntimeError("cannot encode a video with zero frames")
+    fps = max(1, min(30, int(fps or 8)))
+
+    # All frames must share one canvas. A motion clip can animate a size-affecting
+    # param (canvas width/height, hires scale) -> frames of differing dimensions.
+    # cv2.VideoWriter silently DROPS mismatched frames and GIF assembly corrupts,
+    # so conform every frame to the first frame's size: a valid uniform video, never
+    # a silent truncation (spec: no silent placeholders).
+    base_size = frames[0].size
+    frames = [f if f.size == base_size else f.resize(base_size) for f in frames]
+
+    if fmt == "mp4":
+        try:
+            import tempfile as _tempfile
+
+            import cv2
+            import numpy as np
+
+            width, height = frames[0].size
+            tmp = _tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(tmp_path, fourcc, float(fps), (width, height))
+                if not writer.isOpened():
+                    raise RuntimeError("cv2.VideoWriter failed to open (mp4v unavailable)")
+                for frame in frames:
+                    rgb = np.asarray(frame.convert("RGB"))
+                    bgr = rgb[:, :, ::-1]
+                    writer.write(np.ascontiguousarray(bgr))
+                writer.release()
+                with open(tmp_path, "rb") as fh:
+                    data = fh.read()
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            if not data:
+                raise RuntimeError("cv2 produced an empty mp4")
+            return {
+                "video_base64": base64.b64encode(data).decode("ascii"),
+                "mediaType": "video",
+                "mimeType": "video/mp4",
+                "extension": "mp4",
+            }
+        except Exception as exc:
+            print(f"[render_sequence] mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+
+    # GIF path (explicit request, or mp4 fallback): AnimateDiff's proven save_all loop.
+    buf = io.BytesIO()
+    frames[0].save(
+        buf, format="GIF", save_all=True, append_images=frames[1:],
+        duration=int(1000 / fps), loop=0 if loop else 1, disposal=2,
+    )
+    return {
+        "video_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "mediaType": "video",
+        "mimeType": "image/gif",
+        "extension": "gif",
+    }
+
+
+def do_render_sequence(payload, state):
+    """Render a motion clip: loop each job through the resident single-image pipe.
+
+    The model/pipe stays loaded across frames (the whole point of the persistent
+    worker) — only the per-frame job params vary. Collects PIL frames, writing
+    {phase:'frame', step:i, steps:N} to the shared progress file after each, then
+    encodes an mp4 (cv2) or gif (Pillow) and returns the video result.
+    """
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        raise RuntimeError("render_sequence needs a non-empty 'jobs' list")
+    total = max(1, min(120, len(jobs)))
+    jobs = jobs[:total]
+    fps = int(payload.get("fps", 8))
+    fmt = str(payload.get("format", "mp4")).lower()
+    progress_path = payload.get("progressPath")
+
+    def report(data):
+        if not progress_path:
+            return
+        try:
+            with open(progress_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError:
+            pass
+
+    frames = []
+    seed = None
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise RuntimeError(f"render_sequence job {index} is not an object")
+        # Per-frame progress writes to the shared clip file, not each job's own path.
+        job = dict(job)
+        job.pop("progressPath", None)
+        image, frame_seed, _dropped = _render_one_image(job, state, lambda _data: None)
+        frames.append(image.convert("RGB"))
+        if seed is None:
+            seed = frame_seed
+        report({"phase": "frame", "step": index + 1, "steps": total})
+
+    loop = bool(jobs[0].get("loop", True))
+    encoded = _encode_sequence(frames, fps, fmt, loop=loop)
+    report({"phase": "done"})
+    return {**encoded, "seed": seed if seed is not None else 0, "frameCount": len(frames), "fps": max(1, min(30, fps))}
 
 
 def serve():
@@ -703,6 +847,8 @@ def serve():
             payload = req.get("payload") or {}
             if command == "generate":
                 out = do_generate(payload, state)
+            elif command == "render_sequence":
+                out = do_render_sequence(payload, state)
             elif command == "preprocess":
                 out = do_preprocess(payload)
             elif command == "ping":
@@ -735,6 +881,10 @@ def main():
         out = do_generate(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
         print(json.dumps(out))
         return
+    if command == "render_sequence":
+        out = do_render_sequence(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
+        print(json.dumps(out))
+        return
     if command == "preprocess":
         print(json.dumps(do_preprocess(json.load(sys.stdin))))
         return
@@ -748,6 +898,84 @@ if __name__ == "__main__":
 
 def model_id() -> str:
     return _MODEL_ID
+
+
+def _encode_sequence(frames, fps, fmt="mp4", loop=True):
+    """Encode a list of PIL RGB frames into a base64 video (module-level, testable).
+
+    Mirrors the worker's in-process encoder so the format-selection contract can be
+    unit-tested by mocking cv2 (same duality as detect_single_file_family in the
+    worker vs estimate_family here). format 'mp4' (default): cv2.VideoWriter with the
+    mp4v fourcc; RGB PIL frames become BGR numpy arrays. If cv2 import OR the writer
+    fails, fall back to GIF. format 'gif' (or the mp4 fallback): Pillow save_all.
+    Returns {video_base64, mediaType, mimeType, extension}. Never silent — the mp4
+    fallback prints why it dropped to gif.
+    """
+    import base64 as _base64
+    import io as _io
+    import tempfile as _tempfile
+
+    fmt = str(fmt or "mp4").lower()
+    if not frames:
+        raise RuntimeError("cannot encode a video with zero frames")
+    fps = max(1, min(30, int(fps or 8)))
+
+    # All frames must share one canvas. A motion clip can animate a size-affecting
+    # param (canvas width/height, hires scale) -> frames of differing dimensions.
+    # cv2.VideoWriter silently DROPS mismatched frames and GIF assembly corrupts,
+    # so conform every frame to the first frame's size: a valid uniform video, never
+    # a silent truncation (spec: no silent placeholders).
+    base_size = frames[0].size
+    frames = [f if f.size == base_size else f.resize(base_size) for f in frames]
+
+    if fmt == "mp4":
+        try:
+            import cv2
+            import numpy as np
+
+            width, height = frames[0].size
+            tmp = _tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(tmp_path, fourcc, float(fps), (width, height))
+                if not writer.isOpened():
+                    raise RuntimeError("cv2.VideoWriter failed to open (mp4v unavailable)")
+                for frame in frames:
+                    rgb = np.asarray(frame.convert("RGB"))
+                    bgr = rgb[:, :, ::-1]
+                    writer.write(np.ascontiguousarray(bgr))
+                writer.release()
+                with open(tmp_path, "rb") as fh:
+                    data = fh.read()
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            if not data:
+                raise RuntimeError("cv2 produced an empty mp4")
+            return {
+                "video_base64": _base64.b64encode(data).decode("ascii"),
+                "mediaType": "video",
+                "mimeType": "video/mp4",
+                "extension": "mp4",
+            }
+        except Exception as exc:
+            print(f"[render_sequence] mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+
+    buf = _io.BytesIO()
+    frames[0].save(
+        buf, format="GIF", save_all=True, append_images=frames[1:],
+        duration=int(1000 / fps), loop=0 if loop else 1, disposal=2,
+    )
+    return {
+        "video_base64": _base64.b64encode(buf.getvalue()).decode("ascii"),
+        "mediaType": "video",
+        "mimeType": "image/gif",
+        "extension": "gif",
+    }
 
 
 def estimate_family(model_ref: dict[str, Any] | None) -> str:
@@ -1342,6 +1570,44 @@ def generate(job: dict) -> dict:
         if "worker exited unexpectedly" not in str(exc).lower():
             raise
         out = _worker("generate", job, timeout=1800)
+    if isinstance(out, dict) and out.get("error"):
+        raise RuntimeError(out["error"])
+    return out
+
+
+def render_motion(payload: dict) -> dict:
+    """Render a keyframed motion clip into a video via the persistent worker.
+
+    payload: {"jobs": [RenderJob...], "fps": int, "format": "mp4"|"gif",
+              "progressPath"?: str}. Each job is the standard image RenderJob shape
+      (the same one generate() renders); we inject the ControlNet map into each so
+      the worker never duplicates that table. The model stays resident across all
+      frames — one load, N renders. Raises loudly on bad input or a missing runtime.
+    """
+    status = model_status()
+    if not status.get("dependenciesReady"):
+        raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        raise RuntimeError("render_motion needs a non-empty 'jobs' list")
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise RuntimeError(f"render_motion job {index} is not an object")
+        # The worker resolves ControlNet repos from the job so it never duplicates the map.
+        job["controlnetMap"] = CONTROLNET_MODELS
+    worker_payload = {
+        "jobs": jobs,
+        "fps": int(payload.get("fps", 8)),
+        "format": str(payload.get("format", "mp4")),
+    }
+    if payload.get("progressPath"):
+        worker_payload["progressPath"] = payload["progressPath"]
+    try:
+        out = _persistent_worker.request("render_sequence", worker_payload, timeout=3600)
+    except RuntimeError as exc:
+        if "worker exited unexpectedly" not in str(exc).lower():
+            raise
+        out = _worker("render_sequence", worker_payload, timeout=3600)
     if isinstance(out, dict) and out.get("error"):
         raise RuntimeError(out["error"])
     return out

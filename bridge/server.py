@@ -25,7 +25,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from renderer import RenderRequest, render_gif_base64, render_png_base64
+from renderer import RenderRequest, render_gif_base64, render_png_base64, render_sequence_gif_base64
 from scanner import (
     configured_model_dir,
     discover_model_dir,
@@ -43,7 +43,7 @@ except Exception:
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/diffusers", "/progress", "/civitai", "/controlnet")
+API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/render-motion", "/diffusers", "/progress", "/civitai", "/controlnet")
 
 
 def _civitai_dest(file_name: str, asset_type: str) -> str:
@@ -359,6 +359,44 @@ def _procedural(job: dict) -> dict:
     return {"image_base64": render_png_base64(req), "seed": seed}
 
 
+def _procedural_motion(jobs: list, fps: int, loop: bool = True) -> dict:
+    """Render a motion clip procedurally: one still per job, stitched into a GIF.
+
+    The loud fallback for /render-motion when real diffusion isn't available or a
+    render raises. Each job is a distinct keyframe (e.g. a cfg sweep), so the frames
+    visibly differ. Returns the same video shape as the real render.
+    """
+    reqs = []
+    seed = 0
+    for index, job in enumerate(jobs):
+        job_seed = int(job.get("seed", 0))
+        if job_seed < 0:
+            job_seed = abs(hash(job.get("prompt", ""))) % 0xFFFFFFFF
+        if index == 0:
+            seed = job_seed
+        reqs.append(
+            RenderRequest(
+                prompt=str(job.get("prompt", "")),
+                seed=job_seed,
+                width=int(job.get("width", 512)),
+                height=int(job.get("height", 512)),
+                steps=int(job.get("steps", 28)),
+                cfg=float(job.get("cfg", 7.0)),
+                camera_motion=str(job.get("cameraMotion", "orbit")),
+                loop=loop,
+            )
+        )
+    return {
+        "video_base64": render_sequence_gif_base64(reqs, fps),
+        "seed": seed,
+        "mediaType": "video",
+        "mimeType": "image/gif",
+        "extension": "gif",
+        "frameCount": len(reqs),
+        "fps": max(1, min(30, fps)),
+    }
+
+
 def build_response(method: str, path: str, body: bytes):
     """Return (status_code, headers_dict, body_bytes) for a request. Pure & testable."""
     headers = dict(CORS)
@@ -568,6 +606,61 @@ def build_response(method: str, path: str, body: bytes):
         if fallback_reason:
             result["fallback"] = True
             result["fallbackReason"] = fallback_reason
+        if track:
+            _write_progress(job_id, {"phase": "done"})
+        return 200, headers, json.dumps(result).encode()
+
+    if method == "POST" and path == "/render-motion":
+        headers["Content-Type"] = "application/json"
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        jobs = payload.get("jobs")
+        if not isinstance(jobs, list) or not jobs:
+            return 400, headers, json.dumps({"error": "jobs must be a non-empty list"}).encode()
+        if not all(isinstance(job, dict) for job in jobs):
+            return 400, headers, json.dumps({"error": "every job must be an object"}).encode()
+        # Clamp frame count server-side (spec: 1..120), independent of the UI clamp.
+        jobs = jobs[:120]
+        fps = int(payload.get("fps", 8))
+        fmt = str(payload.get("format", "mp4"))
+        loop = bool(jobs[0].get("loop", True))
+        mode = str(payload.get("renderer", "auto"))
+        job_id = str(payload.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        progress_path = None
+        if track:
+            _prune_progress_files()
+            progress_path = _progress_path(job_id)
+            _write_progress(job_id, {"phase": "loading"})
+        fallback_reason = None
+        # Real per-frame diffusion (model resident across frames) when the bridge can;
+        # otherwise a procedural GIF, never a silent placeholder.
+        if mode in ("diffusers", "auto") and _diffusers_available():
+            try:
+                shelf = _shelf_with_real()
+                model_root = discover_model_dir()
+                for job in jobs:
+                    _resolve_render_targets(job, shelf, model_root)
+                render_payload = {"jobs": jobs, "fps": fps, "format": fmt}
+                if progress_path:
+                    render_payload["progressPath"] = progress_path
+                result = diffusers_backend.render_motion(render_payload)
+                if track:
+                    _write_progress(job_id, {"phase": "done"})
+                return 200, headers, json.dumps(result).encode()
+            except Exception as exc:
+                import traceback
+                print(f"[render-motion] render failed, falling back to procedural GIF: {exc}", flush=True)
+                traceback.print_exc()
+                fallback_reason = str(exc)
+        if mode == "auto" and not _diffusers_available():
+            fallback_reason = "Real diffusion isn't ready on the bridge (torch/model not installed)."
+        result = _procedural_motion(jobs, fps, loop=loop)
+        # Never a silent placeholder: tell the UI a real render was expected but fell back.
+        result["fallback"] = True
+        result["fallbackReason"] = fallback_reason or "Rendered a procedural motion clip."
         if track:
             _write_progress(job_id, {"phase": "done"})
         return 200, headers, json.dumps(result).encode()

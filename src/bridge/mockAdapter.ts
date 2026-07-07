@@ -1,4 +1,4 @@
-import type { BackendAdapter, RenderJob, RenderProgressCallback, RenderResult } from './adapter';
+import type { BackendAdapter, RenderJob, RenderMotionOptions, RenderProgressCallback, RenderResult } from './adapter';
 import { resolveSeed } from './adapter';
 import { buildStreamingPreview } from './preview';
 
@@ -114,5 +114,58 @@ export class MockAdapter implements BackendAdapter {
     }
 
     return { dataUrl: canvas.toDataURL('image/png'), seed, mediaType: 'image', mimeType: 'image/png', extension: 'png' };
+  }
+
+  /**
+   * Procedural stand-in for a motion-clip render. Renders each per-frame job with
+   * the same offline procedural path (so the cfg/steps sweep visibly changes the
+   * frames) and steps progress frame-by-frame like the real per-frame plumbing.
+   * Encoding a real mp4/gif client-side is impractical, so the returned "video"
+   * is the LAST rendered frame flagged as a clearly-labelled placeholder
+   * (fallback:true) — never a silent pretend-render, and it never throws.
+   */
+  async renderMotion(
+    jobs: RenderJob[],
+    opts: RenderMotionOptions,
+    onProgress?: RenderProgressCallback,
+  ): Promise<RenderResult> {
+    const frames = jobs.length;
+    if (frames === 0) {
+      // Empty clip: yield a 1px transparent placeholder rather than throwing.
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>`;
+      onProgress?.({ progress: 1, phase: 'done' });
+      return {
+        dataUrl: svgDataUrl(svg),
+        seed: 0,
+        mediaType: 'video',
+        mimeType: 'image/svg+xml',
+        extension: 'svg',
+        fallback: true,
+        fallbackReason: 'Mock backend: motion clip had no frames to render (placeholder only).',
+      };
+    }
+
+    let last: RenderResult | null = null;
+    for (let i = 0; i < frames; i++) {
+      // Render each frame's procedural image; suppress its own progress so we can
+      // report a single clip-level frame-by-frame progress instead.
+      last = await this.generate(jobs[i]);
+      onProgress?.({
+        progress: (i + 1) / frames,
+        phase: 'frame',
+        detail: `Frame ${i + 1}/${frames}`,
+        previewDataUrl: last.dataUrl,
+      });
+    }
+    onProgress?.({ progress: 1, phase: 'done', previewDataUrl: last!.dataUrl });
+    return {
+      dataUrl: last!.dataUrl,
+      seed: last!.seed,
+      mediaType: 'video',
+      mimeType: last!.mimeType,
+      extension: last!.extension,
+      fallback: true,
+      fallbackReason: `Mock backend: procedural preview only (${frames} ${opts.format.toUpperCase()} frames not encoded). Use the local Diffusers bridge to render a real motion clip.`,
+    };
   }
 }
