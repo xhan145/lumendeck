@@ -1,6 +1,6 @@
 [package]
 name = "lumendeck"
-version = "0.19.0"
+version = "0.19.1"
 description = "LumenDeck — local-first, node-native generative image studio"
 authors = ["LumenDeck"]
 edition = "2021"
@@ -14,6 +14,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

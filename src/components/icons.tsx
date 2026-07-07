@@ -153,6 +153,19 @@ export const Icon = {
       </>,
       p,
     ),
+  heart: (p?: IconProps) =>
+    svg(
+      <path d="M12 20s-7-4.35-9.3-8.5C1.2 8.9 2.6 6 5.6 6c1.9 0 3.2 1.1 4.4 2.6C11.2 7.1 12.5 6 14.4 6c3 0 4.4 2.9 2.9 5.5C19 15.65 12 20 12 20z" />,
+      p,
+    ),
+  sparkle: (p?: IconProps) =>
+    svg(
+      <>
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+        <path d="M18.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9z" />
+      </>,
+      p,
+    ),
 };
 
 /** Glowing LumenDeck brand mark — two overlapping "deck" cards with a lit lens. */
