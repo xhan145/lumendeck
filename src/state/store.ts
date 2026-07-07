@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { buildRenderJob, normalizeProgress, type BackendAdapter } from '../bridge/adapter';
+import { buildRenderJob, normalizeProgress, type BackendAdapter, type RenderProgressCallback } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -61,6 +61,7 @@ import { record as recordHistoryPure, toggleFavorite as toggleFavoritePure, type
 import { planVariations, type VariationAxis } from '../core/prompt/variations';
 import { defaultTransport, hydrateMotion, makeClip } from './motion';
 import { sampleClip, trackKey } from '../core/motion/interpolate';
+import { buildMotionRenderJobs } from '../core/motion/renderPlan';
 import { isBindable } from '../core/motion/binding';
 import type { Keyframe, MotionClip, MotionState, MotionTrack, OrbMotion, TransportState } from '../core/motion/types';
 
@@ -202,6 +203,17 @@ interface StudioState {
   setOrbMotion(nodeId: string, orbMotion: OrbMotion): void;
   /** Sample the active clip at `atT` and commit each track's value into its capsule param (undo-safe, one commit). */
   bakeClipToWorkflow(atT: number): void;
+  /**
+   * Render the active motion clip: build per-frame jobs, run the active backend's
+   * renderMotion, and land the resulting video in the Gallery with a motion
+   * manifest. Progress is reported through `onProgress`. Returns the fallback
+   * reason string when the backend produced a placeholder (else null); throws on
+   * a hard failure (surfaced by the caller). Never lands a silent placeholder.
+   */
+  renderActiveMotionClip(
+    opts: { frames: number; fps: number; format: 'mp4' | 'gif' },
+    onProgress?: RenderProgressCallback,
+  ): Promise<{ fallbackReason: string | null }>;
 
   setAdapter(id: RenderBackendId): void;
   updateBackendSettings(settings: Partial<BackendSettings>): void;
@@ -634,6 +646,74 @@ export const useStudio = create<StudioState>((set, get) => {
       }
       commit(next);
       set({ controlStatus: `Baked "${clip.name}" @ ${atT.toFixed(2)}s into the workflow.` });
+    },
+
+    renderActiveMotionClip: async (opts, onProgress) => {
+      const clip = activeClip();
+      if (!clip) throw new Error('No active motion clip to render.');
+      const frames = Math.max(1, Math.floor(opts.frames));
+      const { workflow, shelf, backendSettings } = get();
+      // Build one RenderJob per animated frame from the CURRENT base workflow.
+      const { jobs, frameTimes } = buildMotionRenderJobs(
+        workflow,
+        clip,
+        { frames },
+        get().promptTools.wildcardSets,
+      );
+      const adapter = activeAdapter(backendSettings);
+      const result = await adapter.renderMotion(
+        jobs,
+        { fps: opts.fps, format: opts.format },
+        onProgress,
+      );
+      // Reproducible motion manifest: base workflow + the animated clip fields.
+      const durationSec = frameTimes.length > 0 ? frameTimes[frameTimes.length - 1] : clip.duration;
+      const manifest = buildManifest(
+        workflow,
+        shelf,
+        APP_VERSION,
+        new Date(),
+        get().promptTools.wildcardSets,
+        { clipId: clip.id, clipName: clip.name, frames, fps: opts.fps, durationSec },
+      );
+      manifest.seed = typeof result.seed === 'number' ? result.seed : Number(result.seed) || 0;
+      // buildManifest reads media from the base (image-mode) workflow, so it would
+      // report this N-frame video as a still image. Correct it to the real video
+      // metadata so the Gallery caption shows "N frames @ M fps".
+      manifest.media = { type: 'video', format: result.extension, frameCount: frames, fps: opts.fps };
+      const fallbackReason = result.fallback ? (result.fallbackReason ?? 'Backend returned a placeholder render.') : null;
+      manifest.render = {
+        selectedBackend: backendSettings.selectedBackend,
+        actualBackend: result.fallback ? 'procedural' : backendSettings.selectedBackend,
+        mode: result.fallback ? 'fallback' : backendSettings.selectedBackend === 'mock' ? 'mock' : 'real',
+        fallback: Boolean(result.fallback),
+        fallbackReason: fallbackReason ?? undefined,
+        bridgeRenderer: backendSettings.bridgeRenderer,
+      };
+      const item: GalleryItem = {
+        id: uid('render'),
+        dataUrl: result.dataUrl,
+        mediaType: result.mediaType,
+        mimeType: result.mimeType,
+        extension: result.extension,
+        createdAt: manifest.createdAt,
+        manifest,
+        selectedBackend: backendSettings.selectedBackend,
+        actualBackend: result.fallback ? 'procedural' : backendSettings.selectedBackend,
+        renderMode: result.fallback ? 'fallback' : backendSettings.selectedBackend === 'mock' ? 'mock' : 'real',
+        fallback: Boolean(result.fallback),
+        fallbackReason: fallbackReason ?? undefined,
+        collectionId: null,
+        tags: [`Motion: ${clip.name}`],
+      };
+      const nextGallery = await addRenderOp(galleryStore, get().gallery, item);
+      set({
+        gallery: nextGallery,
+        controlStatus: fallbackReason
+          ? `Rendered "${clip.name}" (placeholder): ${fallbackReason}`
+          : `Rendered motion clip "${clip.name}" (${frames} frames) into the Gallery.`,
+      });
+      return { fallbackReason };
     },
 
     setAdapter: (adapterId) => {

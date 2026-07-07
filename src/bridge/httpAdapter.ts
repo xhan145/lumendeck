@@ -1,5 +1,5 @@
 import type { ModelAsset } from '../core/shelf';
-import type { BackendAdapter, RenderJob, RenderProgressCallback, RenderResult } from './adapter';
+import type { BackendAdapter, RenderJob, RenderMotionOptions, RenderProgressCallback, RenderResult } from './adapter';
 import { buildStreamingPreview } from './preview';
 
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8787';
@@ -282,6 +282,90 @@ export class HttpAdapter implements BackendAdapter {
         fallback: data.fallback,
         fallbackReason: data.fallbackReason,
         droppedControls: data.droppedControls,
+      };
+    } finally {
+      polling = false;
+    }
+  }
+
+  /**
+   * Render a motion clip in ONE request: POST /render-motion with the full
+   * per-frame job list; the persistent worker loops them (model stays resident),
+   * writing {phase:'frame', step, steps} to the per-job progress file. We poll
+   * /progress/<jobId> like the /generate path and map the assembled video result.
+   * A diffusers-unavailable backend returns procedural frames with fallback:true
+   * (surfaced, never silent). Errors surface loudly like /generate.
+   */
+  async renderMotion(
+    jobs: RenderJob[],
+    opts: RenderMotionOptions,
+    onProgress?: RenderProgressCallback,
+  ): Promise<RenderResult> {
+    const jobId = opts.jobId
+      ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`);
+    onProgress?.({ progress: 0.02, phase: 'queued' });
+
+    // Live per-frame progress: poll the bridge's per-job endpoint while the POST
+    // is in flight. Best-effort — poll errors are ignored, never fail the render.
+    let polling = Boolean(onProgress);
+    const pollLoop = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 600));
+        if (!polling) break;
+        try {
+          const res = await fetch(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1200) });
+          if (!res.ok) continue;
+          const p = (await res.json()) as { phase?: string; step?: number; steps?: number };
+          if (p.phase === 'loading') {
+            onProgress?.({ progress: 0.05, phase: 'loading' });
+          } else if (p.phase === 'frame' && p.steps && p.steps > 0) {
+            const progress = Math.min(0.97, 0.05 + 0.92 * ((p.step ?? 0) / p.steps));
+            onProgress?.({ progress, phase: 'frame', detail: `Frame ${p.step ?? 0}/${p.steps}` });
+          }
+        } catch {
+          // ignore — progress is advisory
+        }
+      }
+    };
+    if (polling) void pollLoop();
+
+    try {
+      const res = await fetch(`${this.base}/render-motion`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs, fps: opts.fps, format: opts.format, jobId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Bridge /render-motion failed (${res.status}): ${text.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as {
+        video_base64?: string;
+        mediaType?: 'image' | 'video';
+        mimeType?: string;
+        extension?: string;
+        seed: number | string;
+        frameCount?: number;
+        fps?: number;
+        fallback?: boolean;
+        fallbackReason?: string;
+      };
+      if (!data.video_base64) throw new Error('Bridge /render-motion response did not include video data.');
+      const mediaType = data.mediaType ?? 'video';
+      const mimeType = data.mimeType ?? (opts.format === 'gif' ? 'image/gif' : 'video/mp4');
+      const extension = data.extension ?? (mimeType === 'image/gif' ? 'gif' : 'mp4');
+      const dataUrl = `data:${mimeType};base64,${data.video_base64}`;
+      onProgress?.({ progress: 1, phase: 'done', previewDataUrl: dataUrl });
+      return {
+        dataUrl,
+        mediaType,
+        mimeType,
+        extension,
+        // The sequence seed may be numeric or a string tag from the worker; the
+        // gallery stores it verbatim, so coerce only the numeric case.
+        seed: typeof data.seed === 'number' ? data.seed : Number(data.seed) || 0,
+        fallback: data.fallback,
+        fallbackReason: data.fallbackReason,
       };
     } finally {
       polling = false;

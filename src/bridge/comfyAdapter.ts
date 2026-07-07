@@ -1,4 +1,4 @@
-import type { BackendAdapter, RenderJob, RenderProgressCallback, RenderResult } from './adapter';
+import type { BackendAdapter, RenderJob, RenderMotionOptions, RenderProgressCallback, RenderResult } from './adapter';
 import { resolveSeed } from './adapter';
 import { buildStreamingPreview } from './preview';
 import { BASIC_TXT2IMG_TEMPLATE } from '../turboForge/workflows/comfyWorkflowTemplates';
@@ -137,6 +137,15 @@ export class ComfyAdapter implements BackendAdapter {
         totalRenderMs: backendRequestMs,
       },
     };
+  }
+
+  /**
+   * Motion-clip rendering is not implemented for the ComfyUI backend: LumenDeck's
+   * per-frame sequence render targets the local Diffusers bridge's persistent
+   * worker. Throw loudly rather than pretend (no silent fallback).
+   */
+  async renderMotion(_jobs: RenderJob[], _opts: RenderMotionOptions, _onProgress?: RenderProgressCallback): Promise<RenderResult> {
+    throw new Error('Motion-clip rendering is not supported on the ComfyUI backend. Use the local Diffusers bridge or the Mock backend to render a motion clip.');
   }
 
   private async pollHistory(promptId: string, onProgress?: (progress: number) => void): Promise<ComfyHistoryEntry> {

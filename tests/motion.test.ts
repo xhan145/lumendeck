@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { EASING, sampleTrack, sampleClip, clipValueForOrb, trackKey } from '../src/core/motion/interpolate';
 import { motionOffset } from '../src/core/motion/orbMotion';
 import { isBindable, bindableParams, defaultTrackParam } from '../src/core/motion/binding';
-import { planMotionRender, renderMotionClip } from '../src/core/motion/renderPlan';
+import { planMotionRender } from '../src/core/motion/renderPlan';
 import { buildDemoClip, seedDemoClip, DEMO_CLIP_ID } from '../src/core/motion/demoClip';
 import { hydrateMotion, emptyMotionState, makeClip, defaultTransport } from '../src/state/motion';
 import type { Keyframe, MotionClip, MotionTrack, OrbMotion } from '../src/core/motion/types';
@@ -312,7 +312,8 @@ describe('binding validation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// planMotionRender / renderMotionClip stub
+// planMotionRender (renderMotionClip was replaced by the wired
+// buildMotionRenderJobs + adapter.renderMotion path — see motionRender.test.ts)
 // ---------------------------------------------------------------------------
 describe('planMotionRender', () => {
   const c = clip(
@@ -357,12 +358,6 @@ describe('planMotionRender', () => {
 
   it('is pure/deterministic', () => {
     expect(planMotionRender(c, { frames: 6 })).toEqual(planMotionRender(c, { frames: 6 }));
-  });
-});
-
-describe('renderMotionClip (Phase-2 stub)', () => {
-  it('throws NotImplemented: Phase 2 (never a fake render)', () => {
-    expect(() => renderMotionClip(clip([]))).toThrow(/NotImplemented: Phase 2/);
   });
 });
 

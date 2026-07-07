@@ -278,3 +278,60 @@ def _gif_bytes(req: RenderRequest) -> bytes:
 def render_gif_base64(req: RenderRequest) -> str:
     """Render a deterministic procedural animated GIF and return base64."""
     return base64.b64encode(_gif_bytes(req)).decode("ascii")
+
+
+def _sequence_gif_bytes(reqs: list[RenderRequest], fps: int) -> bytes:
+    """Encode one procedural frame per RenderRequest into a shared-palette GIF.
+
+    This is the motion-render FALLBACK path: each request is a distinct frame from a
+    keyframe sweep (e.g. cfg 4→18→7), so the frames must visibly differ. Each frame's
+    index map is derived from THAT request's (seed, prompt, cfg), which drives the
+    orb density/spread — the same knobs the still renderer uses — so a cfg sweep
+    animates. The palette is taken from the first frame so playback is coherent.
+    """
+    if not reqs:
+        raise ValueError("cannot encode a sequence with zero frames")
+    first = reqs[0]
+    width = max(64, min(512, first.width))
+    height = max(64, min(512, first.height))
+    fps = max(1, min(30, fps))
+    delay = max(2, round(100 / fps))
+    rng = _mulberry32(first.seed ^ _fnv1a(first.prompt))
+    hue_a = rng() * 360
+    hue_b = (hue_a + 120 + rng() * 90) % 360
+
+    out = bytearray()
+    out.extend(b"GIF89a")
+    out.extend(struct.pack("<HH", width, height))
+    out.extend(bytes([0xF7, 0, 0]))
+    out.extend(_video_palette(hue_a, hue_b))
+    if first.loop:
+        out.extend(b"\x21\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00")
+    total = len(reqs)
+    for index, req in enumerate(reqs):
+        # Per-frame hue seeded from that frame's request so a param sweep shifts color.
+        frng = _mulberry32(req.seed ^ _fnv1a(req.prompt))
+        fh_a = frng() * 360
+        fh_b = (fh_a + 120 + frng() * 90) % 360
+        # cfg drives the motion phase so cfg 4→18→7 produces a visibly changing frame.
+        strength = max(0.0, min(2.0, req.cfg / 9.0))
+        frame_req = RenderRequest(
+            prompt=req.prompt, seed=req.seed, width=width, height=height,
+            cfg=req.cfg, motion_strength=strength, camera_motion=req.camera_motion,
+        )
+        indices = _gif_frame_indices(frame_req, width, height, index, total, fh_a, fh_b)
+        out.extend(b"\x21\xF9\x04\x04")
+        out.extend(struct.pack("<H", delay))
+        out.extend(b"\x00\x00")
+        out.extend(b"\x2C")
+        out.extend(struct.pack("<HHHH", 0, 0, width, height))
+        out.append(0)
+        out.append(8)
+        out.extend(_gif_subblocks(_gif_lzw_encode(indices, 8)))
+    out.append(0x3B)
+    return bytes(out)
+
+
+def render_sequence_gif_base64(reqs: list[RenderRequest], fps: int = 8) -> str:
+    """Render one procedural frame per request and return a base64 animated GIF."""
+    return base64.b64encode(_sequence_gif_bytes(reqs, fps)).decode("ascii")

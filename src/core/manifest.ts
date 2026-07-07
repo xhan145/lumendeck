@@ -31,6 +31,26 @@ export interface ExportManifest {
     fallbackReason?: string;
     bridgeRenderer?: string;
   };
+  /**
+   * Present only for a motion-clip render: the animated source clip + sampling
+   * parameters, so the sequence is reproducible from the base workflow (`graph`).
+   */
+  motion?: {
+    clipId: string;
+    clipName: string;
+    frames: number;
+    fps: number;
+    durationSec: number;
+  };
+}
+
+/** The motion descriptor `buildManifest` folds into a motion-render manifest. */
+export interface ManifestMotion {
+  clipId: string;
+  clipName: string;
+  frames: number;
+  fps: number;
+  durationSec: number;
 }
 
 export function buildManifest(
@@ -39,6 +59,7 @@ export function buildManifest(
   appVersion: string,
   now: Date,
   wildcardSets: WildcardSet[] = [],
+  motion?: ManifestMotion,
 ): ExportManifest {
   const prompt = findNode(wf, 'prompt');
   const sampler = findNode(wf, 'sampler');
@@ -114,5 +135,8 @@ export function buildManifest(
     controlNets,
     graphVersion: wf.version,
     graph: wf,
+    // Motion-render manifests also carry the animated clip fields (spec §"Data
+    // flow & manifest"); omitted entirely for ordinary image/video renders.
+    ...(motion ? { motion } : {}),
   };
 }

@@ -16,6 +16,20 @@ const ORB_STYLES: OrbMotion['style'][] = ['still', 'orbit', 'bob', 'pulse', 'dri
 /** Playback rates offered in the transport rate picker. */
 const RATES = [0.25, 0.5, 1, 2, 4];
 
+/** Render-clip frame count bounds (UI clamp; the server clamps 1..120). */
+const RENDER_FRAMES_MIN = 4;
+const RENDER_FRAMES_MAX = 60;
+const RENDER_FRAMES_DEFAULT = 12;
+/** Render-clip fps bounds. */
+const RENDER_FPS_MIN = 6;
+const RENDER_FPS_MAX = 30;
+const RENDER_FPS_DEFAULT = 12;
+
+function clampInt(value: number, lo: number, hi: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.round(value)));
+}
+
 /** Starting orb motion for a node that has none yet (amplitude in world units). */
 const DEFAULT_ORB_MOTION: OrbMotion = { style: 'still', speed: 1.2, amplitude: 48 };
 /** Amplitude slider bounds (world units; the demo orbit uses ~60). */
@@ -61,6 +75,8 @@ export function MotionTimeline() {
   const setClipLoop = useStudio((s) => s.setClipLoop);
   const setOrbMotion = useStudio((s) => s.setOrbMotion);
   const bakeClipToWorkflow = useStudio((s) => s.bakeClipToWorkflow);
+  const renderActiveMotionClip = useStudio((s) => s.renderActiveMotionClip);
+  const adapterId = useStudio((s) => s.adapterId);
 
   const play = useStudio((s) => s.transport.play);
   const pause = useStudio((s) => s.transport.pause);
@@ -171,6 +187,54 @@ export function MotionTimeline() {
     if (!isBindable(pickNode.kind, pickParam)) return;
     addTrack(pickNode.id, pickParam);
     setPickParam('');
+  };
+
+  // ---- render clip -------------------------------------------------------
+  const [renderFrames, setRenderFrames] = useState(RENDER_FRAMES_DEFAULT);
+  const [renderFps, setRenderFps] = useState(RENDER_FPS_DEFAULT);
+  const [renderFormat, setRenderFormat] = useState<'mp4' | 'gif'>('mp4');
+  const [rendering, setRendering] = useState(false);
+  const [renderPct, setRenderPct] = useState(0);
+  const [renderPhase, setRenderPhase] = useState('');
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [renderNotice, setRenderNotice] = useState<string | null>(null);
+
+  const isMockBackend = adapterId === 'mock';
+  const hasTracks = (clip?.tracks.length ?? 0) > 0;
+
+  const doRenderClip = async () => {
+    if (!clip || rendering) return;
+    const frames = clampInt(renderFrames, RENDER_FRAMES_MIN, RENDER_FRAMES_MAX, RENDER_FRAMES_DEFAULT);
+    const fps = clampInt(renderFps, RENDER_FPS_MIN, RENDER_FPS_MAX, RENDER_FPS_DEFAULT);
+    // Normalize any out-of-range typing back into the inputs before rendering.
+    setRenderFrames(frames);
+    setRenderFps(fps);
+    setRendering(true);
+    setRenderPct(0);
+    setRenderPhase('queued');
+    setRenderError(null);
+    setRenderNotice(null);
+    try {
+      const { fallbackReason } = await renderActiveMotionClip(
+        { frames, fps, format: renderFormat },
+        (update) => {
+          const p = typeof update === 'number' ? { progress: update } : update;
+          setRenderPct(Math.round((p.progress ?? 0) * 100));
+          if (p.phase) setRenderPhase(p.detail ?? p.phase);
+        },
+      );
+      setRenderPct(100);
+      setRenderPhase('done');
+      setRenderNotice(
+        fallbackReason
+          ? `Placeholder render added to the Gallery — ${fallbackReason}`
+          : 'Rendered clip added to the Gallery.',
+      );
+    } catch (err) {
+      setRenderError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRendering(false);
+    }
   };
 
   const playing = transport.playing;
@@ -329,6 +393,105 @@ export function MotionTimeline() {
             >
               {Icon.save({ size: 14 })} Bake @ {formatClock(transport.t)}
             </button>
+          </div>
+
+          {/* ---- render clip --------------------------------------------- */}
+          <div className="mt-render" role="group" aria-label="Render clip">
+            <div className="mt-render-head">
+              <span className="mt-render-title">{Icon.play({ size: 14 })} Render clip</span>
+              <p className="field-help mt-render-note">
+                Renders the animated generation values; orb position/scale are view-only.
+              </p>
+            </div>
+            <div className="mt-render-controls">
+              <label className="mt-inline">
+                <span className="mt-inline-label">Frames</span>
+                <input
+                  type="number"
+                  min={RENDER_FRAMES_MIN}
+                  max={RENDER_FRAMES_MAX}
+                  step={1}
+                  value={renderFrames}
+                  disabled={rendering}
+                  aria-label="Number of frames to render"
+                  onChange={(e) => setRenderFrames(Number(e.target.value))}
+                  onBlur={(e) => setRenderFrames(clampInt(Number(e.target.value), RENDER_FRAMES_MIN, RENDER_FRAMES_MAX, RENDER_FRAMES_DEFAULT))}
+                />
+              </label>
+              <label className="mt-inline">
+                <span className="mt-inline-label">FPS</span>
+                <input
+                  type="number"
+                  min={RENDER_FPS_MIN}
+                  max={RENDER_FPS_MAX}
+                  step={1}
+                  value={renderFps}
+                  disabled={rendering}
+                  aria-label="Render frames per second"
+                  onChange={(e) => setRenderFps(Number(e.target.value))}
+                  onBlur={(e) => setRenderFps(clampInt(Number(e.target.value), RENDER_FPS_MIN, RENDER_FPS_MAX, RENDER_FPS_DEFAULT))}
+                />
+              </label>
+              <label className="mt-inline">
+                <span className="mt-inline-label">Format</span>
+                <select
+                  aria-label="Render format"
+                  value={renderFormat}
+                  disabled={rendering}
+                  onChange={(e) => setRenderFormat(e.target.value as 'mp4' | 'gif')}
+                >
+                  <option value="mp4">MP4</option>
+                  <option value="gif">GIF</option>
+                </select>
+              </label>
+              <button
+                className="btn primary mt-render-go"
+                type="button"
+                disabled={rendering || isMockBackend || !hasTracks}
+                aria-disabled={rendering || isMockBackend || !hasTracks}
+                title={
+                  isMockBackend
+                    ? 'Switch to the local Diffusers bridge to render a real motion clip (the Mock backend only produces a placeholder).'
+                    : !hasTracks
+                      ? 'Add at least one track (bind a numeric param) before rendering.'
+                      : 'Render the animated clip into a video in the Gallery'
+                }
+                onClick={doRenderClip}
+              >
+                {Icon.play({ size: 14 })} {rendering ? 'Rendering…' : 'Render'}
+              </button>
+            </div>
+            {isMockBackend ? (
+              <p className="field-help mt-render-mock">
+                Mock backend selected — rendering is disabled. It would only produce a clearly-labelled
+                placeholder. Switch to the local Diffusers bridge for a real render.
+              </p>
+            ) : null}
+            {rendering || renderPct > 0 ? (
+              <div className="mt-render-progress" aria-hidden={!rendering}>
+                <div
+                  className="mt-render-bar"
+                  role="progressbar"
+                  aria-label="Render progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={renderPct}
+                >
+                  <div className="mt-render-fill" style={{ width: `${renderPct}%` }} />
+                </div>
+                <span className="mt-render-status mono" role="status" aria-live="polite">
+                  {renderPhase ? `${renderPhase} · ` : ''}{renderPct}%
+                </span>
+              </div>
+            ) : null}
+            {renderNotice ? (
+              <p className="field-help mt-render-ok" role="status" aria-live="polite">{renderNotice}</p>
+            ) : null}
+            {renderError ? (
+              <p className="mt-render-err" role="alert">
+                {Icon.warning({ size: 14 })} {renderError}
+              </p>
+            ) : null}
           </div>
 
           {/* ---- tracks --------------------------------------------------- */}

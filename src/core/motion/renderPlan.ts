@@ -1,17 +1,19 @@
 /**
- * Render-plan stub — the honest seam into Phase 2 of the Living Constellation.
+ * Render-plan core — the honest data path into Phase 2 of the Living Constellation.
  *
- * `planMotionRender` is FULLY IMPLEMENTED + tested now (pure): it samples a clip
- * at evenly-spaced frame times and emits per-frame param patches. This proves the
- * data path end-to-end in tests without a fake render.
- *
- * `renderMotionClip` is a documented adapter seam that intentionally throws
- * `NotImplemented: Phase 2` — Phase 2 turns each frame's patches into a RenderJob
- * (reusing buildRenderJob + the AnimateDiff/batch path) and assembles the
- * sequence. Keeping it a loud throw preserves the "no silent fallbacks" invariant.
+ * `planMotionRender` is FULLY IMPLEMENTED + tested (pure): it samples a clip at
+ * evenly-spaced frame times and emits per-frame param patches. `applyPatches` and
+ * `buildMotionRenderJobs` turn that plan into concrete per-frame RenderJobs by
+ * cloning the workflow, setting each patch's `nodeId.param`, and running the
+ * EXISTING `buildRenderJob`. Everything here is pure (no fetch) so the whole plan
+ * is unit-tested without a backend; the bridge boundary lives in the adapters.
  */
 import { sampleClip } from './interpolate';
 import type { MotionClip } from './types';
+import type { Workflow } from '../types';
+import { updateNodeParam } from '../workflow';
+import { buildRenderJob, type RenderJob } from '../../bridge/adapter';
+import type { WildcardSet } from '../prompt/wildcards';
 
 /** One patch: set `param` on `nodeId` to `value` for this frame. */
 export interface MotionParamPatch {
@@ -59,13 +61,48 @@ export function planMotionRender(clip: MotionClip, opts: PlanMotionRenderOptions
 }
 
 /**
- * Phase-2 bridge adapter. NOT wired to the render backend yet. Phase 2 will turn
- * the frames from `planMotionRender` into RenderJobs (buildRenderJob + the
- * AnimateDiff/batch path) and assemble the output sequence. Until then this
- * throws loudly so nothing pretends to render.
- *
- * @throws Error `NotImplemented: Phase 2`
+ * Apply a frame's param patches to a workflow, returning a NEW workflow with each
+ * `nodeId.param` set to its patched value and everything else untouched. Pure:
+ * `updateNodeParam` clones the affected node (and bumps `version`); nodes/edges
+ * not named by a patch are shared by reference. Patches naming a missing node are
+ * simply no-ops (updateNodeParam leaves the list unchanged), so a stale clip
+ * never corrupts the graph.
  */
-export function renderMotionClip(_clip: MotionClip, _opts?: PlanMotionRenderOptions): never {
-  throw new Error('NotImplemented: Phase 2 — motion render is not wired to the bridge yet.');
+export function applyPatches(workflow: Workflow, patches: MotionParamPatch[]): Workflow {
+  let next = workflow;
+  for (const patch of patches) {
+    next = updateNodeParam(next, patch.nodeId, patch.param, patch.value);
+  }
+  return next;
+}
+
+/** The per-frame jobs plus the clip times they sample at (indices align 1:1). */
+export interface MotionRenderJobs {
+  jobs: RenderJob[];
+  frameTimes: number[];
+}
+
+/**
+ * Build one RenderJob per motion frame: plan the clip, apply each frame's patches
+ * to a cloned workflow, and run the EXISTING `buildRenderJob` so every job carries
+ * the same shape as a single-image render (ControlNet/img2img/hires/wildcards all
+ * honored per-frame at that frame's animated values). Pure — no bridge/fetch.
+ *
+ * `frameTimes[i]` is the clip time (seconds) job `jobs[i]` was sampled at.
+ */
+export function buildMotionRenderJobs(
+  workflow: Workflow,
+  clip: MotionClip,
+  opts: PlanMotionRenderOptions,
+  wildcardSets: WildcardSet[] = [],
+): MotionRenderJobs {
+  const frames = planMotionRender(clip, opts);
+  const jobs: RenderJob[] = [];
+  const frameTimes: number[] = [];
+  for (const frame of frames) {
+    const patched = applyPatches(workflow, frame.paramPatches);
+    jobs.push(buildRenderJob(patched, wildcardSets));
+    frameTimes.push(frame.t);
+  }
+  return { jobs, frameTimes };
 }
