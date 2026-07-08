@@ -127,6 +127,7 @@ const ORB_FRAGMENT_SHADER = /* glsl */ `
   uniform vec3 uHigh;
   uniform vec3 uAccent;
   uniform float uAccentMix;
+  uniform float uEmissive;   // 0..1 activity glow (luminosity encoding)
   varying float vT;
   varying vec3 vNormal;
   varying vec3 vViewPos;
@@ -143,7 +144,9 @@ const ORB_FRAGMENT_SHADER = /* glsl */ `
     float diff = 0.5 + 0.5 * max(dot(n, normalize(vec3(0.35, 0.85, 0.45))), 0.0);
     float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.6);
     vec3 color = base * (0.38 + 0.62 * diff) + base * rim * 0.85;
-    gl_FragColor = vec4(color, 0.97);
+    // Luminosity: a recently-touched node energizes toward a brighter, whiter glow.
+    color += (base + vec3(0.18)) * uEmissive * 0.55;
+    gl_FragColor = vec4(color, clamp(0.97 + uEmissive * 0.03, 0.0, 1.0));
   }
 `;
 
@@ -165,6 +168,7 @@ export function makeOrbMaterial(stops: [string, string, string], accent: string,
       uHigh: { value: new THREE.Color(stops[2]) },
       uAccent: { value: new THREE.Color(accent) },
       uAccentMix: { value: ORB_ACCENT_MIX },
+      uEmissive: { value: 0 },
     },
   });
 }
@@ -175,6 +179,11 @@ export function updateOrbMaterial(material: THREE.ShaderMaterial, stops: [string
   (material.uniforms.uMid.value as THREE.Color).set(stops[1]);
   (material.uniforms.uHigh.value as THREE.Color).set(stops[2]);
   (material.uniforms.uAccent.value as THREE.Color).set(accent);
+}
+
+/** Set an orb's luminosity glow (0..1) — the activity-recency emissive. */
+export function setOrbEmissive(material: THREE.ShaderMaterial, value: number): void {
+  material.uniforms.uEmissive.value = value;
 }
 
 /**

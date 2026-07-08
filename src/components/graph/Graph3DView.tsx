@@ -58,9 +58,11 @@ import {
   makeOrbRing,
   makeWireLine,
   resolveCssColor,
+  setOrbEmissive,
   updateOrbMaterial,
   updateWireLine,
 } from './graph3d/scene';
+import { emissiveFor } from '../../state/nodeMeta';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../../core/controlnet';
 import { fieldProfile, type FieldProfile } from '../../core/field/fieldProfile';
 import { applyField } from '../../core/field/applyField';
@@ -243,6 +245,9 @@ export function Graph3DView({ onContextFailed }: Props) {
   // commit (a new array), so this coincides with the workflow subscription — no
   // extra re-render churn — but keeps the anomaly rings live on shelf changes too.
   const health = useStudio((s) => s.health);
+  // Per-node activity metadata drives the luminosity glow. Reference changes on
+  // every touch (like health) so the reconcile re-snapshots emissive on edits.
+  const nodeMeta = useStudio((s) => s.nodeMeta);
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   const selectNode = useStudio((s) => s.selectNode);
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
@@ -394,6 +399,16 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, []);
 
   /**
+   * Fade every orb's luminosity glow from live activity recency at `now` (ms).
+   * Called each frame by the animating loops so the glow decays smoothly while
+   * anything is animating; the orb-reconcile snapshots it otherwise (idle-safe).
+   */
+  const updateEmissive = useCallback((now: number) => {
+    const meta = useStudio.getState().nodeMeta;
+    for (const [id, entry] of orbsRef.current) setOrbEmissive(entry.material, emissiveFor(meta[id], now));
+  }, []);
+
+  /**
    * Ensure the idle animator is running while there is idle-time animation to do —
    * live ripples decaying and/or ambient gravity dust (rich tier). Idempotent
    * (no-op if already running). It NEVER starts while playback/audio owns the
@@ -424,6 +439,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         }
         if (pf) pf.advance(dt);
         const rAlive = fab ? fab.tickRipples(now) : false;
+        updateEmissive(now);
         t.renderer.render(t.scene, t.camera);
         t.cssRenderer.render(t.scene, t.camera);
         recordFrame();
@@ -436,7 +452,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         clearTimer: (id) => clearTimeout(id),
       },
     );
-  }, [recordFrame]);
+  }, [recordFrame, updateEmissive]);
 
   const applyCamera = useCallback(() => {
     const t = threeRef.current;
@@ -752,6 +768,10 @@ export function Graph3DView({ onContextFailed }: Props) {
           }
           entry.anomalyKey = anomalyKey;
         }
+        // Luminosity: snapshot the activity glow from edit/create recency. This is
+        // the idle-safe path (updates on graph changes); the animating loops fade
+        // it smoothly while they run (see updateEmissive).
+        setOrbEmissive(entry.material, graph3dEffects === 'off' ? 0 : emissiveFor(nodeMeta[node.id], Date.now()));
         const c = orbWorldCenter(node);
         entry.group.position.set(c.x, c.y, c.z);
       }
@@ -781,7 +801,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     // fall toward the current mass distribution. Rich tier only (field non-null).
     particleFieldRef.current?.setWells(packWells(workflow.nodes).wells);
     requestRender();
-  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender, graph3dEffects, health]);
+  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender, graph3dEffects, health, nodeMeta]);
 
   // ---- gravity fabric lifecycle (constellation GPU overhaul, First Slice) ----
   // Own Group beside the GridHelpers; constructed only when the flag is on, at
@@ -1292,6 +1312,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyPlaybackFrame(active, localT);
       fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the playback frame too
+      updateEmissive(now); // luminosity fades smoothly during playback
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();
@@ -1425,6 +1446,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyAudioFrame(reaction);
       fabricRef.current?.tickRipples(nowT); // ripples animate on the audio frame
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the audio frame too
+      updateEmissive(nowT); // luminosity fades smoothly during audio
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();

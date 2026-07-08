@@ -82,6 +82,7 @@ import { applyField } from '../core/field/applyField';
 import { pathToClip, type PathSample } from '../core/field/pathToClip';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
 import { defaultAudioState, hydrateAudio, SENSITIVITY_MIN, SENSITIVITY_MAX, type AudioSourceKind, type AudioState } from './audio';
+import { hydrateNodeMeta, seedNodeMeta, touchNode, type NodeMetaMap } from './nodeMeta';
 import { AudioEngine, type AudioSource } from '../audio/engine';
 import { computeBands, scaleBands } from '../core/audio/bands';
 import { audioToClip, type AudioSample } from '../core/audio/audioToClip';
@@ -217,6 +218,8 @@ interface StudioState {
   shelf: ModelAsset[];
   shelfSource: 'demo' | 'bridge';
   health: HealthIssue[];
+  /** Per-node activity metadata (createdAt / lastActiveAt) for the luminosity glow. */
+  nodeMeta: NodeMetaMap;
   view: ViewId;
   selectedNodeId: string | null;
   rackPresets: RackPreset[];
@@ -555,6 +558,11 @@ const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultW
 const initialMotion = hydrateMotion(persisted.motion, initialWorkflow);
 const initialField = hydrateField(persisted.field);
 const initialAudio = hydrateAudio(persisted.audio, initialWorkflow);
+const initialNodeMeta = seedNodeMeta(
+  hydrateNodeMeta(persisted.nodeMeta),
+  initialWorkflow.nodes.map((n) => n.id),
+  Date.now(),
+);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
@@ -564,8 +572,23 @@ const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
     : 'guide';
 
 export const useStudio = create<StudioState>((set, get) => {
-  const commit = (wf: Workflow) =>
-    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null });
+  /**
+   * Commit a workflow mutation (+ recompute health). Pass `touchId` to also stamp
+   * that node's luminosity activity in the SAME set — one store notification, so
+   * the heavy 3D reconcile runs once per edit, not twice.
+   */
+  const commit = (wf: Workflow, touchId?: string) =>
+    set({
+      workflow: wf,
+      health: checkHealth(wf, get().shelf),
+      turboLastPlan: null,
+      turboError: null,
+      ...(touchId ? { nodeMeta: touchNode(get().nodeMeta, touchId, Date.now()) } : {}),
+    });
+
+  /** Stamp a node's activity (luminosity glow) when the id isn't known until after commit. */
+  const touchNodeMeta = (nodeId: string) =>
+    set({ nodeMeta: touchNode(get().nodeMeta, nodeId, Date.now()) });
 
   // ---- Motion helpers (keep the actions terse; all pure list edits) ----
   const setMotion = (motion: MotionState) => set({ motion });
@@ -706,6 +729,7 @@ export const useStudio = create<StudioState>((set, get) => {
     shelf: DEMO_SHELF,
     shelfSource: 'demo',
     health: checkHealth(initialWorkflow, DEMO_SHELF),
+    nodeMeta: initialNodeMeta,
     view: initialView,
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
@@ -765,14 +789,14 @@ export const useStudio = create<StudioState>((set, get) => {
         const node = get().workflow.nodes.find((n) => n.id === nodeId);
         if (node?.kind === 'model') userPinnedModel = true;
       }
-      commit(updateNodeParam(get().workflow, nodeId, paramId, value));
+      commit(updateNodeParam(get().workflow, nodeId, paramId, value), nodeId);
     },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
     addCapsule: (kind, x, y) => {
       const node = createNode(kind, x, y);
-      commit(addNode(get().workflow, node));
+      commit(addNode(get().workflow, node), node.id);
       set({ selectedNodeId: node.id });
     },
     duplicateCapsule: (nodeId) => {
@@ -780,7 +804,10 @@ export const useStudio = create<StudioState>((set, get) => {
       const next = duplicateNode(before, nodeId);
       commit(next);
       const copy = next.nodes.find((node) => !before.nodes.some((old) => old.id === node.id));
-      if (copy) set({ selectedNodeId: copy.id });
+      if (copy) {
+        touchNodeMeta(copy.id);
+        set({ selectedNodeId: copy.id });
+      }
     },
     autoLayoutGraph: () => commit(autoLayout(get().workflow)),
     removeCapsule: (nodeId) => {

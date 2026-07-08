@@ -7,6 +7,7 @@ import type { MotionState } from '../core/motion/types';
 import type { FieldState } from './field';
 import type { AudioState } from './audio';
 import type { AudioMapping } from '../core/audio/mapping';
+import type { NodeMetaMap } from './nodeMeta';
 
 const KEY = 'lumendeck.v1';
 
@@ -49,6 +50,12 @@ export interface PersistedState {
    * are NEVER persisted, so a reload never auto-listens to the microphone.
    */
   audio?: { mapping?: AudioMapping; sensitivity?: number };
+  /**
+   * Per-node activity metadata (createdAt / lastActiveAt) driving the constellation
+   * LUMINOSITY encoding. Optional so state saved before this feature still loads —
+   * a missing slice hydrates to {} and re-seeds from the current workflow nodes.
+   */
+  nodeMeta?: NodeMetaMap;
 }
 
 /**
@@ -69,10 +76,13 @@ export function persistedProjection(state: {
   field?: FieldState;
   /** Optional so callers assembled before this slice existed still typecheck. */
   audio?: AudioState;
+  /** Optional so callers assembled before this slice existed still typecheck. */
+  nodeMeta?: NodeMetaMap;
 }): PersistedState {
   return {
     workflow: state.workflow,
     rackPresets: state.rackPresets,
+    nodeMeta: state.nodeMeta,
     // gallery is intentionally omitted — renders live in IndexedDB now.
     backendSettings: state.backendSettings,
     appSettings: state.appSettings,

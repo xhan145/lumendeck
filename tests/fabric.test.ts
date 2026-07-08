@@ -31,14 +31,18 @@ describe('encoding registry (hard rule: no layer without a datum)', () => {
     const anomaly = ENCODINGS.find((e) => e.id === 'anomaly');
     expect(anomaly?.layer).toBe('anomaly');
     expect(anomaly?.datum).toContain('health');
+    const luminosity = ENCODINGS.find((e) => e.id === 'luminosity');
+    expect(luminosity?.layer).toBe('luminosity');
+    expect(luminosity?.datum).toContain('lastActiveAt');
     // Every entry must name a non-empty datum (the hard rule).
     for (const e of ENCODINGS) expect(e.datum.length).toBeGreaterThan(0);
   });
 
   it('passes when every active layer is registered', () => {
-    expect(unregisteredLayers(['fabric', 'anomaly'])).toEqual([]);
+    expect(unregisteredLayers(['fabric', 'anomaly', 'luminosity'])).toEqual([]);
     expect(registeredLayers().has('fabric')).toBe(true);
     expect(registeredLayers().has('anomaly')).toBe(true);
+    expect(registeredLayers().has('luminosity')).toBe(true);
   });
 
   it('flags an active layer with no registry entry', () => {
