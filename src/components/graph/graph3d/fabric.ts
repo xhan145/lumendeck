@@ -158,6 +158,7 @@ const FABRIC_VERTEX_SHADER = /* glsl */ `
   uniform float uRippleWidth;
   out float vDisp;
   out vec2 vWorldXZ;
+  out vec3 vViewPos;
   void main() {
     vec3 p = position;                   // plane laid flat: p.x, p.z are world xz
     float disp = 0.0;
@@ -188,12 +189,14 @@ const FABRIC_VERTEX_SHADER = /* glsl */ `
     p.y += lift;
     vDisp = disp;
     vWorldXZ = vec2(p.x, p.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vViewPos = mv.xyz;                    // view space → fragment derives the normal
+    gl_Position = projectionMatrix * mv;
   }
 `;
 
 const FABRIC_FRAGMENT_SHADER = /* glsl */ `
-  uniform vec3 uShallow;   // brand cyan — flat fabric
+  uniform vec3 uShallow;   // brand cyan — flat / shallow liquid
   uniform vec3 uDeep;      // brand violet — deep well
   uniform float uDepthScale;
   uniform float uContourSpacing;
@@ -201,22 +204,47 @@ const FABRIC_FRAGMENT_SHADER = /* glsl */ `
   uniform float uFadeEnd;
   in float vDisp;
   in vec2 vWorldXZ;
+  in vec3 vViewPos;
   out vec4 fragColor;
   void main() {
-    float d = clamp(vDisp / uDepthScale, 0.0, 1.0);
-    vec3 col = mix(uShallow, uDeep, d);
+    // Real surface normal of the deformed sheet, from screen-space derivatives of
+    // the view-space position — captures every well dip AND ripple wave, so the
+    // "fabric of spacetime" shades like a liquid-metal / mercury surface.
+    vec3 N = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
+    vec3 V = normalize(-vViewPos);          // camera sits at the origin in view space
+    float ndv = max(dot(N, V), 0.0);
 
-    // Equipotential contour lines — luminance, not hue (colorblind-safe).
+    // Base depth tint: deeper wells pull toward violet, shallows read cyan.
+    float d = clamp(vDisp / uDepthScale, 0.0, 1.0);
+    vec3 base = mix(uShallow, uDeep, d);
+
+    // Liquid-metal sheen: a fresnel rim + a fake reflected-"sky" gradient sampled
+    // by the reflected view vector. Grazing angles reflect more (like mercury).
+    float fres = pow(1.0 - ndv, 4.0);
+    vec3 R = reflect(-V, N);
+    float sky = R.y * 0.5 + 0.5;            // up-facing facets catch the bright sky
+    vec3 skyTint = mix(uDeep * 0.35, uShallow * 1.5 + 0.12, sky);
+    vec3 col = mix(base, skyTint, 0.32 + 0.5 * fres);
+
+    // A sharp specular glint from a fixed key light — travels along the wave crests.
+    vec3 L = normalize(vec3(0.4, 0.85, 0.35));
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 64.0);
+    col += spec * vec3(0.85, 0.92, 1.0);
+
+    // Equipotential contour lines, faintly etched into the metal — the colorblind-
+    // safe data read-out survives (luminance, not hue).
     float phase = vDisp / uContourSpacing;
     float aa = fwidth(phase);
     float line = 1.0 - smoothstep(0.0, aa * 1.5, abs(fract(phase - 0.5) - 0.5));
-    col += line * 0.35;
+    col += line * 0.14;
 
-    // Straight-alpha radial fade into the transparent DOM background.
+    // Opaque liquid sheet in the centre, dissolving into the void at the rim
+    // (straight alpha over the transparent canvas — never a fog slab).
     float radial = length(vWorldXZ);
-    float alpha = (1.0 - smoothstep(uFadeStart, uFadeEnd, radial)) * 0.5;
-    alpha += line * 0.25 * alpha;
-    if (alpha <= 0.001) discard;
+    float alpha = (1.0 - smoothstep(uFadeStart, uFadeEnd, radial)) * 0.82;
+    alpha = clamp(alpha + fres * 0.14, 0.0, 0.92);
+    if (alpha <= 0.002) discard;
     fragColor = vec4(col, alpha);
   }
 `;
