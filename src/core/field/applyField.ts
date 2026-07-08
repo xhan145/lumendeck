@@ -9,6 +9,7 @@
  */
 import type { MotionParamPatch } from '../motion/renderPlan';
 import type { FieldProfile } from './fieldProfile';
+import { fieldProfileFromPreset, type FieldPreset } from './presets';
 
 function clamp(x: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, x));
@@ -51,6 +52,23 @@ export function applyField(
     }
   }
   return [...byParam.values()];
+}
+
+/**
+ * ADDITIVE preset consumer: drive a node's params from an ACTIVE field preset
+ * through the SAME `applyField` path. `nodeKind` filters the preset's axes to the
+ * params that node owns (so a single-node ghost writes only its own params); omit
+ * it to flatten every axis. A thin wrapper over `fieldProfileFromPreset` +
+ * `applyField` — the existing signature/callers are untouched. Pure.
+ */
+export function applyPresetField(
+  pos: { x: number; y: number; z: number },
+  intensity: number,
+  preset: FieldPreset,
+  nodeId: string,
+  nodeKind?: string,
+): MotionParamPatch[] {
+  return applyField(pos, intensity, fieldProfileFromPreset(preset, nodeKind), nodeId);
 }
 
 /**
