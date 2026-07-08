@@ -1,9 +1,10 @@
 # LumenDeck Dossier
 
-!https://postimg.cc/VJ0fLnHb
+[![lumendeck-wordmark-1600.png](https://i.postimg.cc/8ztj4bRw/lumendeck-wordmark-1600.png)](https://postimg.cc/VJ0fLnHb)
 
-## Next-Generation Local AI Creation Studio
-!https://postimg.cc/MXsq7dCc
+## Next-Generation Local AI Creation Studio 
+
+[![lumendeck-dev-screenshot.png](https://i.postimg.cc/CL05V2J4/lumendeck-dev-screenshot.png)](https://postimg.cc/MXsq7dCc)
 
 ## 1. Product Overview
 
