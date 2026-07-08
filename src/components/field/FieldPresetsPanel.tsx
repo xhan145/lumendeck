@@ -141,11 +141,21 @@ export function FieldPresetsPanel() {
     updateFieldPresetAxis(activePreset.id, key, toBundle(drafts[key]));
   };
 
-  // ---- inert-param hint for the current model ------------------------------
+  // ---- inert-param hint for the current model + workflow -------------------
   const modelId = String(workflow.nodes.find((n) => n.kind === 'model')?.params.assetId ?? '');
+  // Enabled slot counts for the two racks, so a loraRack.weight / controlNetRack.
+  // strength axis with ZERO enabled slots is surfaced as inert (it fans out to
+  // enabled slots — none means nothing to drive).
+  const enabledSlots = useMemo(() => {
+    const countEnabled = (kind: 'loraRack' | 'controlNetRack'): number => {
+      const slots = workflow.nodes.find((n) => n.kind === kind)?.params.slots;
+      return Array.isArray(slots) ? slots.filter((s) => (s as { enabled?: boolean })?.enabled).length : 0;
+    };
+    return { loraRack: countEnabled('loraRack'), controlNetRack: countEnabled('controlNetRack') };
+  }, [workflow]);
   const inert = useMemo(
-    () => (activePreset ? inertParamsForModel(activePreset, modelId) : []),
-    [activePreset, modelId],
+    () => (activePreset ? inertParamsForModel(activePreset, modelId, enabledSlots) : []),
+    [activePreset, modelId, enabledSlots],
   );
 
   return (

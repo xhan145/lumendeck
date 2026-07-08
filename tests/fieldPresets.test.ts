@@ -9,15 +9,36 @@ import {
   type FieldPreset,
 } from '../src/core/field/presets';
 import { buildPreviewJob } from '../src/core/field/preview';
+import { fanOutRackPatches } from '../src/core/field/rackFanout';
 import { applyPresetField } from '../src/core/field/applyField';
 import { defaultFieldState, hydrateField, type PersistedFieldState } from '../src/state/field';
 import { persistedProjection } from '../src/state/persistence';
-import { createDefaultWorkflow, findNode } from '../src/core/workflow';
+import { addNode, createDefaultWorkflow, createNode, findNode, updateNodeParam } from '../src/core/workflow';
+import type { ControlSlot, LoraSlot } from '../src/core/types';
 import { useStudio, mockAdapter } from '../src/state/store';
 
 const byId = (id: string): FieldPreset => BUILTIN_FIELD_PRESETS.find((p) => p.id === id)!;
 const patch = (patches: { node: string; param: string; value: number }[], param: string) =>
   patches.find((p) => p.param === param)!;
+
+/**
+ * The WHITELIST of `node:param` bundles the render pipeline actually consumes
+ * (buildRenderJob reads exactly these; the racks are consumed PER-SLOT via the
+ * fan-out). Any preset axis param outside this set is a phantom/inert "dead axis"
+ * — the recurring bug this suite guards against.
+ */
+const CONSUMED_PARAMS = new Set([
+  'sampler:cfg',
+  'sampler:steps',
+  'sampler:seed',
+  'sampler:denoise',
+  'imageLoader:strength',
+  'hiresFix:scale',
+  'hiresFix:denoise',
+  'hiresFix:steps',
+  'loraRack:weight',
+  'controlNetRack:strength',
+]);
 
 // ---------------------------------------------------------------------------
 // presetAxesUsed — the HEADLINE guarantee: every builtin binds x AND y AND z
@@ -40,6 +61,36 @@ describe('BUILTIN_FIELD_PRESETS — every preset uses all three axes', () => {
       expect(p.axes.x.params.length).toBeGreaterThan(0);
       expect(p.axes.y.params.length).toBeGreaterThan(0);
       expect(p.axes.z.params.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('HEADLINE: every axis param of all 10 builtins is render-CONSUMED (whitelist — no dead axes)', () => {
+    for (const p of BUILTIN_FIELD_PRESETS) {
+      for (const [axisName, axis] of [['x', p.axes.x], ['y', p.axes.y], ['z', p.axes.z]] as const) {
+        for (const b of axis.params) {
+          const key = `${b.node}:${b.param}`;
+          // Named assert so a phantom param points at the offending preset+axis.
+          expect(CONSUMED_PARAMS.has(key), `${p.id} ${axisName}-axis binds non-consumed "${key}"`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('NO builtin drives the Video node (video params are inert on a still preview)', () => {
+    for (const p of BUILTIN_FIELD_PRESETS) {
+      for (const axis of [p.axes.x, p.axes.y, p.axes.z]) {
+        for (const b of axis.params) expect(b.node).not.toBe('video');
+      }
+    }
+  });
+
+  it('replaces builtin-motion with builtin-style-structure (all-XYZ, all-consumed)', () => {
+    expect(BUILTIN_FIELD_PRESETS.some((p) => p.id === 'builtin-motion')).toBe(false);
+    const ss = BUILTIN_FIELD_PRESETS.find((p) => p.id === 'builtin-style-structure');
+    expect(ss).toBeDefined();
+    expect(presetAxesUsed(ss!)).toBe(true);
+    for (const axis of [ss!.axes.x, ss!.axes.y, ss!.axes.z]) {
+      for (const b of axis.params) expect(CONSUMED_PARAMS.has(`${b.node}:${b.param}`)).toBe(true);
     }
   });
 
@@ -171,6 +222,21 @@ describe('inertParamsForModel', () => {
     expect(inert).toEqual([...new Set(inert)]);
     expect(inert).toEqual(expect.arrayContaining(['cfg', 'denoise']));
   });
+
+  it('flags a loraRack.weight axis inert only when ZERO LoRA slots are enabled', () => {
+    const styleStructure = byId('builtin-style-structure'); // X = loraRack.weight
+    expect(inertParamsForModel(styleStructure, 'sd15-photoreal', { loraRack: 0 })).toContain('weight');
+    expect(inertParamsForModel(styleStructure, 'sd15-photoreal', { loraRack: 2 })).not.toContain('weight');
+    // An unknown/absent count is NOT flagged (backward-compatible — only explicit 0).
+    expect(inertParamsForModel(styleStructure, 'sd15-photoreal')).not.toContain('weight');
+  });
+
+  it('flags a controlNetRack.strength axis inert only when ZERO control slots are enabled', () => {
+    const cnBalance = byId('builtin-controlnet-balance'); // X = controlNetRack.strength
+    expect(inertParamsForModel(cnBalance, 'sd15-photoreal', { controlNetRack: 0 })).toContain('strength');
+    expect(inertParamsForModel(cnBalance, 'sd15-photoreal', { controlNetRack: 3 })).not.toContain('strength');
+    expect(inertParamsForModel(cnBalance, 'sd15-photoreal')).not.toContain('strength');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -206,6 +272,62 @@ describe('buildPreviewJob', () => {
     expect(job.denoiseStrength).toBeCloseTo(0.6, 9);
     // The sampler cfg patch (Y = 2..14) still lands.
     expect(job.cfg).toBeCloseTo(14, 9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fanOutRackPatches — push an aggregate weight/strength into a rack's ENABLED
+// slots (the fix for the LoRA/ControlNet "dead axis"); no-op on zero slots.
+// ---------------------------------------------------------------------------
+describe('fanOutRackPatches', () => {
+  const loraWorkflow = (slots: LoraSlot[]) => {
+    const wf = createDefaultWorkflow(); // has a loraRack node (slots default [])
+    const rack = findNode(wf, 'loraRack')!;
+    return updateNodeParam(wf, rack.id, 'slots', slots);
+  };
+  const cnWorkflow = (slots: ControlSlot[]) => {
+    const wf = addNode(createDefaultWorkflow(), createNode('controlNetRack', 0, 0));
+    const rack = findNode(wf, 'controlNetRack')!;
+    return updateNodeParam(wf, rack.id, 'slots', slots);
+  };
+
+  it('sets EVERY enabled loraRack slot weight and leaves disabled slots untouched', () => {
+    const wf = loraWorkflow([
+      { assetId: 'a', weight: 0.1, enabled: true },
+      { assetId: 'b', weight: 0.2, enabled: false },
+      { assetId: 'c', weight: 0.3, enabled: true },
+    ]);
+    const out = fanOutRackPatches(wf, [{ node: 'loraRack', param: 'weight', value: 1.5 }]);
+    const slots = findNode(out, 'loraRack')!.params.slots as LoraSlot[];
+    expect(slots.map((s) => s.weight)).toEqual([1.5, 0.2, 1.5]); // enabled → 1.5, disabled kept
+  });
+
+  it('sets EVERY enabled controlNetRack slot strength likewise', () => {
+    const wf = cnWorkflow([
+      { id: 's1', type: 'canny', strength: 0.5, image: '', enabled: true },
+      { id: 's2', type: 'depth', strength: 0.6, image: '', enabled: false },
+    ]);
+    const out = fanOutRackPatches(wf, [{ node: 'controlNetRack', param: 'strength', value: 1.2 }]);
+    const slots = findNode(out, 'controlNetRack')!.params.slots as ControlSlot[];
+    expect(slots.map((s) => s.strength)).toEqual([1.2, 0.6]);
+  });
+
+  it('is a NO-OP (same reference) when the rack has zero enabled slots', () => {
+    const allDisabled = loraWorkflow([{ assetId: 'a', weight: 0.1, enabled: false }]);
+    expect(fanOutRackPatches(allDisabled, [{ node: 'loraRack', param: 'weight', value: 1.5 }])).toBe(allDisabled);
+  });
+
+  it('is a NO-OP when the rack has no slots at all (default empty) or is absent', () => {
+    const wf = createDefaultWorkflow(); // loraRack slots default []
+    expect(fanOutRackPatches(wf, [{ node: 'loraRack', param: 'weight', value: 1.5 }])).toBe(wf);
+    // controlNetRack node is absent from the default graph → no-op.
+    expect(fanOutRackPatches(wf, [{ node: 'controlNetRack', param: 'strength', value: 1.5 }])).toBe(wf);
+  });
+
+  it('ignores non-rack-aggregate patches entirely', () => {
+    const wf = loraWorkflow([{ assetId: 'a', weight: 0.1, enabled: true }]);
+    // sampler.cfg is not a rack aggregate — fan-out leaves the workflow untouched.
+    expect(fanOutRackPatches(wf, [{ node: 'sampler', param: 'cfg', value: 12 }])).toBe(wf);
   });
 });
 
@@ -254,9 +376,9 @@ describe('store — field preset CRUD + persistence', () => {
   });
 
   it('deleteFieldPreset removes a preset and clears the active id if it pointed there', () => {
-    useStudio.getState().setActiveFieldPreset('builtin-motion');
-    useStudio.getState().deleteFieldPreset('builtin-motion');
-    expect(useStudio.getState().field.presets.some((p) => p.id === 'builtin-motion')).toBe(false);
+    useStudio.getState().setActiveFieldPreset('builtin-style-structure');
+    useStudio.getState().deleteFieldPreset('builtin-style-structure');
+    expect(useStudio.getState().field.presets.some((p) => p.id === 'builtin-style-structure')).toBe(false);
     expect(useStudio.getState().field.activePresetId).toBeNull();
   });
 
@@ -366,15 +488,32 @@ describe('store — streaming preview', () => {
     expect(useStudio.getState().controlStatus).toMatch(/preview needs the bridge/i);
   });
 
-  it('promoteFieldPreviewToRender commits the preset params at the last position', async () => {
+  it('promoteFieldPreviewToRender renders the ACTIVE GHOST position, NOT the {0.5} midpoint', async () => {
     vi.spyOn(mockAdapter, 'generate').mockResolvedValue({ dataUrl: 'data:image/png;base64,FULL', seed: 1, mediaType: 'image', mimeType: 'image/png', extension: 'png' });
+    // classic-sampler X = cfg 3..18 (+ steps); the streamed midpoint would be 10.5.
     useStudio.getState().setActiveFieldPreset('builtin-classic-sampler');
-    // Establish the "current" field position via a preview (X cfg → 18 at pos 1).
-    await useStudio.getState().runFieldPreview({ x: 1, y: 1, z: 1 });
+    const samplerId = findNode(useStudio.getState().workflow, 'sampler')!.id;
+    useStudio.getState().spawnGhost(samplerId);
+    const ghost = useStudio.getState().field.ghosts[0];
+    // Fly the ghost to the max corner — pos.x = 1 ⇒ cfg 18 (never the 0.5 midpoint).
+    useStudio.getState().moveGhost(ghost.id, { x: 1, y: 1, z: 1 });
+    // Never touched runFieldPreview (streaming off), so the OLD code would have
+    // promoted the {0.5} default midpoint (cfg 10.5) instead of the ghost's cfg 18.
     await useStudio.getState().promoteFieldPreviewToRender();
 
     const sampler = findNode(useStudio.getState().workflow, 'sampler')!;
-    expect(sampler.params.cfg).toBeCloseTo(18, 9); // preset params committed to the graph
+    expect(sampler.params.cfg).toBeCloseTo(18, 9); // ghost pos=1, NOT the midpoint
+    expect(sampler.params.cfg as number).not.toBeCloseTo(10.5, 1); // the old midpoint bug
+  });
+
+  it('promoteFieldPreviewToRender with a preset but NO ghost is a loud no-op', async () => {
+    const spy = vi.spyOn(mockAdapter, 'generate');
+    useStudio.getState().setActiveFieldPreset('builtin-classic-sampler');
+    // No ghost in the field — nothing to promote.
+    expect(useStudio.getState().field.ghosts).toHaveLength(0);
+    await useStudio.getState().promoteFieldPreviewToRender();
+    expect(spy).not.toHaveBeenCalled();
+    expect(useStudio.getState().controlStatus).toMatch(/move a ghost/i);
   });
 
   it('promoteFieldPreviewToRender with no active preset is a loud no-op', async () => {

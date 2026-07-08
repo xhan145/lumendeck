@@ -87,6 +87,7 @@ import {
   type FieldPreset,
 } from '../core/field/presets';
 import { buildPreviewJob } from '../core/field/preview';
+import { fanOutRackPatches, isRackAggregatePatch } from '../core/field/rackFanout';
 import { pathToClip, type PathSample } from '../core/field/pathToClip';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
 import { defaultAudioState, hydrateAudio, SENSITIVITY_MIN, SENSITIVITY_MAX, type AudioSourceKind, type AudioState } from './audio';
@@ -589,11 +590,10 @@ const GHOST_RECORD_INTERVAL_MS = 66;
  * persisted, never part of the render projection). `fieldPreviewToken` is a
  * monotonic counter: each `runFieldPreview` captures the token it bumped to, and
  * a result only writes `previewImage` if its token is STILL the latest — so a
- * newer settled position discards a stale in-flight render. `lastFieldPreviewPos`
- * is the most recently previewed position, promoted by `promoteFieldPreviewToRender`.
+ * newer settled position discards a stale in-flight render. (Promotion reads the
+ * ACTIVE GHOST's position, not a streamed midpoint — see promoteFieldPreviewToRender.)
  */
 let fieldPreviewToken = 0;
-let lastFieldPreviewPos: { x: number; y: number; z: number } = { x: 0.5, y: 0.5, z: 0.5 };
 /** Monotonic wall clock in ms (performance.now when present, else Date.now). */
 const wallNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
@@ -754,10 +754,21 @@ export const useStudio = create<StudioState>((set, get) => {
   };
   /** Write a ghost's field patches into the workflow in ONE commit (gradient/ring re-tint). */
   const applyGhostToWorkflow = (ghost: Ghost) => {
+    const node = get().workflow.nodes.find((n) => n.id === ghost.nodeId);
     const patches = applyField(ghost.pos, ghost.intensity, profileForNode(ghost.nodeId), ghost.nodeId);
     if (patches.length === 0) return;
     let next = get().workflow;
     for (const p of patches) next = updateNodeParam(next, p.nodeId, p.param, p.value);
+    // A loraRack/controlNetRack ghost's weight/strength is a DEAD aggregate that
+    // buildRenderJob never reads (it reads per-slot); fan it into the enabled slots
+    // so the ghost drag actually moves the render (see rackFanout.ts).
+    if (node && (node.kind === 'loraRack' || node.kind === 'controlNetRack')) {
+      const aggParam = node.kind === 'loraRack' ? 'weight' : 'strength';
+      const rackPatches = patches
+        .filter((p) => p.param === aggParam)
+        .map((p) => ({ node: node.kind as string, param: p.param, value: p.value }));
+      if (rackPatches.length > 0) next = fanOutRackPatches(next, rackPatches);
+    }
     commit(next);
   };
 
@@ -1599,7 +1610,6 @@ export const useStudio = create<StudioState>((set, get) => {
         set({ controlStatus: 'Pick a field preset before starting a live preview.' });
         return;
       }
-      lastFieldPreviewPos = { x: pos.x, y: pos.y, z: pos.z };
       // Bump + capture the supersede token: only the latest call may write the image.
       const token = ++fieldPreviewToken;
       setField({ ...get().field, previewPending: true });
@@ -1633,11 +1643,21 @@ export const useStudio = create<StudioState>((set, get) => {
         set({ controlStatus: 'Pick a field preset before promoting a preview to a full render.' });
         return;
       }
-      // Commit the preset-resolved params at the last previewed position, then run
-      // the normal full-res gallery render (identical to the Render button path).
-      const patches = applyPresetAxes(preset, lastFieldPreviewPos, 1);
-      let next = get().workflow;
+      // Render the ACTIVE GHOST's real position — NOT a streaming midpoint. With
+      // streaming off, `lastFieldPreviewPos` was never set past its {0.5} default,
+      // so promoting it committed the field MIDPOINT over the ghost's real params.
+      const ghost = get().field.ghosts[0];
+      if (!ghost) {
+        set({ controlStatus: 'Move a ghost into the field first to promote its position to a full render.' });
+        return;
+      }
+      // Resolve the preset at the ghost's position + intensity, fan the rack
+      // aggregates into their enabled slots, apply the rest directly, then run the
+      // normal full-res gallery render (identical to the Render button path).
+      const patches = applyPresetAxes(preset, ghost.pos, ghost.intensity);
+      let next = fanOutRackPatches(get().workflow, patches);
       for (const p of patches) {
+        if (isRackAggregatePatch(p)) continue;
         const node = findNode(next, p.node);
         if (node) next = updateNodeParam(next, node.id, p.param, p.value);
       }

@@ -48,6 +48,7 @@ export function StreamingPreview() {
   const workflow = useStudio((s) => s.workflow);
   const presets = useStudio((s) => s.field.presets);
   const activePresetId = useStudio((s) => s.field.activePresetId);
+  const ghostCount = useStudio((s) => s.field.ghosts.length);
   const previewImage = useStudio((s) => s.field.previewImage);
   const previewPending = useStudio((s) => s.field.previewPending);
   const streamingEnabled = useStudio((s) => s.field.streamingEnabled);
@@ -67,7 +68,9 @@ export function StreamingPreview() {
   const backendMode: 'real' | 'mock' | 'nobridge' =
     adapterId === 'mock' ? 'mock' : adapterId === 'bridge' && bridgeOnline ? 'real' : 'nobridge';
 
-  const canRenderFull = !!activePreset;
+  // Promotion renders the ACTIVE GHOST's real position, so it needs both a preset
+  // AND a ghost in the field (no ghost → nothing to promote).
+  const canRenderFull = !!activePreset && ghostCount > 0;
 
   return (
     <section className="streaming-preview" aria-label="Streaming preview">
@@ -156,7 +159,9 @@ export function StreamingPreview() {
           title={
             canRenderFull
               ? 'Render the current field position at full resolution into the Gallery'
-              : 'Select a field preset first'
+              : !activePreset
+                ? 'Select a field preset first'
+                : 'Move a ghost into the field first'
           }
           onClick={() => void promoteFieldPreviewToRender()}
         >

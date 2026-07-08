@@ -9,6 +9,7 @@ import type { Workflow, CapsuleKind } from '../types';
 import { findNode, updateNodeParam } from '../workflow';
 import { buildRenderJob, type RenderJob } from '../../bridge/adapter';
 import type { PresetPatch } from './presets';
+import { fanOutRackPatches, isRackAggregatePatch } from './rackFanout';
 import type { WildcardSet } from '../prompt/wildcards';
 
 export interface PreviewJobOptions {
@@ -38,8 +39,12 @@ export function buildPreviewJob(
   const size = Math.max(64, Math.floor(opts.size ?? 320));
   const steps = Math.max(1, Math.floor(opts.steps ?? 4));
 
-  let patched = workflow;
+  // Rack-aggregate patches (loraRack.weight / controlNetRack.strength) are NOT
+  // read by buildRenderJob — fan them out into the racks' enabled slots first,
+  // then SKIP them in the direct loop (they're now per-slot, not on the rack node).
+  let patched = fanOutRackPatches(workflow, patches);
   for (const p of patches) {
+    if (isRackAggregatePatch(p)) continue;
     const node = findNode(patched, p.node as CapsuleKind);
     if (node) patched = updateNodeParam(patched, node.id, p.param, p.value);
   }
