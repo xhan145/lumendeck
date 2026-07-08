@@ -138,7 +138,7 @@ export function rippleDisplacement(x: number, z: number, ripples: readonly Rippl
 // ---- THREE builder (three-only; construction needs no GL context) ----------
 
 /** Plane extent (world units) — matches the main neon grid so it reads as ground. */
-const FABRIC_SIZE = 4800;
+export const FABRIC_EXTENT = 4800;
 /** World-radial distance over which the plane fades to alpha 0 (into the DOM bg). */
 const FADE_START = 1500;
 const FADE_END = 2300;
@@ -286,7 +286,7 @@ export interface FabricHandle {
  */
 export function createFabric(tier: FabricTier, shallow: string, deep: string): FabricHandle {
   const segments = FABRIC_SEGMENTS[tier];
-  const geometry = new THREE.PlaneGeometry(FABRIC_SIZE, FABRIC_SIZE, segments, segments);
+  const geometry = new THREE.PlaneGeometry(FABRIC_EXTENT, FABRIC_EXTENT, segments, segments);
   geometry.rotateX(-Math.PI / 2); // XY plane → XZ ground plane (normal +y)
 
   const wellData: THREE.Vector4[] = [];

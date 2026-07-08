@@ -40,10 +40,11 @@ import {
 import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
 import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
 import { createFrameStats, type FrameStatsAccumulator } from './graph3d/frameStats';
-import { createFabric, MAX_WELLS, type FabricHandle, type FabricTier } from './graph3d/fabric';
+import { createFabric, packWells, MAX_WELLS, FABRIC_EXTENT, type FabricHandle, type FabricTier } from './graph3d/fabric';
 import { nodeAnomaly, makeAnomalyRing } from './graph3d/anomaly';
 import { settleShouldRun } from './graph3d/settle';
 import { createFlashLimiter, type FlashLimiter } from './graph3d/flashLimiter';
+import { createParticleField, type ParticleField } from './graph3d/particles';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
@@ -321,6 +322,8 @@ export function Graph3DView({ onContextFailed }: Props) {
   const prevErrorNodesRef = useRef<Set<string>>(new Set());
   /** Seed the error set on the first health pass so pre-existing errors don't burst. */
   const healthSeededRef = useRef(false);
+  /** Ambient gravity-dust field (rich tier only); its existence == "particles active". */
+  const particleFieldRef = useRef<ParticleField | null>(null);
 
   const [ready, setReady] = useState(false);
   const [wire, setWire] = useState<WireDraft | null>(null);
@@ -391,27 +394,40 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, []);
 
   /**
-   * Ensure the settle driver is animating idle-time ripples. Idempotent (no-op if
-   * already running). It NEVER starts while playback/audio owns the frame — that
-   * mutual exclusion (graph3d/settle.ts) is what keeps "exactly one render per
-   * frame". The driver renders each tick and self-stops once every ripple has
-   * decayed, restoring the dirty-flag idle sleep.
+   * Ensure the idle animator is running while there is idle-time animation to do —
+   * live ripples decaying and/or ambient gravity dust (rich tier). Idempotent
+   * (no-op if already running). It NEVER starts while playback/audio owns the
+   * frame — that mutual exclusion (graph3d/settle.ts) is what keeps "exactly one
+   * render per frame". While the tab is hidden it stays armed but skips the draw
+   * (no GPU burn), and it self-stops once nothing needs animating, restoring the
+   * dirty-flag idle sleep.
    */
   const wakeSettle = useCallback(() => {
     if (settleDriverRef.current?.running()) return;
     const s = useStudio.getState();
-    if (!settleShouldRun({ decayActive: true, playing: s.transport.playing, audioRunning: s.audio.running })) return;
+    const decayActive = particleFieldRef.current != null || (fabricRef.current?.ripplesAlive(performance.now()) ?? false);
+    if (!settleShouldRun({ decayActive, playing: s.transport.playing, audioRunning: s.audio.running })) return;
+    let last = performance.now();
     settleDriverRef.current = createPlaybackDriver(
       () => {
         const t = threeRef.current;
-        const fab = fabricRef.current;
-        if (!t || !fab) return false;
+        if (!t) return false;
         const now = performance.now();
-        const alive = fab.tickRipples(now);
+        const dt = (now - last) / 1000;
+        last = now;
+        const pf = particleFieldRef.current;
+        const fab = fabricRef.current;
+        // Hidden tab: stay armed only if something still needs animating, but skip
+        // the GPU draw entirely (R4 — no rendering into an invisible window).
+        if (typeof document !== 'undefined' && document.hidden) {
+          return pf != null || (fab ? fab.ripplesAlive(now) : false);
+        }
+        if (pf) pf.advance(dt);
+        const rAlive = fab ? fab.tickRipples(now) : false;
         t.renderer.render(t.scene, t.camera);
         t.cssRenderer.render(t.scene, t.camera);
         recordFrame();
-        return alive; // keep going while ripples live; false → stop (idle sleep)
+        return pf != null || rAlive; // ambient dust keeps it alive; else stop when ripples die
       },
       {
         requestFrame: (cb) => requestAnimationFrame(cb),
@@ -603,6 +619,8 @@ export function Graph3DView({ onContextFailed }: Props) {
         flushRef.current?.cancel();
         settleDriverRef.current?.stop();
         settleDriverRef.current = null;
+        particleFieldRef.current?.dispose();
+        particleFieldRef.current = null;
         orbsRef.current.clear();
         // Ghost/anchor overlays are disposed by the scene traversal below (their
         // geometries/materials live under the scene); just drop the id maps.
@@ -759,6 +777,9 @@ export function Graph3DView({ onContextFailed }: Props) {
         clampWarnedRef.current = false;
       }
     }
+    // Rebuild the gravity-dust grid from the same (home) wells so the particles
+    // fall toward the current mass distribution. Rich tier only (field non-null).
+    particleFieldRef.current?.setWells(packWells(workflow.nodes).wells);
     requestRender();
   }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender, graph3dEffects, health]);
 
@@ -794,6 +815,33 @@ export function Graph3DView({ onContextFailed }: Props) {
       requestRender();
     };
   }, [ready, graph3dEffects, requestRender]);
+
+  // ---- ambient gravity dust (Phase 3): particles fall toward mass wells --------
+  // Heaviest layer → RICH tier only, and never under reduced motion. When present
+  // it drives a continuous idle loop (the deliberate trade for ambient particles),
+  // visibility-gated so a hidden tab draws nothing. Disposed on tier/flag change.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    particleFieldRef.current?.dispose();
+    particleFieldRef.current = null;
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (graph3dEffects !== 'rich' || reduced) { requestRender(); return; }
+    // Warm stardust — pops against the cool cyan/violet liquid metal so the dust
+    // reads as stars streaming into the gravity wells rather than blending in.
+    const field = createParticleField(1600, FABRIC_EXTENT, '#FFE7B8');
+    field.setWells(packWells(useStudio.getState().workflow.nodes).wells);
+    t.scene.add(field.points);
+    particleFieldRef.current = field;
+    requestRender();
+    wakeSettle(); // start the ambient idle loop
+    return () => {
+      particleFieldRef.current?.dispose();
+      particleFieldRef.current = null;
+      requestRender();
+    };
+  }, [ready, graph3dEffects, requestRender, wakeSettle]);
 
   // ---- event ripples: a fabric wave when a node NEWLY errors (Phase 2C) ------
   // Diffs the node-attributed ERROR set across health commits; each newly-errored
@@ -832,7 +880,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     if (transportPlaying || audioRunning) {
       settleDriverRef.current?.stop();
       settleDriverRef.current = null;
-    } else if (fabricRef.current?.ripplesAlive(performance.now())) {
+    } else if (particleFieldRef.current != null || fabricRef.current?.ripplesAlive(performance.now())) {
       wakeSettle();
     }
   }, [transportPlaying, audioRunning, wakeSettle]);
@@ -1243,6 +1291,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       localT = nextT;
       applyPlaybackFrame(active, localT);
       fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
+      particleFieldRef.current?.advance(dt); // ambient dust drifts on the playback frame too
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();
@@ -1362,15 +1411,20 @@ export function Graph3DView({ onContextFailed }: Props) {
   useEffect(() => {
     if (!ready || !audioRunning) return;
     let raf = 0;
+    let lastTick = performance.now();
     const tick = () => {
       const t = threeRef.current;
       const s = useStudio.getState();
       // Stop if audio ended or motion playback took over (mutual exclusion).
       if (!t || !s.audio.running || s.transport.playing) return;
+      const nowT = performance.now();
+      const dt = (nowT - lastTick) / 1000;
+      lastTick = nowT;
       const bands = scaleBands(computeBands(readAudioFrequency()), s.audio.sensitivity);
       const reaction = applyAudio(bands, s.audio.mapping);
       applyAudioFrame(reaction);
-      fabricRef.current?.tickRipples(performance.now()); // ripples animate on the audio frame
+      fabricRef.current?.tickRipples(nowT); // ripples animate on the audio frame
+      particleFieldRef.current?.advance(dt); // ambient dust drifts on the audio frame too
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();
@@ -1808,12 +1862,16 @@ export function Graph3DView({ onContextFailed }: Props) {
           className="btn"
           type="button"
           aria-pressed={graph3dEffects !== 'off'}
-          onClick={() => updateAppSettings({ graph3dEffects: graph3dEffects === 'off' ? 'standard' : 'off' })}
+          onClick={() => updateAppSettings({
+            graph3dEffects: graph3dEffects === 'off' ? 'standard' : graph3dEffects === 'rich' ? 'off' : 'rich',
+          })}
           title={graph3dEffects === 'off'
-            ? 'Gravity fabric off — turn on (mass warps the spacetime grid)'
-            : 'Gravity fabric on — turn off'}
+            ? 'Spacetime off — click for the liquid-metal fabric (mass warps it)'
+            : graph3dEffects === 'rich'
+              ? 'Spacetime + gravity dust on — click to turn off'
+              : 'Liquid-metal fabric on — click to add gravity dust'}
         >
-          Fabric {graph3dEffects === 'off' ? 'Off' : 'On'}
+          Spacetime {graph3dEffects === 'off' ? 'Off' : graph3dEffects === 'rich' ? 'Rich' : 'On'}
         </button>
         <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
           Duplicate
