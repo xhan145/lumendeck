@@ -41,6 +41,7 @@ import { createFlushScheduler, type FlushScheduler } from './graph3d/flushSchedu
 import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
 import { createFrameStats, type FrameStatsAccumulator } from './graph3d/frameStats';
 import { createFabric, MAX_WELLS, type FabricHandle, type FabricTier } from './graph3d/fabric';
+import { nodeAnomaly, makeAnomalyRing } from './graph3d/anomaly';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
@@ -122,6 +123,10 @@ interface OrbEntry {
   ringT: number;
   /** Gradient+accent signature of the current material tint (skip no-op updates). */
   tintKey: string;
+  /** Palette-breaking health outline ring (constellation anomaly encoding). */
+  anomalyRing: THREE.Mesh | null;
+  /** Anomaly level the current ring was built for ('' = none) — skip no-op rebuilds. */
+  anomalyKey: string;
 }
 
 /** Gradient stops for weightless kinds: a neutral slate orb. */
@@ -231,6 +236,10 @@ export function Graph3DView({ onContextFailed }: Props) {
   const graph3dStyle = useStudio((s) => s.appSettings.graph3dStyle ?? 'orbs');
   const graph3dEffects = useStudio((s) => s.appSettings.graph3dEffects ?? 'off');
   const showDiagnostics = useStudio((s) => s.appSettings.showDiagnostics);
+  // Health drives the anomaly outline encoding. Recomputed on every workflow
+  // commit (a new array), so this coincides with the workflow subscription — no
+  // extra re-render churn — but keeps the anomaly rings live on shelf changes too.
+  const health = useStudio((s) => s.health);
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   const selectNode = useStudio((s) => s.selectNode);
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
@@ -643,7 +652,7 @@ export function Graph3DView({ onContextFailed }: Props) {
           sphere.userData.nodeId = node.id;
           group.add(sphere);
           t.orbGroup.add(group);
-          entry = { group, material, ring: null, ringT: -1, tintKey };
+          entry = { group, material, ring: null, ringT: -1, tintKey, anomalyRing: null, anomalyKey: '' };
           orbs.set(node.id, entry);
         } else if (entry.tintKey !== tintKey) {
           updateOrbMaterial(entry.material, stops, accent);
@@ -662,6 +671,24 @@ export function Graph3DView({ onContextFailed }: Props) {
           }
           entry.ringT = ringT;
         }
+        // Anomaly outline (constellation encoding): a palette-breaking ring for a
+        // node with a health error/warning, gated on the effects flag. Additive to
+        // the value-ring above — the existing tint/ring/position paths are untouched.
+        // The node chip's icon+text carries the same signal (never color alone).
+        const anomaly = graph3dEffects === 'off' ? null : nodeAnomaly(node.id, health);
+        const anomalyKey = anomaly ?? '';
+        if (entry.anomalyKey !== anomalyKey) {
+          if (entry.anomalyRing) {
+            entry.group.remove(entry.anomalyRing);
+            disposeObject3D(entry.anomalyRing);
+            entry.anomalyRing = null;
+          }
+          if (anomaly) {
+            entry.anomalyRing = makeAnomalyRing(ORB_RADIUS, anomaly);
+            entry.group.add(entry.anomalyRing);
+          }
+          entry.anomalyKey = anomalyKey;
+        }
         const c = orbWorldCenter(node);
         entry.group.position.set(c.x, c.y, c.z);
       }
@@ -672,6 +699,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       t.orbGroup.remove(entry.group);
       entry.material.dispose();
       if (entry.ring) disposeObject3D(entry.ring); // shared sphere geometry survives
+      if (entry.anomalyRing) disposeObject3D(entry.anomalyRing);
       orbs.delete(id);
     }
     // Fabric wells track graph mass. Refresh here (this effect already re-runs on
@@ -687,7 +715,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       }
     }
     requestRender();
-  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender]);
+  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender, graph3dEffects, health]);
 
   // ---- gravity fabric lifecycle (constellation GPU overhaul, First Slice) ----
   // Own Group beside the GridHelpers; constructed only when the flag is on, at

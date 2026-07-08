@@ -9,7 +9,7 @@
  */
 
 /** A rendered visual layer that must justify itself with a data source. */
-export type EncodingLayer = 'fabric';
+export type EncodingLayer = 'fabric' | 'anomaly';
 
 export interface EncodingEntry {
   /** Stable id (also the human-facing name in the legend). */
@@ -31,6 +31,13 @@ export const ENCODINGS: readonly EncodingEntry[] = [
     datum: 'weightT(primaryWeight(kind, params))',
     channel: 'fabric well depth + sigma',
     layer: 'fabric',
+    alwaysOn: true,
+  },
+  {
+    id: 'anomaly',
+    datum: 'health: HealthIssue[] attributed by nodeId (core/health.ts)',
+    channel: 'palette-breaking orb outline ring (red error / amber warning)',
+    layer: 'anomaly',
     alwaysOn: true,
   },
 ];

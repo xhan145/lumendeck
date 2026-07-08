@@ -23,18 +23,22 @@ describe('appSettings graph3dEffects', () => {
 });
 
 describe('encoding registry (hard rule: no layer without a datum)', () => {
-  it('seeds exactly the mass→fabric-well encoding', () => {
-    expect(ENCODINGS).toHaveLength(1);
-    const mass = ENCODINGS[0];
-    expect(mass.id).toBe('mass');
-    expect(mass.layer).toBe('fabric');
-    expect(mass.datum).toContain('weightT');
-    expect(mass.alwaysOn).toBe(true);
+  it('registers the mass→fabric-well and anomaly encodings, each naming its datum', () => {
+    const mass = ENCODINGS.find((e) => e.id === 'mass');
+    expect(mass?.layer).toBe('fabric');
+    expect(mass?.datum).toContain('weightT');
+    expect(mass?.alwaysOn).toBe(true);
+    const anomaly = ENCODINGS.find((e) => e.id === 'anomaly');
+    expect(anomaly?.layer).toBe('anomaly');
+    expect(anomaly?.datum).toContain('health');
+    // Every entry must name a non-empty datum (the hard rule).
+    for (const e of ENCODINGS) expect(e.datum.length).toBeGreaterThan(0);
   });
 
   it('passes when every active layer is registered', () => {
-    expect(unregisteredLayers(['fabric'])).toEqual([]);
+    expect(unregisteredLayers(['fabric', 'anomaly'])).toEqual([]);
     expect(registeredLayers().has('fabric')).toBe(true);
+    expect(registeredLayers().has('anomaly')).toBe(true);
   });
 
   it('flags an active layer with no registry entry', () => {
