@@ -4,9 +4,11 @@ import type { BackendSettings } from '../turboForge/backends/backendSettings';
 import type { GalleryItem } from './store';
 import type { PromptToolsState } from './promptTools';
 import type { MotionState } from '../core/motion/types';
-import type { FieldState } from './field';
+import type { FieldState, PersistedFieldState } from './field';
+import { BUILTIN_FIELD_PRESETS } from '../core/field/presets';
 import type { AudioState } from './audio';
 import type { AudioMapping } from '../core/audio/mapping';
+import type { CreativeState } from './creative';
 
 const KEY = 'lumendeck.v1';
 
@@ -36,12 +38,14 @@ export interface PersistedState {
    */
   motion?: MotionState;
   /**
-   * Render-Space Ghost Controller slice: ghosts + anchors. Optional so state saved
-   * before this feature still loads — a missing slice hydrates to an empty one
-   * (see hydrateField). The transient per-ghost `recording` flag is never resumed
-   * across a reload (it is reset on hydrate).
+   * Render-Space Ghost Controller slice: ghosts + anchors, plus field presets
+   * (custom + edited/visible builtins), hidden-builtin ids, and the active preset
+   * id. Optional so state saved before this feature still loads — a missing slice
+   * hydrates to the seeded default (see hydrateField). The transient per-ghost
+   * `recording` flag and ALL preview fields (image/pending/streaming) are never
+   * persisted.
    */
-  field?: FieldState;
+  field?: PersistedFieldState;
   /**
    * Audio Reactivity slice — ONLY the editable `mapping` + `sensitivity`.
    * Optional so state saved before this feature still loads (missing -> the
@@ -49,6 +53,13 @@ export interface PersistedState {
    * are NEVER persisted, so a reload never auto-listens to the microphone.
    */
   audio?: { mapping?: AudioMapping; sensitivity?: number };
+  /**
+   * Creative OS slice: project brains + creative recipes + active project.
+   * Optional so state saved before this feature still loads (missing -> the
+   * seeded empty state via hydrateCreative). Brains reference renders by
+   * gallery id only, so this stays light enough for the localStorage projection.
+   */
+  creative?: CreativeState;
 }
 
 /**
@@ -69,6 +80,8 @@ export function persistedProjection(state: {
   field?: FieldState;
   /** Optional so callers assembled before this slice existed still typecheck. */
   audio?: AudioState;
+  /** Optional so callers assembled before this slice existed still typecheck. */
+  creative?: CreativeState;
 }): PersistedState {
   return {
     workflow: state.workflow,
@@ -79,19 +92,29 @@ export function persistedProjection(state: {
     promptTools: state.promptTools,
     // Persist authored clips only; the ephemeral transport playhead is dropped.
     motion: state.motion,
-    // Persist ghosts + anchors, but STRIP the transient per-ghost `recording`
-    // flag so toggling Record on/off never churns persistence (and a reload never
-    // resumes a mid-recording session — hydrateField also resets it defensively).
+    // Persist ghosts + anchors + presets, but STRIP the transient per-ghost
+    // `recording` flag (so toggling Record never churns persistence) and ALL
+    // preview fields (image/pending/streaming are transient). `hiddenBuiltinIds`
+    // = builtins the user deleted (absent from the runtime list) so they stay
+    // hidden across a reload while genuinely-new builtins still re-seed.
     field: state.field
       ? {
           ghosts: state.field.ghosts.map(({ recording: _recording, ...g }) => ({ ...g, recording: false })),
           anchors: state.field.anchors,
+          presets: state.field.presets,
+          hiddenBuiltinIds: BUILTIN_FIELD_PRESETS.map((b) => b.id).filter(
+            (id) => !state.field!.presets.some((p) => p.id === id),
+          ),
+          activePresetId: state.field.activePresetId ?? null,
         }
       : { ghosts: [], anchors: [] },
     // Persist ONLY the mapping + sensitivity; the live running/source are dropped
     // so a reload never resumes listening (mic privacy) and toggling Start/Stop
     // never churns persistence.
     audio: state.audio ? { mapping: state.audio.mapping, sensitivity: state.audio.sensitivity } : undefined,
+    // Creative OS: brains + recipes are light metadata (renders referenced by id
+    // only), safe for the localStorage projection.
+    creative: state.creative,
   };
 }
 

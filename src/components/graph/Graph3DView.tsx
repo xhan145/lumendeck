@@ -63,6 +63,9 @@ import { readAudioFrequency } from '../../state/store';
 import { computeBands, scaleBands } from '../../core/audio/bands';
 import { applyAudio, type AudioReaction } from '../../core/audio/mapping';
 import { AudioPanel } from '../audio/AudioPanel';
+import { FieldPresetsPanel } from '../field/FieldPresetsPanel';
+import { StreamingPreview } from '../field/StreamingPreview';
+import { createSettleDebouncer, normalizePos, type SettleDebouncer } from '../field/fieldPreview';
 
 interface Props {
   /** Called when the WebGL context cannot be created (workspace falls back to 2D). */
@@ -170,6 +173,8 @@ const GHOST_OPACITY = 0.45;
 const RING_BAND = { inner: 12, outer: 16 };
 /** Screen px of vertical Shift-drag that spans the full field Y axis. */
 const GHOST_SHIFT_PX_PER_AXIS = 320;
+/** Quiet period (ms) a ghost drag must settle before a streaming preview fires. */
+const PREVIEW_SETTLE_MS = 150;
 /** Anchor marker radius (world units). */
 const ANCHOR_RADIUS = 14;
 
@@ -265,6 +270,13 @@ export function Graph3DView({ onContextFailed }: Props) {
   const stopGhostRecording = useStudio((s) => s.stopGhostRecording);
   const updateParam = useStudio((s) => s.updateParam);
 
+  // ---- Field-preset streaming preview (v0.19) -----------------------------
+  // Subscribe to the streaming toggle so the settle-debouncer is cancelled the
+  // moment streaming is turned off. The hot drag path reads the live field slice
+  // via useStudio.getState() (freshest, no stale closure); the store owns the
+  // supersede token + the actual low-res render (runFieldPreview).
+  const streamingEnabled = useStudio((s) => s.field.streamingEnabled);
+
   const viewportRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeCtx | null>(null);
   const flushRef = useRef<FlushScheduler | null>(null);
@@ -282,6 +294,16 @@ export function Graph3DView({ onContextFailed }: Props) {
   const ghostChipAnchorsRef = useRef(new Map<string, HTMLDivElement>());
   const ringDragRef = useRef<RingDrag | null>(null);
   const ghostDragRef = useRef<GhostDrag | null>(null);
+  /**
+   * Trailing settle-debounce for the streaming preview: each ghost-drag position
+   * is pushed here; when the drag settles ~150ms one low-res preview fires. The
+   * ref persists across renders and is cancelled on drag-end / streaming-off /
+   * unmount so no stray render is queued and no timer leaks.
+   */
+  const previewDebouncerRef = useRef<SettleDebouncer | null>(null);
+  if (!previewDebouncerRef.current) {
+    previewDebouncerRef.current = createSettleDebouncer(PREVIEW_SETTLE_MS);
+  }
   const onContextFailedRef = useRef(onContextFailed);
   onContextFailedRef.current = onContextFailed;
   /** The starvation-proof playback driver (rAF + timer fallback); null when not playing. */
@@ -411,6 +433,46 @@ export function Graph3DView({ onContextFailed }: Props) {
     const p = profileFor(nodeId);
     return !!(p.x || p.y || p.z);
   }, [profileFor]);
+
+  // ---- streaming preview: feed ghost-drag positions to the settle-debouncer -
+  /**
+   * Debounced live preview while dragging a ghost through an ACTIVE preset's
+   * field. Reads the live field slice (streaming on + a preset selected) each
+   * call so a mid-drag toggle is honored; the store's runFieldPreview mints the
+   * supersede token, so a newer settled position discards a stale in-flight one.
+   * No-op (and never queues a render) unless streaming is on with a preset.
+   */
+  const streamPreview = useCallback((pos: { x: number; y: number; z: number }) => {
+    const field = useStudio.getState().field;
+    if (!field.streamingEnabled || !field.activePresetId) return;
+    previewDebouncerRef.current?.push(normalizePos(pos), (p) => {
+      void useStudio.getState().runFieldPreview(p);
+    });
+  }, []);
+
+  /**
+   * Ghost drag ended: cancel any pending settle (spec: cancel on drag end) and,
+   * when streaming is armed, fire ONE immediate preview at the resting position
+   * so the final spot is always previewed even after a fast release. The store's
+   * supersede token makes this safe against any race with an earlier settle.
+   */
+  const endStreamPreview = useCallback((pos: { x: number; y: number; z: number }) => {
+    previewDebouncerRef.current?.cancel();
+    const field = useStudio.getState().field;
+    if (!field.streamingEnabled || !field.activePresetId) return;
+    void useStudio.getState().runFieldPreview(normalizePos(pos));
+  }, []);
+
+  // Turning streaming OFF must immediately drop any pending preview render.
+  useEffect(() => {
+    if (!streamingEnabled) previewDebouncerRef.current?.cancel();
+  }, [streamingEnabled]);
+
+  // Unmount: cancel the debouncer so no settle timer outlives the 3D view.
+  useEffect(() => {
+    const deb = previewDebouncerRef.current;
+    return () => deb?.cancel();
+  }, []);
 
   // ---- three.js lifecycle -------------------------------------------------
   useEffect(() => {
@@ -1421,13 +1483,17 @@ export function Graph3DView({ onContextFailed }: Props) {
           // Vertical Shift-drag maps screen-y delta to field Y (up = higher).
           const dyPx = gd.shiftStartY - e.clientY; // up is positive
           const nextY = clamp(gd.shiftStartFieldY + dyPx / GHOST_SHIFT_PX_PER_AXIS, 0, 1);
-          moveGhost(gd.id, { ...ghost.pos, y: nextY });
+          const nextPos = { ...ghost.pos, y: nextY };
+          moveGhost(gd.id, nextPos);
+          streamPreview(nextPos); // debounced low-res preview (no-op unless armed)
         } else {
           const p = workflowPointAt(e.clientX, e.clientY, gd.planeZ);
           if (p) {
             const w = worldFromCanvas(p, gd.planeZ);
             const pos = worldToFieldPos({ x: w.x, y: origin.y, z: w.z }, origin);
-            moveGhost(gd.id, { x: pos.x, y: ghost.pos.y, z: pos.z });
+            const nextPos = { x: pos.x, y: ghost.pos.y, z: pos.z };
+            moveGhost(gd.id, nextPos);
+            streamPreview(nextPos); // debounced low-res preview (no-op unless armed)
           }
         }
       }
@@ -1476,8 +1542,15 @@ export function Graph3DView({ onContextFailed }: Props) {
     if (ringDragRef.current || ghostDragRef.current) {
       const el = e.currentTarget as HTMLElement;
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      const gd = ghostDragRef.current;
       ringDragRef.current = null;
       ghostDragRef.current = null;
+      // A ghost drag ended: settle the streaming preview on the resting spot.
+      if (gd) {
+        const g = useStudio.getState().field.ghosts.find((x) => x.id === gd.id);
+        if (g) endStreamPreview(g.pos);
+        else previewDebouncerRef.current?.cancel();
+      }
       return;
     }
     const act = interactionRef.current;
@@ -1512,6 +1585,8 @@ export function Graph3DView({ onContextFailed }: Props) {
     dragRef.current = null;
     ringDragRef.current = null;
     ghostDragRef.current = null;
+    // Pointer left the viewport mid-drag: drop any pending streaming preview.
+    previewDebouncerRef.current?.cancel();
     setWire(null);
   };
 
@@ -1705,6 +1780,8 @@ export function Graph3DView({ onContextFailed }: Props) {
         {motionPanelOpen ? (
           <div id="graph-motion-body" className="motion-panel-body scroll">
             <MotionTimeline />
+            <FieldPresetsPanel />
+            <StreamingPreview />
             <AudioPanel />
             <EvolvePanel />
           </div>
