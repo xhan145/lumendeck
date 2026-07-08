@@ -86,14 +86,64 @@ import { AudioEngine, type AudioSource } from '../audio/engine';
 import { computeBands, scaleBands } from '../core/audio/bands';
 import { audioToClip, type AudioSample } from '../core/audio/audioToClip';
 import type { AudioMapping } from '../core/audio/mapping';
+import {
+  buildAnalysisContext,
+  hydrateCreative,
+  type CreativeState,
+} from './creative';
+import { downloadJson } from '../bridge/exporter';
+import type {
+  CreativeRecipe,
+  EntropyAction,
+  EntropyItem,
+  ProjectBrain,
+  ProjectType,
+} from '../core/creative/types';
+import {
+  createBrain,
+  recordEvent,
+  touchOpened,
+  updateBrain,
+  buildProjectFile,
+  type ProjectFile,
+} from '../core/creative/brain';
+import {
+  applyRecipe as applyRecipePure,
+  createRecipe as createRecipePure,
+  duplicateRecipe as duplicateRecipePure,
+  markRecipeUsed,
+  updateRecipe as updateRecipePure,
+} from '../core/creative/recipes';
+import { buildReleasePack, packExportRecord, type ReleasePack } from '../core/creative/releasePack';
+import { generateSocialCaptions } from '../core/creative/generate';
+import { creativeId } from '../core/creative/brain';
+import type { AnalysisContext } from '../core/creative/context';
+import { buildCreativeDemo } from '../data/creativeDemo';
 
 // Re-export the field slice types so the 3D UI (Graph3DView) imports them from the
 // store alongside the actions, matching the motion slice's ergonomics.
 export type { Ghost, Anchor, FieldState } from './field';
 export type { AudioState } from './audio';
 export type { AudioSource } from '../audio/engine';
+export type { CreativeState } from './creative';
 
-export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance' | 'support' | 'credits';
+export type ViewId =
+  | 'mission'
+  | 'projects'
+  | 'recipes'
+  | 'entropy'
+  | 'proof'
+  | 'guide'
+  | 'recipe'
+  | 'graph'
+  | 'shelf'
+  | 'gallery'
+  | 'controls'
+  | 'settings'
+  | 'diagnostics'
+  | 'performance'
+  | 'support'
+  | 'credits';
 
 export interface GalleryItem {
   id: string;
@@ -425,6 +475,45 @@ interface StudioState {
   restoreSnapshot(item: GalleryItem): void;
   loadWorkflowFile(file: LumenFile): void;
   applyTemplate(id: string): void;
+
+  /* -------------------------------------------------- Creative OS slice */
+  creative: CreativeState;
+  /** Live analysis context projected from gallery + brains + shelf. */
+  analysisContext(): AnalysisContext;
+  createProject(name: string, type: ProjectType): string;
+  updateProjectBrain(id: string, mutate: (b: ProjectBrain) => ProjectBrain): void;
+  deleteProject(id: string): void;
+  setActiveProject(id: string | null): void;
+  openProject(id: string): void;
+  /** Link the newest (or a specific) gallery render to a project. */
+  linkRenderToProject(projectId: string, galleryId: string): void;
+  unlinkRenderFromProject(projectId: string, galleryId: string): void;
+  addPromptToProject(projectId: string, text: string, negative?: string): void;
+  addAssetToProject(projectId: string, label: string, kind: ProjectBrain['assets'][number]['kind'], galleryId?: string): void;
+  repairProjectAsset(projectId: string, assetId: string, galleryId: string | null): void;
+  archiveProjectAsset(projectId: string, assetId: string): void;
+  addPublishedLink(projectId: string, label: string, url: string): void;
+  markProjectShipped(projectId: string): void;
+  generateProjectCaptions(projectId: string): void;
+  /** Assemble + download a release pack; records an export on the brain. Returns the pack (or null if project missing). */
+  buildProjectReleasePack(projectId: string): ReleasePack | null;
+  exportProjectFile(projectId: string): void;
+  importProjectFile(file: ProjectFile): void;
+
+  createCreativeRecipe(name: string): string;
+  updateCreativeRecipe(id: string, patch: Partial<CreativeRecipe>): void;
+  duplicateCreativeRecipe(id: string): void;
+  deleteCreativeRecipe(id: string): void;
+  /** Apply a recipe to the live workflow (prompt/negative/model/canvas). */
+  applyCreativeRecipe(id: string, subject: string): void;
+  /** Turn a render (or the live prompt, or an explicit prompt text) into a reusable recipe. */
+  promoteToRecipe(input: { galleryId?: string; name?: string; text?: string }): string;
+  linkRecipeToProject(projectId: string, recipeId: string): void;
+
+  /** Resolve one entropy finding via its recommended action. */
+  resolveEntropyItem(item: EntropyItem, action: EntropyAction): void;
+  setAiEnabled(on: boolean): void;
+  seedCreativeDemo(): void;
 }
 
 export const mockAdapter = new MockAdapter();
@@ -557,11 +646,12 @@ const initialField = hydrateField(persisted.field);
 const initialAudio = hydrateAudio(persisted.audio, initialWorkflow);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
+const initialCreative = hydrateCreative(persisted.creative);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
   ? 'controls'
   : initialAppSettings.startupBehavior === 'last-view' && initialAppSettings.lastView
     ? initialAppSettings.lastView
-    : 'guide';
+    : 'mission';
 
 export const useStudio = create<StudioState>((set, get) => {
   const commit = (wf: Workflow) =>
@@ -701,6 +791,12 @@ export const useStudio = create<StudioState>((set, get) => {
     return views;
   };
 
+  // ---- Creative OS helpers (terse pure list edits on the creative slice) ----
+  const setCreative = (patch: Partial<CreativeState>) => set({ creative: { ...get().creative, ...patch } });
+  const editBrain = (id: string, fn: (b: ProjectBrain) => ProjectBrain) =>
+    setCreative({ brains: get().creative.brains.map((b) => (b.id === id ? fn(b) : b)) });
+  const getBrain = (id: string): ProjectBrain | undefined => get().creative.brains.find((b) => b.id === id);
+
   return {
     workflow: initialWorkflow,
     shelf: DEMO_SHELF,
@@ -733,6 +829,7 @@ export const useStudio = create<StudioState>((set, get) => {
     collections: [],
     galleryReady: false,
     galleryDurable,
+    creative: initialCreative,
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
@@ -2042,6 +2139,311 @@ export const useStudio = create<StudioState>((set, get) => {
         commit(template.build());
         set({ selectedNodeId: null, view: 'recipe' });
       }
+    },
+
+    /* ------------------------------------------------ Creative OS actions */
+    analysisContext: () => buildAnalysisContext(get().gallery, get().creative.brains, get().shelf),
+
+    createProject: (name, type) => {
+      const brain = createBrain(name, type, new Date());
+      setCreative({ brains: [...get().creative.brains, brain], activeProjectId: brain.id });
+      return brain.id;
+    },
+
+    updateProjectBrain: (id, mutate) => {
+      setCreative({ brains: get().creative.brains.map((b) => (b.id === id ? mutate(b) : b)) });
+    },
+
+    deleteProject: (id) => {
+      const brains = get().creative.brains.filter((b) => b.id !== id);
+      const activeProjectId = get().creative.activeProjectId === id ? (brains[0]?.id ?? null) : get().creative.activeProjectId;
+      setCreative({ brains, activeProjectId });
+    },
+
+    setActiveProject: (id) => setCreative({ activeProjectId: id }),
+
+    openProject: (id) => {
+      editBrain(id, (b) => touchOpened(b, new Date()));
+      setCreative({ activeProjectId: id });
+      set({ view: 'projects' });
+    },
+
+    linkRenderToProject: (projectId, galleryId) => {
+      editBrain(projectId, (b) => {
+        if (b.renders.includes(galleryId)) return b;
+        return recordEvent({ ...b, renders: [...b.renders, galleryId] }, 'render-linked', 'Linked a render', new Date(), galleryId);
+      });
+    },
+
+    unlinkRenderFromProject: (projectId, galleryId) => {
+      editBrain(projectId, (b) =>
+        recordEvent({ ...b, renders: b.renders.filter((r) => r !== galleryId) }, 'render-unlinked', 'Unlinked a render', new Date(), galleryId),
+      );
+    },
+
+    addPromptToProject: (projectId, text, negative) => {
+      const prompt = { id: creativeId('pr'), text, negative, addedAt: new Date().toISOString() };
+      editBrain(projectId, (b) => recordEvent({ ...b, prompts: [...b.prompts, prompt] }, 'prompt-added', `Added prompt: ${text.slice(0, 32)}`, new Date(), prompt.id));
+    },
+
+    addAssetToProject: (projectId, label, kind, galleryId) => {
+      const asset = { id: creativeId('as'), label, kind, galleryId, status: 'ok' as const, addedAt: new Date().toISOString() };
+      editBrain(projectId, (b) => recordEvent({ ...b, assets: [...b.assets, asset] }, 'asset-linked', `Linked asset: ${label}`, new Date(), asset.id));
+    },
+
+    repairProjectAsset: (projectId, assetId, galleryId) => {
+      editBrain(projectId, (b) =>
+        recordEvent(
+          { ...b, assets: b.assets.map((a) => (a.id === assetId ? { ...a, status: 'ok' as const, galleryId: galleryId ?? a.galleryId } : a)) },
+          'asset-repaired',
+          'Repaired an asset link',
+          new Date(),
+          assetId,
+        ),
+      );
+    },
+
+    archiveProjectAsset: (projectId, assetId) => {
+      editBrain(projectId, (b) =>
+        recordEvent(
+          { ...b, assets: b.assets.map((a) => (a.id === assetId ? { ...a, archived: true } : a)) },
+          'asset-unlinked',
+          'Archived an asset',
+          new Date(),
+          assetId,
+        ),
+      );
+    },
+
+    addPublishedLink: (projectId, label, url) => {
+      const link = { id: creativeId('ln'), label, url, addedAt: new Date().toISOString() };
+      editBrain(projectId, (b) => recordEvent({ ...b, publishedLinks: [...b.publishedLinks, link] }, 'link-published', `Published: ${label}`, new Date(), link.id));
+    },
+
+    markProjectShipped: (projectId) => {
+      editBrain(projectId, (b) => updateBrain(b, { status: 'shipped' }, new Date()));
+    },
+
+    generateProjectCaptions: (projectId) => {
+      const b = getBrain(projectId);
+      if (!b) return;
+      const captions = generateSocialCaptions(b, 3);
+      editBrain(projectId, (brain) => updateBrain(brain, { copy: { ...brain.copy, socialCaptions: captions } }, new Date(), { type: 'captions-updated', label: 'Generated social captions' }));
+    },
+
+    buildProjectReleasePack: (projectId) => {
+      const b = getBrain(projectId);
+      if (!b) return null;
+      const now = new Date();
+      const ctx = buildAnalysisContext(get().gallery, get().creative.brains, get().shelf);
+      const gallery = get().gallery;
+      const resolveRender = (galleryId: string) => {
+        const item = gallery.find((g) => g.id === galleryId);
+        if (!item) return null;
+        return { dataUrl: item.dataUrl, extension: item.extension || (item.mediaType === 'video' ? 'mp4' : 'png') };
+      };
+      const pack = buildReleasePack(b, ctx, resolveRender, now);
+      // Download the assembled ZIP (browser/Tauri webview blob-anchor path).
+      try {
+        if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined') {
+          const bytes = new Uint8Array(pack.zip);
+          const blob = new Blob([bytes], { type: 'application/zip' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${pack.folderName}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+      } catch {
+        /* download is best-effort; the export is still recorded */
+      }
+      const record = packExportRecord(pack, now);
+      editBrain(projectId, (brain) => recordEvent({ ...brain, exports: [...brain.exports, record] }, 'export-built', `Built release pack (${pack.summary.present}/${pack.summary.total})`, now, record.id));
+      return pack;
+    },
+
+    exportProjectFile: (projectId) => {
+      const b = getBrain(projectId);
+      if (!b) return;
+      const file = buildProjectFile(b, get().creative.recipes, new Date());
+      downloadJson(file, `${b.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project'}.lumendeck.project.json`);
+    },
+
+    importProjectFile: (file) => {
+      const brains = get().creative.brains;
+      const existing = brains.findIndex((b) => b.id === file.brain.id);
+      const nextBrains = existing >= 0 ? brains.map((b, i) => (i === existing ? file.brain : b)) : [...brains, file.brain];
+      // Merge recipes the file carried (skip ids already present).
+      const have = new Set(get().creative.recipes.map((r) => r.id));
+      const newRecipes = file.recipes.filter((r) => !have.has(r.id));
+      setCreative({ brains: nextBrains, recipes: [...get().creative.recipes, ...newRecipes], activeProjectId: file.brain.id });
+      set({ view: 'projects' });
+    },
+
+    createCreativeRecipe: (name) => {
+      const recipe = createRecipePure(name, new Date());
+      setCreative({ recipes: [...get().creative.recipes, recipe] });
+      return recipe.id;
+    },
+
+    updateCreativeRecipe: (id, patch) => {
+      setCreative({ recipes: get().creative.recipes.map((r) => (r.id === id ? updateRecipePure(r, patch, new Date()) : r)) });
+    },
+
+    duplicateCreativeRecipe: (id) => {
+      const r = get().creative.recipes.find((x) => x.id === id);
+      if (!r) return;
+      setCreative({ recipes: [...get().creative.recipes, duplicateRecipePure(r, new Date())] });
+    },
+
+    deleteCreativeRecipe: (id) => {
+      setCreative({
+        recipes: get().creative.recipes.filter((r) => r.id !== id),
+        brains: get().creative.brains.map((b) => (b.recipes.includes(id) ? { ...b, recipes: b.recipes.filter((x) => x !== id) } : b)),
+      });
+    },
+
+    applyCreativeRecipe: (id, subject) => {
+      const recipe = get().creative.recipes.find((r) => r.id === id);
+      if (!recipe) return;
+      const app = applyRecipePure(recipe, subject);
+      const wf = get().workflow;
+      const promptNode = findNode(wf, 'prompt');
+      const modelNode = findNode(wf, 'model');
+      const canvasNode = findNode(wf, 'canvas');
+      if (promptNode) {
+        get().updateParam(promptNode.id, 'positive', app.prompt);
+        if (app.negativePrompt) get().updateParam(promptNode.id, 'negative', app.negativePrompt);
+      }
+      if (modelNode && app.modelId) get().updateParam(modelNode.id, 'assetId', app.modelId);
+      if (canvasNode) {
+        get().updateParam(canvasNode.id, 'width', app.canvas.width);
+        get().updateParam(canvasNode.id, 'height', app.canvas.height);
+      }
+      setCreative({ recipes: get().creative.recipes.map((r) => (r.id === id ? markRecipeUsed(r, new Date()) : r)) });
+      set({ view: 'recipe' });
+    },
+
+    promoteToRecipe: ({ galleryId, name, text }) => {
+      const now = new Date();
+      const wf = get().workflow;
+      // Explicit `text` (e.g. promoting a stored prompt) wins over the live graph.
+      let promptText = text ?? String(findNode(wf, 'prompt')?.params.positive ?? '');
+      let negative = String(findNode(wf, 'prompt')?.params.negative ?? '');
+      let modelId = String(findNode(wf, 'model')?.params.assetId ?? '');
+      let aspect: '16:9' | '1:1' | '9:16' = '1:1';
+      if (galleryId) {
+        const item = get().gallery.find((g) => g.id === galleryId);
+        if (item?.manifest) {
+          promptText = item.manifest.resolvedPrompt || item.manifest.prompt || promptText;
+          negative = item.manifest.negativePrompt || negative;
+          modelId = item.manifest.model?.id || modelId;
+          const c = item.manifest.canvas;
+          const r = c.width / Math.max(1, c.height);
+          aspect = Math.abs(r - 16 / 9) < 0.06 ? '16:9' : Math.abs(r - 9 / 16) < 0.06 ? '9:16' : '1:1';
+        }
+      }
+      const recipe = createRecipePure(name || 'Promoted recipe', now, {
+        promptTemplate: promptText,
+        negativePrompt: negative,
+        modelId,
+        aspectRatios: [aspect],
+      });
+      setCreative({ recipes: [...get().creative.recipes, recipe] });
+      return recipe.id;
+    },
+
+    linkRecipeToProject: (projectId, recipeId) => {
+      editBrain(projectId, (b) => {
+        if (b.recipes.includes(recipeId)) return b;
+        return recordEvent({ ...b, recipes: [...b.recipes, recipeId] }, 'recipe-linked', 'Linked a recipe', new Date(), recipeId);
+      });
+    },
+
+    resolveEntropyItem: (item, action) => {
+      const now = new Date();
+      switch (action) {
+        case 'delete':
+          if (item.ref && (item.kind === 'duplicate-render' || item.kind === 'unused-render' || item.kind === 'unlabeled-render')) {
+            get().removeGalleryItem(item.ref);
+          } else if (item.projectId && item.ref) {
+            editBrain(item.projectId, (b) => ({
+              ...b,
+              assets: b.assets.filter((a) => a.id !== item.ref),
+              prompts: b.prompts.filter((p) => p.id !== item.ref),
+              renders: b.renders.filter((r) => r !== item.ref),
+            }));
+          }
+          break;
+        case 'archive':
+          if (item.projectId && item.ref && item.kind !== 'unlabeled-render' && item.kind !== 'unused-render' && item.kind !== 'duplicate-render') {
+            editBrain(item.projectId, (b) => ({ ...b, assets: b.assets.map((a) => (a.id === item.ref ? { ...a, archived: true } : a)) }));
+          } else if (item.ref) {
+            // Gallery-global renders (unlabeled / unused / duplicate) have no project
+            // to archive into — tag them 'archived' so the finding clears on rescan.
+            void get().addTag(item.ref, 'archived');
+          }
+          break;
+        case 'retag':
+          if (item.ref) void get().addTag(item.ref, 'reviewed');
+          break;
+        case 'repair':
+          if (item.projectId && item.ref && item.kind === 'orphaned-render-link') {
+            editBrain(item.projectId, (b) => recordEvent({ ...b, renders: b.renders.filter((r) => r !== item.ref) }, 'render-unlinked', 'Removed a dead render link', now, item.ref));
+          } else if (item.projectId && item.ref) {
+            editBrain(item.projectId, (b) => recordEvent({ ...b, assets: b.assets.map((a) => (a.id === item.ref ? { ...a, status: 'ok' as const } : a)) }, 'asset-repaired', 'Marked asset repaired', now, item.ref));
+          }
+          break;
+        case 'promote-to-recipe':
+          if (item.ref && item.kind === 'unused-render') get().promoteToRecipe({ galleryId: item.ref });
+          else if (item.projectId && item.ref && item.kind === 'stale-prompt') {
+            const b = getBrain(item.projectId);
+            const p = b?.prompts.find((x) => x.id === item.ref);
+            if (p) get().promoteToRecipe({ name: `From: ${p.text.slice(0, 24)}`, text: p.text });
+          }
+          break;
+        case 'merge':
+          // Merge = keep the first duplicate, delete this one.
+          if (item.ref) get().removeGalleryItem(item.ref);
+          break;
+        case 'regenerate':
+          // Route the user to the graph to regenerate; deterministic engines can't render.
+          set({ view: 'graph' });
+          break;
+      }
+    },
+
+    setAiEnabled: (on) => setCreative({ aiEnabled: on }),
+
+    seedCreativeDemo: () => {
+      // Guard against a second seed (double-click / racing effect): once seeded,
+      // do nothing so demo renders can never be inserted into the gallery twice.
+      if (get().creative.seeded) return;
+      const now = new Date();
+      const { brains, recipes, renders } = buildCreativeDemo(now);
+      // Skip demo brains/recipes already present so re-seeding is idempotent.
+      const haveBrains = new Set(get().creative.brains.map((b) => b.id));
+      const haveRecipes = new Set(get().creative.recipes.map((r) => r.id));
+      const newBrains = brains.filter((b) => !haveBrains.has(b.id));
+      const newRecipes = recipes.filter((r) => !haveRecipes.has(r.id));
+      // Insert demo renders into the durable gallery so release-ready assets resolve.
+      // The .then re-checks the LIVE gallery by id (hydrateGallery may land first)
+      // so a render is never duplicated in the in-memory list.
+      void Promise.all(renders.map((r) => galleryStore.putRender(r).catch(() => {})))
+        .then(() => {
+          const present = new Set(get().gallery.map((g) => g.id));
+          const missing = renders.filter((r) => !present.has(r.id));
+          if (missing.length) set({ gallery: [...missing, ...get().gallery] });
+        });
+      setCreative({
+        brains: [...get().creative.brains, ...newBrains],
+        recipes: [...get().creative.recipes, ...newRecipes],
+        activeProjectId: newBrains[0]?.id ?? get().creative.activeProjectId,
+        seeded: true,
+      });
     },
   };
 });

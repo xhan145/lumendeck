@@ -166,6 +166,28 @@ export const Icon = {
       </>,
       p,
     ),
+  compass: (p?: IconProps) =>
+    svg(<><circle cx="12" cy="12" r="9" /><path d="m15.5 8.5-2 5-5 2 2-5 5-2z" /></>, p),
+  layers: (p?: IconProps) =>
+    svg(<><path d="M12 3 3 8l9 5 9-5-9-5z" /><path d="M3 13l9 5 9-5M3 16l9 5 9-5" /></>, p),
+  beaker: (p?: IconProps) =>
+    svg(<><path d="M9 3h6M10 3v6l-5 9a1.5 1.5 0 0 0 1.3 2.3h11.4A1.5 1.5 0 0 0 19 18l-5-9V3" /><path d="M7.5 14h9" /></>, p),
+  scatter: (p?: IconProps) =>
+    svg(<><path d="M4 4v16h16" /><circle cx="9" cy="14" r="1.3" /><circle cx="13" cy="9" r="1.3" /><circle cx="17" cy="13" r="1.3" /><circle cx="8" cy="8" r="1.3" /></>, p),
+  trophy: (p?: IconProps) =>
+    svg(<><path d="M7 4h10v4a5 5 0 0 1-10 0V4z" /><path d="M7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3M9 20h6M12 15v5" /></>, p),
+  target: (p?: IconProps) =>
+    svg(<><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" /><circle cx="12" cy="12" r="0.6" fill="currentColor" /></>, p),
+  wrench: (p?: IconProps) =>
+    svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.1L4 16.7 7.3 20l5.3-5.3a4 4 0 0 0 5.1-5.4l-2.4 2.4-2-2 2.4-2.4z" />, p),
+  clock: (p?: IconProps) =>
+    svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>, p),
+  link: (p?: IconProps) =>
+    svg(<><path d="M9 15l6-6" /><path d="M10.5 6.5 12 5a3.5 3.5 0 0 1 5 5l-1.5 1.5M13.5 17.5 12 19a3.5 3.5 0 0 1-5-5l1.5-1.5" /></>, p),
+  copy: (p?: IconProps) =>
+    svg(<><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></>, p),
+  edit: (p?: IconProps) =>
+    svg(<path d="M4 20h4L18.5 9.5a2 2 0 0 0-3-3L5 17v3zM13.5 6.5l3 3" />, p),
 };
 
 /** Glowing LumenDeck brand mark — two overlapping "deck" cards with a lit lens. */
