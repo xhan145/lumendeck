@@ -27,12 +27,17 @@ const SIGMA_MAX = 340;
 export const FABRIC_SEGMENTS = { minimal: 64, standard: 128, rich: 192 } as const;
 export type FabricTier = keyof typeof FABRIC_SEGMENTS;
 
-/** One gravity well: world xz, dip depth (world units), gaussian sigma. */
-export interface Well {
+/** The geometry of one gravity well — what the displacement math needs. */
+export interface WellShape {
   x: number;
   z: number;
   depth: number;
   sigma: number;
+}
+
+/** A packed well: geometry plus the node it encodes (for live-position tracking). */
+export interface Well extends WellShape {
+  nodeId: string;
 }
 
 /**
@@ -47,6 +52,7 @@ export function packWells(nodes: readonly WorkflowNode[]): { wells: Well[]; clam
     if (t == null) continue; // weightless kind → no well
     const c = orbWorldCenter(node);
     all.push({
+      nodeId: node.id,
       x: c.x,
       z: c.z,
       depth: t * DEPTH_SCALE,
@@ -63,7 +69,7 @@ export function packWells(nodes: readonly WorkflowNode[]): { wells: Well[]; clam
  * ≥0) at world (x, z) from the superposition of all wells. Exact same math the
  * GPU runs, so unit tests validate the visual field.
  */
-export function fabricDisplacement(x: number, z: number, wells: readonly Well[]): number {
+export function fabricDisplacement(x: number, z: number, wells: readonly WellShape[]): number {
   let disp = 0;
   for (const w of wells) {
     const dx = x - w.x;
@@ -146,6 +152,13 @@ export interface FabricHandle {
   readonly group: THREE.Group;
   /** Repack wells from the current graph + upload uniforms. Returns clamp state. */
   update(nodes: readonly WorkflowNode[]): { clamped: boolean };
+  /**
+   * Update well XZ from live orb positions. Playback/audio move orbs via direct
+   * scene mutation (no store commit), so the depressions must follow or they
+   * detach. `lookup` returns a node's live world xz, or undefined to keep its
+   * home xz. Depth + sigma are preserved from the last update().
+   */
+  syncLive(lookup: (nodeId: string) => { x: number; z: number } | undefined): void;
   /** Remove from parent + dispose geometry/material (idempotent). */
   dispose(): void;
 }
@@ -191,14 +204,27 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
   const group = new THREE.Group();
   group.add(mesh);
 
+  // The wells packed by the last update(), retained so syncLive can move their
+  // XZ to live orb positions while preserving depth/sigma and node identity.
+  let packed: Well[] = [];
+
   return {
     group,
     update(nodes) {
       const { wells, clamped } = packWells(nodes);
+      packed = wells;
       const arr = material.uniforms.uWells.value as THREE.Vector4[];
       for (let i = 0; i < wells.length; i++) arr[i].set(wells[i].x, wells[i].z, wells[i].depth, wells[i].sigma);
       material.uniforms.uWellCount.value = wells.length;
       return { clamped };
+    },
+    syncLive(lookup) {
+      const arr = material.uniforms.uWells.value as THREE.Vector4[];
+      for (let i = 0; i < packed.length; i++) {
+        const w = packed[i];
+        const live = lookup(w.nodeId);
+        arr[i].set(live ? live.x : w.x, live ? live.z : w.z, w.depth, w.sigma);
+      }
     },
     dispose() {
       group.parent?.remove(group);

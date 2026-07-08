@@ -134,3 +134,50 @@ describe('createFabric (THREE builder — no GL context needed for construction)
     expect(() => { fabric.dispose(); fabric.dispose(); }).not.toThrow();
   });
 });
+
+describe('fabric.syncLive (wells track live orb positions during overlays)', () => {
+  it('packs a nodeId per well', () => {
+    const { wells } = packWells([sampler('s1', 15), sampler('s2', 6)]);
+    expect(wells.map((w) => w.nodeId)).toEqual(['s1', 's2']);
+  });
+
+  it('moves matching wells to live positions, leaves others at home', () => {
+    const fabric = createFabric('minimal', '#34D6F4', '#7C3AED');
+    fabric.update([sampler('s1', 15), sampler('s2', 6)]);
+    const mat = (fabric.group.children[0] as import('three').Mesh).material as import('three').ShaderMaterial;
+    const arr = mat.uniforms.uWells.value as import('three').Vector4[];
+    const homeX1 = arr[0].x;
+    const homeZ2 = arr[1].y;
+    fabric.syncLive((id) => (id === 's1' ? { x: 999, z: 777 } : undefined));
+    expect(arr[0].x).toBe(999); // s1 moved to its live position
+    expect(arr[0].y).toBe(777);
+    expect(arr[0].x).not.toBe(homeX1);
+    expect(arr[1].y).toBe(homeZ2); // s2 has no live position → stays home
+    fabric.dispose();
+  });
+
+  it('preserves depth + sigma when syncing positions', () => {
+    const fabric = createFabric('minimal', '#34D6F4', '#7C3AED');
+    fabric.update([sampler('s1', 27)]);
+    const mat = (fabric.group.children[0] as import('three').Mesh).material as import('three').ShaderMaterial;
+    const arr = mat.uniforms.uWells.value as import('three').Vector4[];
+    const depth = arr[0].z;
+    const sigma = arr[0].w;
+    fabric.syncLive(() => ({ x: 10, z: 20 }));
+    expect(arr[0].z).toBe(depth); // depth (vec4.z) preserved
+    expect(arr[0].w).toBe(sigma); // sigma (vec4.w) preserved
+    fabric.dispose();
+  });
+
+  it('after a re-pack, syncLive falls back to fresh home positions', () => {
+    const fabric = createFabric('minimal', '#34D6F4', '#7C3AED');
+    fabric.update([sampler('s1', 15)]);
+    fabric.syncLive(() => ({ x: 500, z: 500 })); // move it away
+    fabric.update([sampler('s1', 15)]); // re-pack resets to home
+    const mat = (fabric.group.children[0] as import('three').Mesh).material as import('three').ShaderMaterial;
+    const arr = mat.uniforms.uWells.value as import('three').Vector4[];
+    fabric.syncLive(() => undefined); // no live position → home
+    expect(arr[0].x).not.toBe(500);
+    fabric.dispose();
+  });
+});

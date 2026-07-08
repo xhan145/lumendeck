@@ -981,6 +981,17 @@ export function Graph3DView({ onContextFailed }: Props) {
       const b = toOrb ? orbSurfacePoint(bAnchor, aAnchor, ORB_RADIUS) : bAnchor;
       updateWireLine(child as THREE.Line, a, b);
     }
+    // Fabric depressions follow the live orbs (playback/audio move orbs via
+    // direct scene mutation, no store commit) so wells never detach. On restore,
+    // orbs are back at home and this re-homes the wells for free. No-op if the
+    // fabric flag is off. Depth/sigma come from the last home re-pack.
+    const fab = fabricRef.current;
+    if (fab) {
+      fab.syncLive((nodeId) => {
+        const e = orbs.get(nodeId);
+        return e ? { x: e.group.position.x, z: e.group.position.z } : undefined;
+      });
+    }
   }, [graph3dStyle]);
 
   /** Apply one animated frame (positions, scale, tint, ring) to every orb. */
