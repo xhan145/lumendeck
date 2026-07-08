@@ -39,6 +39,8 @@ import {
 } from './graph3d/ghostGizmo';
 import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
 import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
+import { createFrameStats, type FrameStatsAccumulator } from './graph3d/frameStats';
+import { createFabric, MAX_WELLS, type FabricHandle, type FabricTier } from './graph3d/fabric';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
@@ -227,6 +229,8 @@ export function Graph3DView({ onContextFailed }: Props) {
   const workflow = useStudio((s) => s.workflow);
   const selectedNodeId = useStudio((s) => s.selectedNodeId);
   const graph3dStyle = useStudio((s) => s.appSettings.graph3dStyle ?? 'orbs');
+  const graph3dEffects = useStudio((s) => s.appSettings.graph3dEffects ?? 'off');
+  const showDiagnostics = useStudio((s) => s.appSettings.showDiagnostics);
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   const selectNode = useStudio((s) => s.selectNode);
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
@@ -286,6 +290,17 @@ export function Graph3DView({ onContextFailed }: Props) {
   onContextFailedRef.current = onContextFailed;
   /** The starvation-proof playback driver (rAF + timer fallback); null when not playing. */
   const playbackDriver = useRef<PlaybackDriver | null>(null);
+  // ---- constellation GPU overhaul (First Slice: gravity fabric) ------------
+  /** Pure frame-time instrument, fed at every render site; published to the overlay at ~2Hz. */
+  const frameStatsRef = useRef<FrameStatsAccumulator | null>(null);
+  if (!frameStatsRef.current) frameStatsRef.current = createFrameStats();
+  const lastFrameTsRef = useRef(0);
+  const lastStatsPublishRef = useRef(0);
+  const statsElRef = useRef<HTMLDivElement | null>(null);
+  /** The gravity-fabric layer (own Group); null when the effects flag is off. */
+  const fabricRef = useRef<FabricHandle | null>(null);
+  /** True once we've warned about >MAX_WELLS nodes (warn once, not per reconcile). */
+  const clampWarnedRef = useRef(false);
 
   const [ready, setReady] = useState(false);
   const [wire, setWire] = useState<WireDraft | null>(null);
@@ -312,6 +327,28 @@ export function Graph3DView({ onContextFailed }: Props) {
    * with the store when the tab is hidden or the browser only produces frames
    * on demand (headless), where rAF alone would starve forever.
    */
+  /**
+   * Sample one rendered frame into the pure frameStats accumulator and, at ~2Hz,
+   * publish a one-line readout to the diagnostics overlay imperatively (no React
+   * re-render). Called right after every renderer.render pair (flush + loops).
+   * Closes over refs only, so it is safe to reference inside the flush body below.
+   */
+  const recordFrame = useCallback(() => {
+    const t = threeRef.current;
+    const fs = frameStatsRef.current;
+    if (!t || !fs) return;
+    const now = performance.now();
+    const prev = lastFrameTsRef.current;
+    lastFrameTsRef.current = now;
+    if (prev > 0) fs.sample(now - prev);
+    fs.setDrawCalls(t.renderer.info.render.calls);
+    if (statsElRef.current && now - lastStatsPublishRef.current > 500) {
+      lastStatsPublishRef.current = now;
+      const s = fs.read();
+      statsElRef.current.textContent = `${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)}ms · worst ${s.worstMs.toFixed(1)}ms · ${s.drawCalls} draws`;
+    }
+  }, []);
+
   if (!flushRef.current) {
     flushRef.current = createFlushScheduler(
       () => {
@@ -319,6 +356,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         if (!t) return;
         t.renderer.render(t.scene, t.camera);
         t.cssRenderer.render(t.scene, t.camera);
+        recordFrame();
       },
       {
         requestFrame: (cb) => requestAnimationFrame(cb),
@@ -636,8 +674,49 @@ export function Graph3DView({ onContextFailed }: Props) {
       if (entry.ring) disposeObject3D(entry.ring); // shared sphere geometry survives
       orbs.delete(id);
     }
+    // Fabric wells track graph mass. Refresh here (this effect already re-runs on
+    // any workflow/selection change); no-op when the fabric flag is off.
+    const fab = fabricRef.current;
+    if (fab) {
+      const { clamped } = fab.update(workflow.nodes);
+      if (clamped && !clampWarnedRef.current) {
+        console.warn(`LumenDeck: more than ${MAX_WELLS} weighted nodes — the fabric shows the ${MAX_WELLS} deepest wells.`);
+        clampWarnedRef.current = true;
+      } else if (!clamped) {
+        clampWarnedRef.current = false;
+      }
+    }
     requestRender();
   }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender]);
+
+  // ---- gravity fabric lifecycle (constellation GPU overhaul, First Slice) ----
+  // Own Group beside the GridHelpers; constructed only when the flag is on, at
+  // the tier's density; disposed on flag-off / tier-change / unmount. Wells are
+  // refreshed by the orb-reconcile effect above (graph changes), redrawn via the
+  // dirty-flag scheduler — there is deliberately NO animation loop here.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    fabricRef.current?.dispose();
+    fabricRef.current = null;
+    if (graph3dEffects === 'off') { requestRender(); return; }
+    const host = viewportRef.current ?? document.documentElement;
+    const shallow = resolveCssColor('var(--ld-cyan)', host);
+    const deep = resolveCssColor('var(--ld-violet)', host);
+    const tier: FabricTier = graph3dEffects === 'minimal' ? 'minimal' : graph3dEffects === 'rich' ? 'rich' : 'standard';
+    const fabric = createFabric(tier, shallow, deep);
+    fabric.update(useStudio.getState().workflow.nodes);
+    t.scene.add(fabric.group);
+    fabricRef.current = fabric;
+    clampWarnedRef.current = false;
+    requestRender();
+    return () => {
+      fabricRef.current?.dispose();
+      fabricRef.current = null;
+      requestRender();
+    };
+  }, [ready, graph3dEffects, requestRender]);
 
   // ---- ghost chip DOM anchors (value chip + toolbar + intensity slider) -----
   const getGhostChipAnchor = useCallback((id: string): HTMLDivElement => {
@@ -1035,6 +1114,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyPlaybackFrame(active, localT);
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
+      recordFrame();
       if (ended) {
         // Non-looping clip reached the end: settle the playhead AT the end (so
         // the scrubber shows the final frame) and pause. Cleanup restores idle.
@@ -1092,6 +1172,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyPlaybackFrame(clip, s.transport.t);
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
+      recordFrame();
     });
     return unsub;
   }, [ready, applyPlaybackFrame]);
@@ -1160,6 +1241,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyAudioFrame(reaction);
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
+      recordFrame();
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -1547,6 +1629,8 @@ export function Graph3DView({ onContextFailed }: Props) {
     >
       <div ref={viewportRef} className="graph3d-viewport" />
 
+      {showDiagnostics && <div className="graph3d-stats" ref={statsElRef} aria-hidden="true" />}
+
       <CollapsiblePalette>
         <div className="graph-palette-head">
           <strong>Nodes</strong>
@@ -1587,6 +1671,17 @@ export function Graph3DView({ onContextFailed }: Props) {
             : 'Showing full cards — switch to gradient orbs'}
         >
           Orbs ⇄ Cards
+        </button>
+        <button
+          className="btn"
+          type="button"
+          aria-pressed={graph3dEffects !== 'off'}
+          onClick={() => updateAppSettings({ graph3dEffects: graph3dEffects === 'off' ? 'standard' : 'off' })}
+          title={graph3dEffects === 'off'
+            ? 'Gravity fabric off — turn on (mass warps the spacetime grid)'
+            : 'Gravity fabric on — turn off'}
+        >
+          Fabric {graph3dEffects === 'off' ? 'Off' : 'On'}
         </button>
         <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
           Duplicate
