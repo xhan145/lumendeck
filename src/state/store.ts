@@ -573,22 +573,24 @@ const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
 
 export const useStudio = create<StudioState>((set, get) => {
   /**
-   * Commit a workflow mutation (+ recompute health). Pass `touchId` to also stamp
-   * that node's luminosity activity in the SAME set — one store notification, so
-   * the heavy 3D reconcile runs once per edit, not twice.
+   * Commit a workflow mutation (+ recompute health), stamping luminosity activity
+   * in the SAME set. A node counts as "active" when it is brand-new OR its params
+   * object reference changed — updateNodeParam preserves the reference of every
+   * UNCHANGED node, so this diff catches EVERY edit path (inspector, ghost drags,
+   * presets, history, bake, rack edits, …) and node creation, without threading
+   * ids through each action. Move/connect/layout leave params refs intact, so
+   * they are correctly NOT treated as activity.
    */
-  const commit = (wf: Workflow, touchId?: string) =>
-    set({
-      workflow: wf,
-      health: checkHealth(wf, get().shelf),
-      turboLastPlan: null,
-      turboError: null,
-      ...(touchId ? { nodeMeta: touchNode(get().nodeMeta, touchId, Date.now()) } : {}),
-    });
-
-  /** Stamp a node's activity (luminosity glow) when the id isn't known until after commit. */
-  const touchNodeMeta = (nodeId: string) =>
-    set({ nodeMeta: touchNode(get().nodeMeta, nodeId, Date.now()) });
+  const commit = (wf: Workflow) => {
+    const prev = new Map(get().workflow.nodes.map((n) => [n.id, n]));
+    const now = Date.now();
+    let nodeMeta = get().nodeMeta;
+    for (const n of wf.nodes) {
+      const before = prev.get(n.id);
+      if (!before || before.params !== n.params) nodeMeta = touchNode(nodeMeta, n.id, now);
+    }
+    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null, nodeMeta });
+  };
 
   // ---- Motion helpers (keep the actions terse; all pure list edits) ----
   const setMotion = (motion: MotionState) => set({ motion });
@@ -789,25 +791,22 @@ export const useStudio = create<StudioState>((set, get) => {
         const node = get().workflow.nodes.find((n) => n.id === nodeId);
         if (node?.kind === 'model') userPinnedModel = true;
       }
-      commit(updateNodeParam(get().workflow, nodeId, paramId, value), nodeId);
+      commit(updateNodeParam(get().workflow, nodeId, paramId, value)); // commit's diff stamps this node
     },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
     addCapsule: (kind, x, y) => {
       const node = createNode(kind, x, y);
-      commit(addNode(get().workflow, node), node.id);
+      commit(addNode(get().workflow, node)); // commit's diff stamps the new node
       set({ selectedNodeId: node.id });
     },
     duplicateCapsule: (nodeId) => {
       const before = get().workflow;
       const next = duplicateNode(before, nodeId);
-      commit(next);
+      commit(next); // commit's diff stamps the new copy
       const copy = next.nodes.find((node) => !before.nodes.some((old) => old.id === node.id));
-      if (copy) {
-        touchNodeMeta(copy.id);
-        set({ selectedNodeId: copy.id });
-      }
+      if (copy) set({ selectedNodeId: copy.id });
     },
     autoLayoutGraph: () => commit(autoLayout(get().workflow)),
     removeCapsule: (nodeId) => {

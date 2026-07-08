@@ -27,18 +27,32 @@ export function touchNode(map: NodeMetaMap, nodeId: string, now: number): NodeMe
 }
 
 /**
- * Ensure every current node id has an entry (seeds createdAt/lastActiveAt for
- * ones we've never seen). Returns the same reference when nothing was missing.
+ * Ensure every current node id has an entry. Seeded nodes are COLD
+ * (lastActiveAt = 0) so pre-existing / loaded / migrated nodes do NOT glow — only
+ * nodes genuinely touched this session light up. Returns the same reference when
+ * nothing was missing.
  */
 export function seedNodeMeta(map: NodeMetaMap, nodeIds: readonly string[], now: number): NodeMetaMap {
   let out = map;
   for (const id of nodeIds) {
     if (!out[id]) {
       if (out === map) out = { ...map };
-      out[id] = { createdAt: now, lastActiveAt: now };
+      out[id] = { createdAt: now, lastActiveAt: 0 };
     }
   }
   return out;
+}
+
+/** Keep only entries whose id is in `nodeIds` (bounds persisted size — drops orphans). */
+export function pruneNodeMeta(map: NodeMetaMap, nodeIds: readonly string[]): NodeMetaMap {
+  const keep = new Set(nodeIds);
+  const out: NodeMetaMap = {};
+  let dropped = false;
+  for (const [id, meta] of Object.entries(map)) {
+    if (keep.has(id)) out[id] = meta;
+    else dropped = true;
+  }
+  return dropped ? out : map;
 }
 
 /** Activity glow in 0..1 at `now` (exponential half-life decay); 0 for unknown nodes. */

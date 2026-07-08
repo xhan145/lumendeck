@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   touchNode,
   seedNodeMeta,
+  pruneNodeMeta,
   emissiveFor,
   hydrateNodeMeta,
   LUMINOSITY_HALF_LIFE_MS,
@@ -26,16 +27,32 @@ describe('touchNode', () => {
 });
 
 describe('seedNodeMeta', () => {
-  it('adds missing node ids and leaves existing ones untouched', () => {
+  it('adds missing node ids COLD (lastActiveAt 0 → no glow) and leaves existing ones untouched', () => {
     const base = touchNode({}, 'a', 1000);
     const seeded = seedNodeMeta(base, ['a', 'b'], 9000);
     expect(seeded.a).toEqual({ createdAt: 1000, lastActiveAt: 1000 }); // unchanged
-    expect(seeded.b).toEqual({ createdAt: 9000, lastActiveAt: 9000 }); // seeded
+    expect(seeded.b).toEqual({ createdAt: 9000, lastActiveAt: 0 }); // seeded cold
+    // At a realistic wall-clock (many half-lives past lastActiveAt=0) a seeded node does not glow.
+    expect(emissiveFor(seeded.b, LUMINOSITY_HALF_LIFE_MS * 20)).toBeCloseTo(0, 4);
   });
 
   it('returns the SAME reference when nothing is missing', () => {
     const base = touchNode({}, 'a', 1000);
     expect(seedNodeMeta(base, ['a'], 9000)).toBe(base);
+  });
+});
+
+describe('pruneNodeMeta', () => {
+  it('drops entries whose id is not in the live node set', () => {
+    const map = { a: { createdAt: 1, lastActiveAt: 1 }, gone: { createdAt: 2, lastActiveAt: 2 } };
+    const pruned = pruneNodeMeta(map, ['a']);
+    expect(pruned.a).toBeDefined();
+    expect(pruned.gone).toBeUndefined();
+  });
+
+  it('returns the SAME reference when nothing is orphaned', () => {
+    const map = { a: { createdAt: 1, lastActiveAt: 1 } };
+    expect(pruneNodeMeta(map, ['a', 'b'])).toBe(map);
   });
 });
 

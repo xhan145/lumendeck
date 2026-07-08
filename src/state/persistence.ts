@@ -7,7 +7,7 @@ import type { MotionState } from '../core/motion/types';
 import type { FieldState } from './field';
 import type { AudioState } from './audio';
 import type { AudioMapping } from '../core/audio/mapping';
-import type { NodeMetaMap } from './nodeMeta';
+import { pruneNodeMeta, type NodeMetaMap } from './nodeMeta';
 
 const KEY = 'lumendeck.v1';
 
@@ -82,7 +82,9 @@ export function persistedProjection(state: {
   return {
     workflow: state.workflow,
     rackPresets: state.rackPresets,
-    nodeMeta: state.nodeMeta,
+    // Prune node-meta to the LIVE node set so deleted/reset nodes' entries can't
+    // accumulate unbounded in localStorage across a long-lived project.
+    nodeMeta: state.nodeMeta ? pruneNodeMeta(state.nodeMeta, state.workflow.nodes.map((n) => n.id)) : undefined,
     // gallery is intentionally omitted — renders live in IndexedDB now.
     backendSettings: state.backendSettings,
     appSettings: state.appSettings,

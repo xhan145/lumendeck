@@ -399,13 +399,19 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, []);
 
   /**
-   * Fade every orb's luminosity glow from live activity recency at `now` (ms).
-   * Called each frame by the animating loops so the glow decays smoothly while
-   * anything is animating; the orb-reconcile snapshots it otherwise (idle-safe).
+   * Fade every orb's luminosity glow from live activity recency. Called each frame
+   * by the animating loops so the glow decays smoothly while anything animates; the
+   * orb-reconcile snapshots it otherwise (idle-safe). MUST use Date.now() — the
+   * store stamps lastActiveAt with Date.now(), and mixing in performance.now()
+   * would make age hugely negative and pin every orb to full glow. Forces 0 when
+   * the effects flag is off so flag-off playback/audio renders identically to before.
    */
-  const updateEmissive = useCallback((now: number) => {
-    const meta = useStudio.getState().nodeMeta;
-    for (const [id, entry] of orbsRef.current) setOrbEmissive(entry.material, emissiveFor(meta[id], now));
+  const updateEmissive = useCallback(() => {
+    const s = useStudio.getState();
+    const off = (s.appSettings.graph3dEffects ?? 'off') === 'off';
+    const now = Date.now();
+    const meta = s.nodeMeta;
+    for (const [id, entry] of orbsRef.current) setOrbEmissive(entry.material, off ? 0 : emissiveFor(meta[id], now));
   }, []);
 
   /**
@@ -439,7 +445,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         }
         if (pf) pf.advance(dt);
         const rAlive = fab ? fab.tickRipples(now) : false;
-        updateEmissive(now);
+        updateEmissive();
         t.renderer.render(t.scene, t.camera);
         t.cssRenderer.render(t.scene, t.camera);
         recordFrame();
@@ -1262,8 +1268,9 @@ export function Graph3DView({ onContextFailed }: Props) {
       entry.group.scale.setScalar(1);
     }
     routeWiresLive();
+    updateEmissive(); // reset the glow snapshot so a stopped loop leaves no stranded emissive
     requestRender();
-  }, [capsuleAccent, routeWiresLive, requestRender]);
+  }, [capsuleAccent, routeWiresLive, requestRender, updateEmissive]);
 
   useEffect(() => {
     if (!ready || !transportPlaying) return;
@@ -1312,7 +1319,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyPlaybackFrame(active, localT);
       fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the playback frame too
-      updateEmissive(now); // luminosity fades smoothly during playback
+      updateEmissive(); // luminosity fades smoothly during playback
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();
@@ -1446,7 +1453,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyAudioFrame(reaction);
       fabricRef.current?.tickRipples(nowT); // ripples animate on the audio frame
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the audio frame too
-      updateEmissive(nowT); // luminosity fades smoothly during audio
+      updateEmissive(); // luminosity fades smoothly during audio
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();
