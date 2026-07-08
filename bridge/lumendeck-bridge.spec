@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['numpy', 'cv2', 'PIL', 'torch', 'torchvision', 'diffusers', 'transformers', 'scipy', 'controlnet_aux', 'timm', 'safetensors', 'huggingface_hub', 'accelerate', 'kornia', 'einops', 'matplotlib'],
+    excludes=['numpy', 'cv2', 'PIL', 'torch', 'torchvision', 'diffusers', 'transformers', 'scipy', 'controlnet_aux', 'timm', 'safetensors', 'huggingface_hub', 'accelerate', 'kornia', 'einops', 'matplotlib', 'imageio', 'imageio_ffmpeg', 'av'],
     noarchive=False,
     optimize=0,
 )
