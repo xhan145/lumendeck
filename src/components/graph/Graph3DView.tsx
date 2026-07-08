@@ -42,6 +42,8 @@ import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './gr
 import { createFrameStats, type FrameStatsAccumulator } from './graph3d/frameStats';
 import { createFabric, MAX_WELLS, type FabricHandle, type FabricTier } from './graph3d/fabric';
 import { nodeAnomaly, makeAnomalyRing } from './graph3d/anomaly';
+import { settleShouldRun } from './graph3d/settle';
+import { createFlashLimiter, type FlashLimiter } from './graph3d/flashLimiter';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
@@ -310,6 +312,15 @@ export function Graph3DView({ onContextFailed }: Props) {
   const fabricRef = useRef<FabricHandle | null>(null);
   /** True once we've warned about >MAX_WELLS nodes (warn once, not per reconcile). */
   const clampWarnedRef = useRef(false);
+  /** Short-lived rAF+timer driver animating idle-time ripples until they settle. */
+  const settleDriverRef = useRef<PlaybackDriver | null>(null);
+  /** Shared WCAG flash limiter across all ripple sources (≤3 onsets / rolling sec). */
+  const flashLimiterRef = useRef<FlashLimiter | null>(null);
+  if (!flashLimiterRef.current) flashLimiterRef.current = createFlashLimiter();
+  /** Node ids that carried a health ERROR at the last commit (new-error diffing). */
+  const prevErrorNodesRef = useRef<Set<string>>(new Set());
+  /** Seed the error set on the first health pass so pre-existing errors don't burst. */
+  const healthSeededRef = useRef(false);
 
   const [ready, setReady] = useState(false);
   const [wire, setWire] = useState<WireDraft | null>(null);
@@ -378,6 +389,38 @@ export function Graph3DView({ onContextFailed }: Props) {
   const requestRender = useCallback(() => {
     flushRef.current?.request();
   }, []);
+
+  /**
+   * Ensure the settle driver is animating idle-time ripples. Idempotent (no-op if
+   * already running). It NEVER starts while playback/audio owns the frame — that
+   * mutual exclusion (graph3d/settle.ts) is what keeps "exactly one render per
+   * frame". The driver renders each tick and self-stops once every ripple has
+   * decayed, restoring the dirty-flag idle sleep.
+   */
+  const wakeSettle = useCallback(() => {
+    if (settleDriverRef.current?.running()) return;
+    const s = useStudio.getState();
+    if (!settleShouldRun({ decayActive: true, playing: s.transport.playing, audioRunning: s.audio.running })) return;
+    settleDriverRef.current = createPlaybackDriver(
+      () => {
+        const t = threeRef.current;
+        const fab = fabricRef.current;
+        if (!t || !fab) return false;
+        const now = performance.now();
+        const alive = fab.tickRipples(now);
+        t.renderer.render(t.scene, t.camera);
+        t.cssRenderer.render(t.scene, t.camera);
+        recordFrame();
+        return alive; // keep going while ripples live; false → stop (idle sleep)
+      },
+      {
+        requestFrame: (cb) => requestAnimationFrame(cb),
+        cancelFrame: (id) => cancelAnimationFrame(id),
+        setTimer: (cb, ms) => setTimeout(cb, ms) as unknown as number,
+        clearTimer: (id) => clearTimeout(id),
+      },
+    );
+  }, [recordFrame]);
 
   const applyCamera = useCallback(() => {
     const t = threeRef.current;
@@ -558,6 +601,8 @@ export function Graph3DView({ onContextFailed }: Props) {
         host.removeEventListener('wheel', onWheel);
         host.removeEventListener('scroll', resetScroll, true);
         flushRef.current?.cancel();
+        settleDriverRef.current?.stop();
+        settleDriverRef.current = null;
         orbsRef.current.clear();
         // Ghost/anchor overlays are disposed by the scene traversal below (their
         // geometries/materials live under the scene); just drop the id maps.
@@ -726,6 +771,8 @@ export function Graph3DView({ onContextFailed }: Props) {
     if (!ready) return;
     const t = threeRef.current;
     if (!t) return;
+    settleDriverRef.current?.stop();
+    settleDriverRef.current = null;
     fabricRef.current?.dispose();
     fabricRef.current = null;
     if (graph3dEffects === 'off') { requestRender(); return; }
@@ -740,11 +787,55 @@ export function Graph3DView({ onContextFailed }: Props) {
     clampWarnedRef.current = false;
     requestRender();
     return () => {
+      settleDriverRef.current?.stop();
+      settleDriverRef.current = null;
       fabricRef.current?.dispose();
       fabricRef.current = null;
       requestRender();
     };
   }, [ready, graph3dEffects, requestRender]);
+
+  // ---- event ripples: a fabric wave when a node NEWLY errors (Phase 2C) ------
+  // Diffs the node-attributed ERROR set across health commits; each newly-errored
+  // node fires ONE ripple at its orb, through the shared flash limiter (≤3/sec).
+  // Reduced motion + flag-off suppress ripples — the persistent anomaly ring is
+  // the static equivalent. Pre-existing errors at mount are seeded, never bursted.
+  useEffect(() => {
+    if (!ready) return;
+    const cur = new Set<string>();
+    for (const h of health) if (h.nodeId && h.severity === 'error') cur.add(h.nodeId);
+    const prev = prevErrorNodesRef.current;
+    prevErrorNodesRef.current = cur;
+    if (!healthSeededRef.current) { healthSeededRef.current = true; return; } // seed, no burst
+    const fab = fabricRef.current;
+    if (!fab || graph3dEffects === 'off') return;
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) return;
+    const now = performance.now();
+    const fl = flashLimiterRef.current!;
+    let pushed = false;
+    for (const nodeId of cur) {
+      if (prev.has(nodeId)) continue; // already errored — not a NEW event
+      const node = workflow.nodes.find((n) => n.id === nodeId);
+      if (!node) continue;
+      if (!fl.tryAdd(now)) break; // flash budget spent this second
+      const c = orbWorldCenter(node);
+      fab.pushRipple(c.x, c.z, now);
+      pushed = true;
+    }
+    if (pushed) wakeSettle();
+  }, [ready, health, workflow, graph3dEffects, wakeSettle]);
+
+  // Playback/audio own the frame → stop the settle driver (double-render safety).
+  // Returning to idle with a ripple still alive → resume settling it.
+  useEffect(() => {
+    if (transportPlaying || audioRunning) {
+      settleDriverRef.current?.stop();
+      settleDriverRef.current = null;
+    } else if (fabricRef.current?.ripplesAlive(performance.now())) {
+      wakeSettle();
+    }
+  }, [transportPlaying, audioRunning, wakeSettle]);
 
   // ---- ghost chip DOM anchors (value chip + toolbar + intensity slider) -----
   const getGhostChipAnchor = useCallback((id: string): HTMLDivElement => {
@@ -1151,6 +1242,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       });
       localT = nextT;
       applyPlaybackFrame(active, localT);
+      fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();
@@ -1278,6 +1370,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       const bands = scaleBands(computeBands(readAudioFrequency()), s.audio.sensitivity);
       const reaction = applyAudio(bands, s.audio.mapping);
       applyAudioFrame(reaction);
+      fabricRef.current?.tickRipples(performance.now()); // ripples animate on the audio frame
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
       recordFrame();

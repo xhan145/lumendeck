@@ -81,6 +81,60 @@ export function fabricDisplacement(x: number, z: number, wells: readonly WellSha
   return disp;
 }
 
+// ---- Event ripples (transient waves fired by events, e.g. a new anomaly) ---
+
+/** Max simultaneous ripple events (uniform array length). */
+export const MAX_RIPPLES = 8;
+/** Crest expansion speed (world units / second). */
+const RIPPLE_SPEED = 720;
+/** Time-decay constant (seconds); amplitude ≈ e^-1 after this. */
+const RIPPLE_TAU = 0.5;
+/** Radial half-width of the ring crest (world units). */
+const RIPPLE_WIDTH = 130;
+/** Default crest height (world units). */
+export const RIPPLE_AMP = 46;
+/** A ripple is dead once its age exceeds this (seconds) — ~e^-3.6 amplitude. */
+export const RIPPLE_LIFETIME = 1.8;
+
+/** One ripple event: world xz origin, wall-clock start (ms), crest height. */
+export interface Ripple {
+  x: number;
+  z: number;
+  t0: number;
+  amp: number;
+}
+
+/** Age (seconds) of a ripple at time `now` (ms). */
+export function rippleAge(ripple: Ripple, now: number): number {
+  return (now - ripple.t0) / 1000;
+}
+
+/** True while a ripple is still within its lifetime at `now`. */
+export function rippleAlive(ripple: Ripple, now: number): boolean {
+  const age = rippleAge(ripple, now);
+  return age >= 0 && age <= RIPPLE_LIFETIME;
+}
+
+/**
+ * CPU mirror of the vertex-shader ripple term: total UPWARD offset (world units,
+ * ≥0) at world (x, z) from all live ripples at time `now` (ms). Each ripple is a
+ * gaussian ring crest at radius SPEED·age, fading with e^(-age/TAU). Exact same
+ * math the shader runs (which receives the pre-computed age), so tests validate it.
+ */
+export function rippleDisplacement(x: number, z: number, ripples: readonly Ripple[], now: number): number {
+  let lift = 0;
+  for (const rp of ripples) {
+    const age = rippleAge(rp, now);
+    if (age < 0 || age > RIPPLE_LIFETIME) continue;
+    const dx = x - rp.x;
+    const dz = z - rp.z;
+    const r = Math.sqrt(dx * dx + dz * dz);
+    const ring = r - RIPPLE_SPEED * age;
+    lift += rp.amp * Math.exp(-age / RIPPLE_TAU) * Math.exp(-(ring * ring) / (2 * RIPPLE_WIDTH * RIPPLE_WIDTH));
+  }
+  return lift;
+}
+
 // ---- THREE builder (three-only; construction needs no GL context) ----------
 
 /** Plane extent (world units) — matches the main neon grid so it reads as ground. */
@@ -95,12 +149,17 @@ const CONTOUR_SPACING = 26;
 // extension flag needed. three injects #version, precision, position, and the
 // model/projection matrices; we declare only our own in/out + uniforms.
 const FABRIC_VERTEX_SHADER = /* glsl */ `
-  uniform vec4 uWells[${MAX_WELLS}];   // xy = world xz, z = depth, w = sigma
+  uniform vec4 uWells[${MAX_WELLS}];     // xy = world xz, z = depth, w = sigma
   uniform int uWellCount;
+  uniform vec4 uRipples[${MAX_RIPPLES}]; // xy = world xz, z = age (s), w = amp
+  uniform int uRippleCount;
+  uniform float uRippleSpeed;
+  uniform float uRippleTau;
+  uniform float uRippleWidth;
   out float vDisp;
   out vec2 vWorldXZ;
   void main() {
-    vec3 p = position;                 // plane laid flat: p.x, p.z are world xz
+    vec3 p = position;                   // plane laid flat: p.x, p.z are world xz
     float disp = 0.0;
     for (int i = 0; i < ${MAX_WELLS}; i++) {
       if (i >= uWellCount) break;
@@ -111,7 +170,22 @@ const FABRIC_VERTEX_SHADER = /* glsl */ `
       float sigma = max(w.w, 1.0);
       disp += w.z * exp(-r2 / (2.0 * sigma * sigma));
     }
+    // Event ripples: gaussian ring crests expanding at uRippleSpeed, fading over
+    // uRippleTau. They RAISE the fabric (opposite sign to wells) so a disturbance
+    // reads as a wave passing over the depressions. Age is precomputed on the CPU.
+    float lift = 0.0;
+    for (int j = 0; j < ${MAX_RIPPLES}; j++) {
+      if (j >= uRippleCount) break;
+      vec4 rp = uRipples[j];
+      float age = rp.z;
+      float rx = p.x - rp.x;
+      float rz = p.z - rp.y;
+      float r = sqrt(rx * rx + rz * rz);
+      float ring = r - uRippleSpeed * age;
+      lift += rp.w * exp(-age / uRippleTau) * exp(-(ring * ring) / (2.0 * uRippleWidth * uRippleWidth));
+    }
     p.y -= disp;
+    p.y += lift;
     vDisp = disp;
     vWorldXZ = vec2(p.x, p.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
@@ -159,6 +233,19 @@ export interface FabricHandle {
    * home xz. Depth + sigma are preserved from the last update().
    */
   syncLive(lookup: (nodeId: string) => { x: number; z: number } | undefined): void;
+  /**
+   * Enqueue an event ripple centered at world (x, z), starting at `now` (ms).
+   * Drops the oldest if the queue is full. `amp` defaults to RIPPLE_AMP.
+   */
+  pushRipple(x: number, z: number, now: number, amp?: number): void;
+  /**
+   * Repack the live ripples' ages into the uniforms at `now` (ms), culling dead
+   * ones. Returns true while any ripple is still animating — the "decay active"
+   * signal the settle driver keeps rendering on.
+   */
+  tickRipples(now: number): boolean;
+  /** True if any ripple is still alive at `now` (ms), without mutating the queue. */
+  ripplesAlive(now: number): boolean;
   /** Remove from parent + dispose geometry/material (idempotent). */
   dispose(): void;
 }
@@ -177,6 +264,9 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
   const wellData: THREE.Vector4[] = [];
   for (let i = 0; i < MAX_WELLS; i++) wellData.push(new THREE.Vector4(0, 0, 0, 1));
 
+  const rippleData: THREE.Vector4[] = [];
+  for (let i = 0; i < MAX_RIPPLES; i++) rippleData.push(new THREE.Vector4(0, 0, 0, 0));
+
   const material = new THREE.ShaderMaterial({
     vertexShader: FABRIC_VERTEX_SHADER,
     fragmentShader: FABRIC_FRAGMENT_SHADER,
@@ -193,6 +283,11 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
       uContourSpacing: { value: CONTOUR_SPACING },
       uFadeStart: { value: FADE_START },
       uFadeEnd: { value: FADE_END },
+      uRipples: { value: rippleData },
+      uRippleCount: { value: 0 },
+      uRippleSpeed: { value: RIPPLE_SPEED },
+      uRippleTau: { value: RIPPLE_TAU },
+      uRippleWidth: { value: RIPPLE_WIDTH },
     },
   });
 
@@ -207,6 +302,8 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
   // The wells packed by the last update(), retained so syncLive can move their
   // XZ to live orb positions while preserving depth/sigma and node identity.
   let packed: Well[] = [];
+  // Live event ripples (FIFO, capped at MAX_RIPPLES); ages repacked each tick.
+  const ripples: Ripple[] = [];
 
   return {
     group,
@@ -225,6 +322,26 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
         const live = lookup(w.nodeId);
         arr[i].set(live ? live.x : w.x, live ? live.z : w.z, w.depth, w.sigma);
       }
+    },
+    pushRipple(x, z, now, amp = RIPPLE_AMP) {
+      ripples.push({ x, z, t0: now, amp });
+      if (ripples.length > MAX_RIPPLES) ripples.shift(); // drop the oldest
+    },
+    tickRipples(now) {
+      // Cull dead ripples, then pack (x, z, age, amp) for the survivors.
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        if (!rippleAlive(ripples[i], now)) ripples.splice(i, 1);
+      }
+      const arr = material.uniforms.uRipples.value as THREE.Vector4[];
+      for (let i = 0; i < ripples.length; i++) {
+        const rp = ripples[i];
+        arr[i].set(rp.x, rp.z, rippleAge(rp, now), rp.amp);
+      }
+      material.uniforms.uRippleCount.value = ripples.length;
+      return ripples.length > 0;
+    },
+    ripplesAlive(now) {
+      return ripples.some((rp) => rippleAlive(rp, now));
     },
     dispose() {
       group.parent?.remove(group);
