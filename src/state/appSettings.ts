@@ -7,6 +7,7 @@ export type StartupBehavior = 'guide' | 'last-view' | 'controls';
 export type VramSafetyMode = 'strict' | 'balanced' | 'off';
 export type GraphMode = '2d' | '3d';
 export type Graph3DStyle = 'orbs' | 'cards';
+export type Graph3DEffects = 'off' | 'minimal' | 'standard' | 'rich';
 
 export interface AppSettings {
   themeMode: ThemeMode;
@@ -49,6 +50,13 @@ export interface AppSettings {
    * and additive: when unset, Graph3DView defaults to 'orbs'.
    */
   graph3dStyle?: Graph3DStyle;
+  /**
+   * Constellation GPU-overhaul effects level (First Slice: gravity fabric only).
+   * Optional and additive: state persisted before the overhaul still loads; when
+   * unset, the 3D view treats it as 'off'. The enum is FINAL — later phases add
+   * behavior behind the same four levels without a settings migration.
+   */
+  graph3dEffects?: Graph3DEffects;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -103,5 +111,12 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
     graphMode: settings?.graphMode === '2d' || settings?.graphMode === '3d' ? settings.graphMode : undefined,
     palettePinned: typeof settings?.palettePinned === 'boolean' ? settings.palettePinned : undefined,
     graph3dStyle: settings?.graph3dStyle === 'orbs' || settings?.graph3dStyle === 'cards' ? settings.graph3dStyle : undefined,
+    graph3dEffects:
+      settings?.graph3dEffects === 'off' ||
+      settings?.graph3dEffects === 'minimal' ||
+      settings?.graph3dEffects === 'standard' ||
+      settings?.graph3dEffects === 'rich'
+        ? settings.graph3dEffects
+        : undefined,
   };
 }
