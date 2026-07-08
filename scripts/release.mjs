@@ -48,7 +48,12 @@ function fail(msg) {
 }
 function run(cmd, args, opts = {}) {
   console.log(`  $ ${cmd} ${args.join(' ')}`);
-  return execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', ...opts });
+  // On Windows, npm/npx are `.cmd` shims. Node's post-CVE-2024-27980 hardening
+  // won't resolve the bare name via execFileSync (→ spawnSync ENOENT), so run those
+  // two through a shell. The args here are fixed literals (run/build/tauri) with no
+  // injection surface. git/gh/python are real executables on PATH → no shell needed.
+  const needsShell = process.platform === 'win32' && (cmd === 'npm' || cmd === 'npx');
+  return execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', shell: needsShell, ...opts });
 }
 function capture(cmd, args) {
   return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8' }).trim();
