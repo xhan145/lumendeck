@@ -79,6 +79,14 @@ import type { Keyframe, MotionClip, MotionState, MotionTrack, OrbMotion, Transpo
 import { hydrateField, type Anchor, type FieldState, type Ghost } from './field';
 import { fieldProfile, profileHasAxes, type FieldProfile } from '../core/field/fieldProfile';
 import { applyField } from '../core/field/applyField';
+import {
+  applyPresetAxes,
+  cloneBundle,
+  fieldProfileFromPreset,
+  type AxisBundle,
+  type FieldPreset,
+} from '../core/field/presets';
+import { buildPreviewJob } from '../core/field/preview';
 import { pathToClip, type PathSample } from '../core/field/pathToClip';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
 import { defaultAudioState, hydrateAudio, SENSITIVITY_MIN, SENSITIVITY_MAX, type AudioSourceKind, type AudioState } from './audio';
@@ -356,6 +364,32 @@ interface StudioState {
   /** Cancel all in-progress ghost recordings (no clip) — called on 3D-view unmount. */
   cancelAllGhostRecordings(): void;
 
+  // Field Presets + Streaming Preview — curated X/Y/Z param maps + live low-res preview.
+  /** Select a preset (drives the orb/ghost axes) or null for the v0.16 auto field. */
+  setActiveFieldPreset(id: string | null): void;
+  /** Save a custom preset from a name + all-three axis bundles; returns its new id. */
+  saveFieldPreset(name: string, axes: { x: AxisBundle; y: AxisBundle; z: AxisBundle }): string;
+  /** Replace one axis bundle on a preset (edit-and-keep). */
+  updateFieldPresetAxis(id: string, axis: 'x' | 'y' | 'z', bundle: AxisBundle): void;
+  /** Remove a preset from the list (builtins HIDE via persistence; customs delete). */
+  deleteFieldPreset(id: string): void;
+  /** Per-session toggle for drag-to-preview streaming (off by default). */
+  setStreamingEnabled(on: boolean): void;
+  /**
+   * Render ONE low-res streaming preview of the active preset at `pos`: resolve
+   * its axes → patches → a fast preview job → the active backend's `generate`,
+   * storing the image in `field.previewImage`. A MONOTONIC token supersedes an
+   * older in-flight call so only the latest position's result lands (stale results
+   * are discarded). Loud, honest failure on no bridge — never a fabricated image.
+   */
+  runFieldPreview(pos: { x: number; y: number; z: number }): Promise<void>;
+  /**
+   * Promote the last-previewed position to a FULL gallery render: commit the
+   * active preset's params at that position into the workflow, then run the normal
+   * enqueueRender path. No-op with a loud status when no preset is active.
+   */
+  promoteFieldPreviewToRender(): Promise<void>;
+
   // Auto-Evolve — explore→score→evolve search (frontend loops /evolve-step per gen).
   /** Update the evolve config (mode/weights/population/generations), all clamped. */
   setEvolveConfig(patch: {
@@ -460,6 +494,17 @@ interface GhostRecording {
 const ghostRecordings = new Map<string, GhostRecording>();
 /** Sample cadence for ghost path recording (~15Hz — plenty for value curves). */
 const GHOST_RECORD_INTERVAL_MS = 66;
+
+/**
+ * Field streaming-preview supersede state, kept OUTSIDE store state (never
+ * persisted, never part of the render projection). `fieldPreviewToken` is a
+ * monotonic counter: each `runFieldPreview` captures the token it bumped to, and
+ * a result only writes `previewImage` if its token is STILL the latest — so a
+ * newer settled position discards a stale in-flight render. `lastFieldPreviewPos`
+ * is the most recently previewed position, promoted by `promoteFieldPreviewToRender`.
+ */
+let fieldPreviewToken = 0;
+let lastFieldPreviewPos: { x: number; y: number; z: number } = { x: 0.5, y: 0.5, z: 0.5 };
 /** Monotonic wall clock in ms (performance.now when present, else Date.now). */
 const wallNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
@@ -599,10 +644,22 @@ export const useStudio = create<StudioState>((set, get) => {
   /** The positive prompt text for prompt-marker biasing (empty when absent). */
   const currentPromptText = (): string =>
     String(findNode(get().workflow, 'prompt')?.params.positive ?? '');
-  /** Build a node's curated field profile from its live kind/params + family/prompt. */
+  /** The active field preset (null when none selected or the id no longer resolves). */
+  const activeFieldPreset = (): FieldPreset | null => {
+    const id = get().field.activePresetId;
+    if (!id) return null;
+    return get().field.presets.find((p) => p.id === id) ?? null;
+  };
+  /**
+   * Build a node's field profile. When a preset is ACTIVE it supplies the axes
+   * (filtered to the params this node's kind owns), so the ghost/orb navigate the
+   * preset's field; with no preset this is the unchanged v0.16 curated profile.
+   */
   const profileForNode = (nodeId: string): FieldProfile => {
     const node = get().workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return {};
+    const preset = activeFieldPreset();
+    if (preset) return fieldProfileFromPreset(preset, node.kind);
     return fieldProfile(node.kind, currentFamily(), node.params, currentPromptText());
   };
   /** Write a ghost's field patches into the workflow in ONE commit (gradient/ring re-tint). */
@@ -1398,6 +1455,97 @@ export const useStudio = create<StudioState>((set, get) => {
         ...get().field,
         ghosts: get().field.ghosts.map((g) => (g.recording ? { ...g, recording: false } : g)),
       });
+    },
+
+    // ---- Field Presets + Streaming Preview ----
+    setActiveFieldPreset: (id) => {
+      // Ignore an id that doesn't resolve; null always clears back to the auto field.
+      if (id !== null && !get().field.presets.some((p) => p.id === id)) return;
+      setField({ ...get().field, activePresetId: id });
+    },
+
+    saveFieldPreset: (name, axes) => {
+      const id = uid('fpreset');
+      const preset: FieldPreset = {
+        id,
+        name: name && name.trim() ? name.trim() : 'Custom preset',
+        description: 'Custom field preset.',
+        builtin: false,
+        axes: { x: cloneBundle(axes.x), y: cloneBundle(axes.y), z: cloneBundle(axes.z) },
+      };
+      setField({ ...get().field, presets: [...get().field.presets, preset] });
+      return id;
+    },
+
+    updateFieldPresetAxis: (id, axis, bundle) => {
+      setField({
+        ...get().field,
+        presets: get().field.presets.map((p) =>
+          p.id === id ? { ...p, axes: { ...p.axes, [axis]: cloneBundle(bundle) } } : p,
+        ),
+      });
+    },
+
+    deleteFieldPreset: (id) => {
+      // Builtins HIDE (removed from the runtime list; persistence records the id as
+      // hidden). Customs are gone for good. Clear the active id if it was deleted.
+      const presets = get().field.presets.filter((p) => p.id !== id);
+      const activePresetId = get().field.activePresetId === id ? null : get().field.activePresetId;
+      setField({ ...get().field, presets, activePresetId });
+    },
+
+    setStreamingEnabled: (on) => setField({ ...get().field, streamingEnabled: !!on }),
+
+    runFieldPreview: async (pos) => {
+      const preset = activeFieldPreset();
+      if (!preset) {
+        set({ controlStatus: 'Pick a field preset before starting a live preview.' });
+        return;
+      }
+      lastFieldPreviewPos = { x: pos.x, y: pos.y, z: pos.z };
+      // Bump + capture the supersede token: only the latest call may write the image.
+      const token = ++fieldPreviewToken;
+      setField({ ...get().field, previewPending: true });
+      try {
+        const patches = applyPresetAxes(preset, pos, 1);
+        const job = buildPreviewJob(get().workflow, patches, {
+          size: 320,
+          steps: 4,
+          wildcardSets: get().promptTools.wildcardSets,
+        });
+        const adapter = activeAdapter(get().backendSettings);
+        const result = await adapter.generate(job);
+        // A newer position superseded this one: drop the stale result (the render
+        // may have finished, but the latest position must win the preview).
+        if (token !== fieldPreviewToken) return;
+        setField({ ...get().field, previewImage: result.dataUrl, previewPending: false });
+      } catch (err) {
+        // Only the latest in-flight call clears pending + posts the loud error, so a
+        // superseded failure never overwrites a newer render's state.
+        if (token !== fieldPreviewToken) return;
+        setField({ ...get().field, previewPending: false });
+        set({
+          controlStatus: `Live preview needs the bridge — ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    },
+
+    promoteFieldPreviewToRender: async () => {
+      const preset = activeFieldPreset();
+      if (!preset) {
+        set({ controlStatus: 'Pick a field preset before promoting a preview to a full render.' });
+        return;
+      }
+      // Commit the preset-resolved params at the last previewed position, then run
+      // the normal full-res gallery render (identical to the Render button path).
+      const patches = applyPresetAxes(preset, lastFieldPreviewPos, 1);
+      let next = get().workflow;
+      for (const p of patches) {
+        const node = findNode(next, p.node);
+        if (node) next = updateNodeParam(next, node.id, p.param, p.value);
+      }
+      commit(next);
+      await get().enqueueRender();
     },
 
     // ---- Audio Reactivity ----
