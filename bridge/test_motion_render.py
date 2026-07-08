@@ -162,7 +162,9 @@ def test_render_motion_falls_back_to_oneshot_when_worker_exits():
 
 
 # ---------------------------------------------------------------------------
-# _encode_sequence: mp4 when cv2 works, gif fallback when cv2 raises
+# _encode_sequence: H.264 mp4 when the ffmpeg encoder works, gif fallback when
+# it raises. The mp4 path is imageio + imageio-ffmpeg (libx264), NOT cv2 (whose
+# 'mp4v' MPEG-4 Part 2 output is undecodable by WebView2's <video>).
 # ---------------------------------------------------------------------------
 
 def _solid_frames(n=3, size=(8, 8)):
@@ -170,93 +172,120 @@ def _solid_frames(n=3, size=(8, 8)):
     return [Image.new("RGB", size, (i * 40 % 256, 0, 0)) for i in range(n)]
 
 
-def _install_fake_cv2(monkey_ok=True):
-    """Install a fake cv2 module. monkey_ok=True -> a working writer; else raises."""
-    fake = types.ModuleType("cv2")
+def _install_fake_imageio(ok=True):
+    """Install a fake `imageio.v2` module (imported as `import imageio.v2`).
 
-    def fourcc(*_chars):
-        return 0x7634706D  # 'mp4v'
+    ok=True  -> get_writer returns a writer that emits a minimal avc1-tagged mp4.
+    ok=False -> get_writer raises, exercising the loud GIF fallback.
+    Returns (old_imageio, old_v2) so the caller can restore sys.modules.
+    """
+    old_imageio = sys.modules.get("imageio")
+    old_v2 = sys.modules.get("imageio.v2")
 
-    fake.VideoWriter_fourcc = fourcc
+    parent = types.ModuleType("imageio")
+    v2 = types.ModuleType("imageio.v2")
+    parent.v2 = v2
 
     class _Writer:
-        def __init__(self, path, _fourcc, _fps, _size):
+        def __init__(self, path):
             self._path = path
             self._frames = 0
-            if not monkey_ok:
-                raise RuntimeError("cv2 backend unavailable")
 
-        def isOpened(self):
-            return True
-
-        def write(self, _frame):
+        def append_data(self, _arr):
             self._frames += 1
 
-        def release(self):
-            # Write a small non-empty file so the reader gets real bytes.
+        def close(self):
+            # Minimal non-empty file carrying the avc1 sample-entry marker so the
+            # reader gets real, browser-playable-shaped bytes.
             with open(self._path, "wb") as fh:
-                fh.write(b"\x00\x00\x00\x18ftypmp42FAKE-MP4")
+                fh.write(b"\x00\x00\x00\x18ftypisom" + b"....avc1C...." )
 
-    fake.VideoWriter = _Writer
-    return fake
+    def get_writer(path, **_kwargs):
+        if not ok:
+            raise RuntimeError("ffmpeg encoder unavailable")
+        return _Writer(path)
+
+    v2.get_writer = get_writer
+    sys.modules["imageio"] = parent
+    sys.modules["imageio.v2"] = v2
+    return old_imageio, old_v2
 
 
-def test_encode_sequence_uses_mp4_when_cv2_ok():
-    fake_cv2 = _install_fake_cv2(monkey_ok=True)
-    old_cv2 = sys.modules.get("cv2")
-    sys.modules["cv2"] = fake_cv2
+def _restore_imageio(saved):
+    old_imageio, old_v2 = saved
+    for name, old in (("imageio", old_imageio), ("imageio.v2", old_v2)):
+        if old is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = old
+
+
+def test_encode_sequence_uses_mp4_when_encoder_ok():
+    saved = _install_fake_imageio(ok=True)
     try:
         out = db._encode_sequence(_solid_frames(3), fps=8, fmt="mp4")
         assert out["mimeType"] == "video/mp4" and out["extension"] == "mp4"
-        assert base64.b64decode(out["video_base64"]).startswith(b"\x00\x00\x00\x18ftyp")
+        data = base64.b64decode(out["video_base64"])
+        assert data[4:8] == b"ftyp" and b"avc1" in data
     finally:
-        if old_cv2 is None:
-            sys.modules.pop("cv2", None)
-        else:
-            sys.modules["cv2"] = old_cv2
+        _restore_imageio(saved)
 
 
-def test_encode_sequence_falls_back_to_gif_when_cv2_raises():
-    fake_cv2 = _install_fake_cv2(monkey_ok=False)
-    old_cv2 = sys.modules.get("cv2")
-    sys.modules["cv2"] = fake_cv2
+def test_encode_sequence_falls_back_to_gif_when_encoder_raises():
+    saved = _install_fake_imageio(ok=False)
     try:
         out = db._encode_sequence(_solid_frames(3), fps=8, fmt="mp4")
         assert out["mimeType"] == "image/gif" and out["extension"] == "gif"
         assert base64.b64decode(out["video_base64"]).startswith(b"GIF89a")
     finally:
-        if old_cv2 is None:
-            sys.modules.pop("cv2", None)
-        else:
-            sys.modules["cv2"] = old_cv2
+        _restore_imageio(saved)
 
 
-def test_encode_sequence_gif_format_never_touches_cv2():
-    # A poisoned cv2 must not even be imported when gif is explicitly requested.
-    poison = types.ModuleType("cv2")
+def test_encode_sequence_gif_format_never_touches_encoder():
+    # A poisoned imageio must not even be imported when gif is explicitly requested.
+    old_imageio = sys.modules.get("imageio")
+    old_v2 = sys.modules.get("imageio.v2")
+    poison_parent = types.ModuleType("imageio")
+    poison_v2 = types.ModuleType("imageio.v2")
 
     def _boom(*_a, **_k):
-        raise AssertionError("cv2 must not be used for an explicit gif request")
+        raise AssertionError("the ffmpeg encoder must not be used for an explicit gif request")
 
-    poison.VideoWriter_fourcc = _boom
-    poison.VideoWriter = _boom
-    old_cv2 = sys.modules.get("cv2")
-    sys.modules["cv2"] = poison
+    poison_v2.get_writer = _boom
+    poison_parent.v2 = poison_v2
+    sys.modules["imageio"] = poison_parent
+    sys.modules["imageio.v2"] = poison_v2
     try:
         out = db._encode_sequence(_solid_frames(2), fps=6, fmt="gif")
         assert out["extension"] == "gif"
         assert base64.b64decode(out["video_base64"]).startswith(b"GIF89a")
     finally:
-        if old_cv2 is None:
-            sys.modules.pop("cv2", None)
-        else:
-            sys.modules["cv2"] = old_cv2
+        _restore_imageio((old_imageio, old_v2))
 
 
 def test_encode_sequence_single_frame_still_encodes():
     out = db._encode_sequence(_solid_frames(1), fps=8, fmt="gif")
     assert out["extension"] == "gif"
     assert base64.b64decode(out["video_base64"]).startswith(b"GIF89a")
+
+
+def test_encode_sequence_mp4_is_browser_playable_h264():
+    """The mp4 branch MUST emit H.264/avc1: WebView2/Chromium's <video> element
+    cannot decode MPEG-4 Part 2 ('mp4v'), which is what cv2.VideoWriter produced
+    and why motion clips rendered as a black player. Uses the REAL encoder (no
+    mock); skips only if no ffmpeg encoder is installed in the test environment.
+    Odd 65x65 frames also exercise the yuv420p even-dimension padding.
+    """
+    import importlib.util
+    if importlib.util.find_spec("imageio_ffmpeg") is None:
+        import pytest
+        pytest.skip("imageio-ffmpeg not installed in this test environment")
+    out = db._encode_sequence(_solid_frames(4, size=(65, 65)), fps=8, fmt="mp4")
+    assert out["mimeType"] == "video/mp4" and out["extension"] == "mp4"
+    data = base64.b64decode(out["video_base64"])
+    assert data[4:8] == b"ftyp", "not a valid MP4 container"
+    assert b"avc1" in data, "mp4 must be H.264/avc1 (browser-playable), got non-avc1"
+    assert b"mp4v" not in data, "mp4 must NOT be MPEG-4 Part 2 (unplayable in WebView2)"
 
 
 def test_encode_sequence_rejects_zero_frames():
@@ -418,10 +447,11 @@ if __name__ == "__main__":
     test_render_motion_injects_controlnet_map_and_forwards_params()
     test_render_motion_surfaces_worker_error_loudly()
     test_render_motion_falls_back_to_oneshot_when_worker_exits()
-    test_encode_sequence_uses_mp4_when_cv2_ok()
-    test_encode_sequence_falls_back_to_gif_when_cv2_raises()
-    test_encode_sequence_gif_format_never_touches_cv2()
+    test_encode_sequence_uses_mp4_when_encoder_ok()
+    test_encode_sequence_falls_back_to_gif_when_encoder_raises()
+    test_encode_sequence_gif_format_never_touches_encoder()
     test_encode_sequence_single_frame_still_encodes()
+    test_encode_sequence_mp4_is_browser_playable_h264()
     test_encode_sequence_rejects_zero_frames()
     test_render_motion_route_rejects_missing_jobs()
     test_render_motion_route_rejects_invalid_json()
