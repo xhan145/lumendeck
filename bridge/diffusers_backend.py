@@ -710,11 +710,13 @@ def _encode_sequence(frames, fps, fmt, loop=True):
 
     Kept behaviorally identical to the module-level diffusers_backend._encode_sequence
     (which is the unit-tested copy); this in-worker copy is what actually runs.
-    format 'mp4' (default): cv2.VideoWriter with the mp4v fourcc; frames are RGB PIL
-    converted to BGR numpy arrays. If cv2 import OR the writer fails, fall back to GIF.
-    format 'gif' (or the mp4 fallback): the proven AnimateDiff Pillow save_all path.
-    Returns {video_base64, mediaType, mimeType, extension}. Never silent — the caller
-    surfaces which path ran.
+    format 'mp4' (default): H.264/avc1 via imageio + imageio-ffmpeg's bundled libx264
+    (pixelformat yuv420p, +faststart). WebView2/Chromium's <video> can ONLY decode
+    H.264/VP8/VP9/AV1, NOT the MPEG-4 Part 2 'mp4v' that cv2.VideoWriter produced
+    (which loaded as a black player). If the ffmpeg encoder is unavailable OR fails,
+    fall back to GIF. format 'gif' (or the mp4 fallback): the proven AnimateDiff
+    Pillow save_all path. Returns {video_base64, mediaType, mimeType, extension}.
+    Never silent — the caller surfaces which path ran.
     """
     fmt = str(fmt or "mp4").lower()
     if not frames:
@@ -723,7 +725,7 @@ def _encode_sequence(frames, fps, fmt, loop=True):
 
     # All frames must share one canvas. A motion clip can animate a size-affecting
     # param (canvas width/height, hires scale) -> frames of differing dimensions.
-    # cv2.VideoWriter silently DROPS mismatched frames and GIF assembly corrupts,
+    # A video encoder silently DROPS mismatched frames and GIF assembly corrupts,
     # so conform every frame to the first frame's size: a valid uniform video, never
     # a silent truncation (spec: no silent placeholders).
     base_size = frames[0].size
@@ -733,23 +735,35 @@ def _encode_sequence(frames, fps, fmt, loop=True):
         try:
             import tempfile as _tempfile
 
-            import cv2
+            import imageio.v2 as _imageio
             import numpy as np
 
             width, height = frames[0].size
+            # yuv420p (the browser-safe H.264 chroma format) requires EVEN width and
+            # height. Pad by edge-replication rather than crop (never a silent
+            # truncation). macro_block_size=1 stops imageio's own /16 auto-resize.
+            pad_w = width + (width % 2)
+            pad_h = height + (height % 2)
+            arrays = []
+            for frame in frames:
+                arr = np.asarray(frame.convert("RGB"))
+                if pad_h != height or pad_w != width:
+                    arr = np.pad(arr, ((0, pad_h - height), (0, pad_w - width), (0, 0)), mode="edge")
+                arrays.append(arr)
             tmp = _tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             tmp_path = tmp.name
             tmp.close()
             try:
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(tmp_path, fourcc, float(fps), (width, height))
-                if not writer.isOpened():
-                    raise RuntimeError("cv2.VideoWriter failed to open (mp4v unavailable)")
-                for frame in frames:
-                    rgb = np.asarray(frame.convert("RGB"))
-                    bgr = rgb[:, :, ::-1]
-                    writer.write(np.ascontiguousarray(bgr))
-                writer.release()
+                writer = _imageio.get_writer(
+                    tmp_path, format="FFMPEG", mode="I", fps=float(fps),
+                    codec="libx264", pixelformat="yuv420p", macro_block_size=1,
+                    ffmpeg_params=["-movflags", "+faststart", "-preset", "veryfast"],
+                )
+                try:
+                    for arr in arrays:
+                        writer.append_data(arr)
+                finally:
+                    writer.close()
                 with open(tmp_path, "rb") as fh:
                     data = fh.read()
             finally:
@@ -758,7 +772,7 @@ def _encode_sequence(frames, fps, fmt, loop=True):
                 except OSError:
                     pass
             if not data:
-                raise RuntimeError("cv2 produced an empty mp4")
+                raise RuntimeError("ffmpeg produced an empty mp4")
             return {
                 "video_base64": base64.b64encode(data).decode("ascii"),
                 "mediaType": "video",
@@ -766,7 +780,7 @@ def _encode_sequence(frames, fps, fmt, loop=True):
                 "extension": "mp4",
             }
         except Exception as exc:
-            print(f"[render_sequence] mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+            print(f"[render_sequence] h264 mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
 
     # GIF path (explicit request, or mp4 fallback): AnimateDiff's proven save_all loop.
     buf = io.BytesIO()
@@ -1086,12 +1100,13 @@ def _encode_sequence(frames, fps, fmt="mp4", loop=True):
     """Encode a list of PIL RGB frames into a base64 video (module-level, testable).
 
     Mirrors the worker's in-process encoder so the format-selection contract can be
-    unit-tested by mocking cv2 (same duality as detect_single_file_family in the
-    worker vs estimate_family here). format 'mp4' (default): cv2.VideoWriter with the
-    mp4v fourcc; RGB PIL frames become BGR numpy arrays. If cv2 import OR the writer
-    fails, fall back to GIF. format 'gif' (or the mp4 fallback): Pillow save_all.
-    Returns {video_base64, mediaType, mimeType, extension}. Never silent — the mp4
-    fallback prints why it dropped to gif.
+    unit-tested. format 'mp4' (default): H.264/avc1 via imageio + imageio-ffmpeg's
+    bundled libx264 (pixelformat yuv420p, +faststart) — WebView2/Chromium's <video>
+    element can ONLY decode H.264/VP8/VP9/AV1, NOT the MPEG-4 Part 2 'mp4v' that
+    cv2.VideoWriter emitted (which loaded as a black player). If the ffmpeg encoder
+    is unavailable OR fails, fall back to GIF. format 'gif' (or the mp4 fallback):
+    Pillow save_all. Returns {video_base64, mediaType, mimeType, extension}. Never
+    silent — the mp4 fallback prints why it dropped to gif.
     """
     import base64 as _base64
     import io as _io
@@ -1112,23 +1127,35 @@ def _encode_sequence(frames, fps, fmt="mp4", loop=True):
 
     if fmt == "mp4":
         try:
-            import cv2
+            import imageio.v2 as _imageio
             import numpy as np
 
             width, height = frames[0].size
+            # yuv420p (the browser-safe H.264 chroma format) requires EVEN width and
+            # height. Pad by edge-replication rather than crop (spec: never a silent
+            # truncation). macro_block_size=1 stops imageio's own /16 auto-resize.
+            pad_w = width + (width % 2)
+            pad_h = height + (height % 2)
+            arrays = []
+            for frame in frames:
+                arr = np.asarray(frame.convert("RGB"))
+                if pad_h != height or pad_w != width:
+                    arr = np.pad(arr, ((0, pad_h - height), (0, pad_w - width), (0, 0)), mode="edge")
+                arrays.append(arr)
             tmp = _tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             tmp_path = tmp.name
             tmp.close()
             try:
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(tmp_path, fourcc, float(fps), (width, height))
-                if not writer.isOpened():
-                    raise RuntimeError("cv2.VideoWriter failed to open (mp4v unavailable)")
-                for frame in frames:
-                    rgb = np.asarray(frame.convert("RGB"))
-                    bgr = rgb[:, :, ::-1]
-                    writer.write(np.ascontiguousarray(bgr))
-                writer.release()
+                writer = _imageio.get_writer(
+                    tmp_path, format="FFMPEG", mode="I", fps=float(fps),
+                    codec="libx264", pixelformat="yuv420p", macro_block_size=1,
+                    ffmpeg_params=["-movflags", "+faststart", "-preset", "veryfast"],
+                )
+                try:
+                    for arr in arrays:
+                        writer.append_data(arr)
+                finally:
+                    writer.close()
                 with open(tmp_path, "rb") as fh:
                     data = fh.read()
             finally:
@@ -1137,7 +1164,7 @@ def _encode_sequence(frames, fps, fmt="mp4", loop=True):
                 except OSError:
                     pass
             if not data:
-                raise RuntimeError("cv2 produced an empty mp4")
+                raise RuntimeError("ffmpeg produced an empty mp4")
             return {
                 "video_base64": _base64.b64encode(data).decode("ascii"),
                 "mediaType": "video",
@@ -1145,7 +1172,7 @@ def _encode_sequence(frames, fps, fmt="mp4", loop=True):
                 "extension": "mp4",
             }
         except Exception as exc:
-            print(f"[render_sequence] mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+            print(f"[render_sequence] h264 mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
 
     buf = _io.BytesIO()
     frames[0].save(
@@ -1722,6 +1749,17 @@ def install_runtime() -> dict[str, Any]:
     _pip_install(
         ["opencv-python-headless", "einops", "scipy", "timm==0.9.16", "controlnet_aux==0.0.10"],
         timeout=1800,
+        no_deps=True,
+        only_binary=True,
+    )
+    # Motion-clip video encoder: imageio-ffmpeg bundles a static ffmpeg with libx264
+    # so we can write browser-playable H.264/avc1 mp4 (WebView2's <video> cannot
+    # decode cv2's MPEG-4 Part 2 'mp4v'). Both are python-version-agnostic wheels
+    # (imageio: py3-none-any; imageio-ffmpeg: py3-none-<platform>), so only_binary is
+    # always satisfiable. no_deps: imageio's numpy/pillow are already installed above.
+    _pip_install(
+        ["imageio", "imageio-ffmpeg"],
+        timeout=1200,
         no_deps=True,
         only_binary=True,
     )
