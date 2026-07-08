@@ -8,6 +8,11 @@ import { BrandMark, Icon } from './components/icons';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { RecipeView } from './components/recipe/RecipeView';
+import { MissionControl } from './components/creative/MissionControl';
+import { ProjectsView } from './components/creative/ProjectsView';
+import { RecipesView } from './components/creative/RecipesView';
+import { EntropyView } from './components/creative/EntropyView';
+import { ProofView } from './components/creative/ProofView';
 import { ControlsPage } from './pages/ControlsPage';
 import { CreditsPage } from './pages/CreditsPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
@@ -18,6 +23,11 @@ import './styles/base.css';
 import './styles/app.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
+  mission: 'Mission Control',
+  projects: 'Projects',
+  recipes: 'Creative Recipes',
+  entropy: 'Entropy Mode',
+  proof: 'Proof Mode',
   guide: 'Guide',
   recipe: 'Recipe',
   graph: 'Graph',
@@ -65,7 +75,12 @@ export function App() {
   useEffect(() => { void probeBridge(); }, [probeBridge]);
 
   const page =
-    view === 'guide' ? <GuideView onOpenControls={() => setView('controls')} />
+    view === 'mission' ? <MissionControl />
+      : view === 'projects' ? <ProjectsView />
+      : view === 'recipes' ? <RecipesView />
+      : view === 'entropy' ? <EntropyView />
+      : view === 'proof' ? <ProofView />
+      : view === 'guide' ? <GuideView onOpenControls={() => setView('controls')} />
       : view === 'recipe' ? <RecipeView />
       : view === 'graph' ? <GraphWorkspace />
       : view === 'shelf' ? <ModelShelf />
@@ -76,7 +91,7 @@ export function App() {
       : view === 'performance' ? <PerformancePage />
       : view === 'support' ? <SupportPage />
       : view === 'credits' ? <CreditsPage />
-      : <GuideView onOpenControls={() => setView('controls')} />;
+      : <MissionControl />;
 
   return (
     <div className={`shell ${compactMode ? 'compact' : ''}`}>

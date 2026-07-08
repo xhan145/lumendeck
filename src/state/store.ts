@@ -79,21 +79,81 @@ import type { Keyframe, MotionClip, MotionState, MotionTrack, OrbMotion, Transpo
 import { hydrateField, type Anchor, type FieldState, type Ghost } from './field';
 import { fieldProfile, profileHasAxes, type FieldProfile } from '../core/field/fieldProfile';
 import { applyField } from '../core/field/applyField';
+import {
+  applyPresetAxes,
+  cloneBundle,
+  fieldProfileFromPreset,
+  type AxisBundle,
+  type FieldPreset,
+} from '../core/field/presets';
+import { buildPreviewJob } from '../core/field/preview';
+import { fanOutRackPatches, isRackAggregatePatch } from '../core/field/rackFanout';
 import { pathToClip, type PathSample } from '../core/field/pathToClip';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
 import { defaultAudioState, hydrateAudio, SENSITIVITY_MIN, SENSITIVITY_MAX, type AudioSourceKind, type AudioState } from './audio';
+import { hydrateNodeMeta, seedNodeMeta, touchNode, type NodeMetaMap } from './nodeMeta';
 import { AudioEngine, type AudioSource } from '../audio/engine';
 import { computeBands, scaleBands } from '../core/audio/bands';
 import { audioToClip, type AudioSample } from '../core/audio/audioToClip';
 import type { AudioMapping } from '../core/audio/mapping';
+import {
+  buildAnalysisContext,
+  hydrateCreative,
+  type CreativeState,
+} from './creative';
+import { downloadJson } from '../bridge/exporter';
+import type {
+  CreativeRecipe,
+  EntropyAction,
+  EntropyItem,
+  ProjectBrain,
+  ProjectType,
+} from '../core/creative/types';
+import {
+  createBrain,
+  recordEvent,
+  touchOpened,
+  updateBrain,
+  buildProjectFile,
+  type ProjectFile,
+} from '../core/creative/brain';
+import {
+  applyRecipe as applyRecipePure,
+  createRecipe as createRecipePure,
+  duplicateRecipe as duplicateRecipePure,
+  markRecipeUsed,
+  updateRecipe as updateRecipePure,
+} from '../core/creative/recipes';
+import { buildReleasePack, packExportRecord, type ReleasePack } from '../core/creative/releasePack';
+import { generateSocialCaptions } from '../core/creative/generate';
+import { creativeId } from '../core/creative/brain';
+import type { AnalysisContext } from '../core/creative/context';
+import { buildCreativeDemo } from '../data/creativeDemo';
 
 // Re-export the field slice types so the 3D UI (Graph3DView) imports them from the
 // store alongside the actions, matching the motion slice's ergonomics.
 export type { Ghost, Anchor, FieldState } from './field';
 export type { AudioState } from './audio';
 export type { AudioSource } from '../audio/engine';
+export type { CreativeState } from './creative';
 
-export type ViewId = 'guide' | 'recipe' | 'graph' | 'shelf' | 'gallery' | 'controls' | 'settings' | 'diagnostics' | 'performance' | 'support' | 'credits';
+export type ViewId =
+  | 'mission'
+  | 'projects'
+  | 'recipes'
+  | 'entropy'
+  | 'proof'
+  | 'guide'
+  | 'recipe'
+  | 'graph'
+  | 'shelf'
+  | 'gallery'
+  | 'controls'
+  | 'settings'
+  | 'diagnostics'
+  | 'performance'
+  | 'support'
+  | 'credits';
 
 export interface GalleryItem {
   id: string;
@@ -217,6 +277,8 @@ interface StudioState {
   shelf: ModelAsset[];
   shelfSource: 'demo' | 'bridge';
   health: HealthIssue[];
+  /** Per-node activity metadata (createdAt / lastActiveAt) for the luminosity glow. */
+  nodeMeta: NodeMetaMap;
   view: ViewId;
   selectedNodeId: string | null;
   rackPresets: RackPreset[];
@@ -356,6 +418,32 @@ interface StudioState {
   /** Cancel all in-progress ghost recordings (no clip) — called on 3D-view unmount. */
   cancelAllGhostRecordings(): void;
 
+  // Field Presets + Streaming Preview — curated X/Y/Z param maps + live low-res preview.
+  /** Select a preset (drives the orb/ghost axes) or null for the v0.16 auto field. */
+  setActiveFieldPreset(id: string | null): void;
+  /** Save a custom preset from a name + all-three axis bundles; returns its new id. */
+  saveFieldPreset(name: string, axes: { x: AxisBundle; y: AxisBundle; z: AxisBundle }): string;
+  /** Replace one axis bundle on a preset (edit-and-keep). */
+  updateFieldPresetAxis(id: string, axis: 'x' | 'y' | 'z', bundle: AxisBundle): void;
+  /** Remove a preset from the list (builtins HIDE via persistence; customs delete). */
+  deleteFieldPreset(id: string): void;
+  /** Per-session toggle for drag-to-preview streaming (off by default). */
+  setStreamingEnabled(on: boolean): void;
+  /**
+   * Render ONE low-res streaming preview of the active preset at `pos`: resolve
+   * its axes → patches → a fast preview job → the active backend's `generate`,
+   * storing the image in `field.previewImage`. A MONOTONIC token supersedes an
+   * older in-flight call so only the latest position's result lands (stale results
+   * are discarded). Loud, honest failure on no bridge — never a fabricated image.
+   */
+  runFieldPreview(pos: { x: number; y: number; z: number }): Promise<void>;
+  /**
+   * Promote the last-previewed position to a FULL gallery render: commit the
+   * active preset's params at that position into the workflow, then run the normal
+   * enqueueRender path. No-op with a loud status when no preset is active.
+   */
+  promoteFieldPreviewToRender(): Promise<void>;
+
   // Auto-Evolve — explore→score→evolve search (frontend loops /evolve-step per gen).
   /** Update the evolve config (mode/weights/population/generations), all clamped. */
   setEvolveConfig(patch: {
@@ -425,6 +513,45 @@ interface StudioState {
   restoreSnapshot(item: GalleryItem): void;
   loadWorkflowFile(file: LumenFile): void;
   applyTemplate(id: string): void;
+
+  /* -------------------------------------------------- Creative OS slice */
+  creative: CreativeState;
+  /** Live analysis context projected from gallery + brains + shelf. */
+  analysisContext(): AnalysisContext;
+  createProject(name: string, type: ProjectType): string;
+  updateProjectBrain(id: string, mutate: (b: ProjectBrain) => ProjectBrain): void;
+  deleteProject(id: string): void;
+  setActiveProject(id: string | null): void;
+  openProject(id: string): void;
+  /** Link the newest (or a specific) gallery render to a project. */
+  linkRenderToProject(projectId: string, galleryId: string): void;
+  unlinkRenderFromProject(projectId: string, galleryId: string): void;
+  addPromptToProject(projectId: string, text: string, negative?: string): void;
+  addAssetToProject(projectId: string, label: string, kind: ProjectBrain['assets'][number]['kind'], galleryId?: string): void;
+  repairProjectAsset(projectId: string, assetId: string, galleryId: string | null): void;
+  archiveProjectAsset(projectId: string, assetId: string): void;
+  addPublishedLink(projectId: string, label: string, url: string): void;
+  markProjectShipped(projectId: string): void;
+  generateProjectCaptions(projectId: string): void;
+  /** Assemble + download a release pack; records an export on the brain. Returns the pack (or null if project missing). */
+  buildProjectReleasePack(projectId: string): ReleasePack | null;
+  exportProjectFile(projectId: string): void;
+  importProjectFile(file: ProjectFile): void;
+
+  createCreativeRecipe(name: string): string;
+  updateCreativeRecipe(id: string, patch: Partial<CreativeRecipe>): void;
+  duplicateCreativeRecipe(id: string): void;
+  deleteCreativeRecipe(id: string): void;
+  /** Apply a recipe to the live workflow (prompt/negative/model/canvas). */
+  applyCreativeRecipe(id: string, subject: string): void;
+  /** Turn a render (or the live prompt, or an explicit prompt text) into a reusable recipe. */
+  promoteToRecipe(input: { galleryId?: string; name?: string; text?: string }): string;
+  linkRecipeToProject(projectId: string, recipeId: string): void;
+
+  /** Resolve one entropy finding via its recommended action. */
+  resolveEntropyItem(item: EntropyItem, action: EntropyAction): void;
+  setAiEnabled(on: boolean): void;
+  seedCreativeDemo(): void;
 }
 
 export const mockAdapter = new MockAdapter();
@@ -460,6 +587,16 @@ interface GhostRecording {
 const ghostRecordings = new Map<string, GhostRecording>();
 /** Sample cadence for ghost path recording (~15Hz — plenty for value curves). */
 const GHOST_RECORD_INTERVAL_MS = 66;
+
+/**
+ * Field streaming-preview supersede state, kept OUTSIDE store state (never
+ * persisted, never part of the render projection). `fieldPreviewToken` is a
+ * monotonic counter: each `runFieldPreview` captures the token it bumped to, and
+ * a result only writes `previewImage` if its token is STILL the latest — so a
+ * newer settled position discards a stale in-flight render. (Promotion reads the
+ * ACTIVE GHOST's position, not a streamed midpoint — see promoteFieldPreviewToRender.)
+ */
+let fieldPreviewToken = 0;
 /** Monotonic wall clock in ms (performance.now when present, else Date.now). */
 const wallNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
@@ -555,17 +692,40 @@ const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultW
 const initialMotion = hydrateMotion(persisted.motion, initialWorkflow);
 const initialField = hydrateField(persisted.field);
 const initialAudio = hydrateAudio(persisted.audio, initialWorkflow);
+const initialNodeMeta = seedNodeMeta(
+  hydrateNodeMeta(persisted.nodeMeta),
+  initialWorkflow.nodes.map((n) => n.id),
+  Date.now(),
+);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
+const initialCreative = hydrateCreative(persisted.creative);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
   ? 'controls'
   : initialAppSettings.startupBehavior === 'last-view' && initialAppSettings.lastView
     ? initialAppSettings.lastView
-    : 'guide';
+    : 'mission';
 
 export const useStudio = create<StudioState>((set, get) => {
-  const commit = (wf: Workflow) =>
-    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null });
+  /**
+   * Commit a workflow mutation (+ recompute health), stamping luminosity activity
+   * in the SAME set. A node counts as "active" when it is brand-new OR its params
+   * object reference changed — updateNodeParam preserves the reference of every
+   * UNCHANGED node, so this diff catches EVERY edit path (inspector, ghost drags,
+   * presets, history, bake, rack edits, …) and node creation, without threading
+   * ids through each action. Move/connect/layout leave params refs intact, so
+   * they are correctly NOT treated as activity.
+   */
+  const commit = (wf: Workflow) => {
+    const prev = new Map(get().workflow.nodes.map((n) => [n.id, n]));
+    const now = Date.now();
+    let nodeMeta = get().nodeMeta;
+    for (const n of wf.nodes) {
+      const before = prev.get(n.id);
+      if (!before || before.params !== n.params) nodeMeta = touchNode(nodeMeta, n.id, now);
+    }
+    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null, nodeMeta });
+  };
 
   // ---- Motion helpers (keep the actions terse; all pure list edits) ----
   const setMotion = (motion: MotionState) => set({ motion });
@@ -599,18 +759,41 @@ export const useStudio = create<StudioState>((set, get) => {
   /** The positive prompt text for prompt-marker biasing (empty when absent). */
   const currentPromptText = (): string =>
     String(findNode(get().workflow, 'prompt')?.params.positive ?? '');
-  /** Build a node's curated field profile from its live kind/params + family/prompt. */
+  /** The active field preset (null when none selected or the id no longer resolves). */
+  const activeFieldPreset = (): FieldPreset | null => {
+    const id = get().field.activePresetId;
+    if (!id) return null;
+    return get().field.presets.find((p) => p.id === id) ?? null;
+  };
+  /**
+   * Build a node's field profile. When a preset is ACTIVE it supplies the axes
+   * (filtered to the params this node's kind owns), so the ghost/orb navigate the
+   * preset's field; with no preset this is the unchanged v0.16 curated profile.
+   */
   const profileForNode = (nodeId: string): FieldProfile => {
     const node = get().workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return {};
+    const preset = activeFieldPreset();
+    if (preset) return fieldProfileFromPreset(preset, node.kind);
     return fieldProfile(node.kind, currentFamily(), node.params, currentPromptText());
   };
   /** Write a ghost's field patches into the workflow in ONE commit (gradient/ring re-tint). */
   const applyGhostToWorkflow = (ghost: Ghost) => {
+    const node = get().workflow.nodes.find((n) => n.id === ghost.nodeId);
     const patches = applyField(ghost.pos, ghost.intensity, profileForNode(ghost.nodeId), ghost.nodeId);
     if (patches.length === 0) return;
     let next = get().workflow;
     for (const p of patches) next = updateNodeParam(next, p.nodeId, p.param, p.value);
+    // A loraRack/controlNetRack ghost's weight/strength is a DEAD aggregate that
+    // buildRenderJob never reads (it reads per-slot); fan it into the enabled slots
+    // so the ghost drag actually moves the render (see rackFanout.ts).
+    if (node && (node.kind === 'loraRack' || node.kind === 'controlNetRack')) {
+      const aggParam = node.kind === 'loraRack' ? 'weight' : 'strength';
+      const rackPatches = patches
+        .filter((p) => p.param === aggParam)
+        .map((p) => ({ node: node.kind as string, param: p.param, value: p.value }));
+      if (rackPatches.length > 0) next = fanOutRackPatches(next, rackPatches);
+    }
     commit(next);
   };
 
@@ -701,11 +884,18 @@ export const useStudio = create<StudioState>((set, get) => {
     return views;
   };
 
+  // ---- Creative OS helpers (terse pure list edits on the creative slice) ----
+  const setCreative = (patch: Partial<CreativeState>) => set({ creative: { ...get().creative, ...patch } });
+  const editBrain = (id: string, fn: (b: ProjectBrain) => ProjectBrain) =>
+    setCreative({ brains: get().creative.brains.map((b) => (b.id === id ? fn(b) : b)) });
+  const getBrain = (id: string): ProjectBrain | undefined => get().creative.brains.find((b) => b.id === id);
+
   return {
     workflow: initialWorkflow,
     shelf: DEMO_SHELF,
     shelfSource: 'demo',
     health: checkHealth(initialWorkflow, DEMO_SHELF),
+    nodeMeta: initialNodeMeta,
     view: initialView,
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
@@ -733,6 +923,7 @@ export const useStudio = create<StudioState>((set, get) => {
     collections: [],
     galleryReady: false,
     galleryDurable,
+    creative: initialCreative,
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
@@ -765,20 +956,20 @@ export const useStudio = create<StudioState>((set, get) => {
         const node = get().workflow.nodes.find((n) => n.id === nodeId);
         if (node?.kind === 'model') userPinnedModel = true;
       }
-      commit(updateNodeParam(get().workflow, nodeId, paramId, value));
+      commit(updateNodeParam(get().workflow, nodeId, paramId, value)); // commit's diff stamps this node
     },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
     addCapsule: (kind, x, y) => {
       const node = createNode(kind, x, y);
-      commit(addNode(get().workflow, node));
+      commit(addNode(get().workflow, node)); // commit's diff stamps the new node
       set({ selectedNodeId: node.id });
     },
     duplicateCapsule: (nodeId) => {
       const before = get().workflow;
       const next = duplicateNode(before, nodeId);
-      commit(next);
+      commit(next); // commit's diff stamps the new copy
       const copy = next.nodes.find((node) => !before.nodes.some((old) => old.id === node.id));
       if (copy) set({ selectedNodeId: copy.id });
     },
@@ -1398,6 +1589,106 @@ export const useStudio = create<StudioState>((set, get) => {
         ...get().field,
         ghosts: get().field.ghosts.map((g) => (g.recording ? { ...g, recording: false } : g)),
       });
+    },
+
+    // ---- Field Presets + Streaming Preview ----
+    setActiveFieldPreset: (id) => {
+      // Ignore an id that doesn't resolve; null always clears back to the auto field.
+      if (id !== null && !get().field.presets.some((p) => p.id === id)) return;
+      setField({ ...get().field, activePresetId: id });
+    },
+
+    saveFieldPreset: (name, axes) => {
+      const id = uid('fpreset');
+      const preset: FieldPreset = {
+        id,
+        name: name && name.trim() ? name.trim() : 'Custom preset',
+        description: 'Custom field preset.',
+        builtin: false,
+        axes: { x: cloneBundle(axes.x), y: cloneBundle(axes.y), z: cloneBundle(axes.z) },
+      };
+      setField({ ...get().field, presets: [...get().field.presets, preset] });
+      return id;
+    },
+
+    updateFieldPresetAxis: (id, axis, bundle) => {
+      setField({
+        ...get().field,
+        presets: get().field.presets.map((p) =>
+          p.id === id ? { ...p, axes: { ...p.axes, [axis]: cloneBundle(bundle) } } : p,
+        ),
+      });
+    },
+
+    deleteFieldPreset: (id) => {
+      // Builtins HIDE (removed from the runtime list; persistence records the id as
+      // hidden). Customs are gone for good. Clear the active id if it was deleted.
+      const presets = get().field.presets.filter((p) => p.id !== id);
+      const activePresetId = get().field.activePresetId === id ? null : get().field.activePresetId;
+      setField({ ...get().field, presets, activePresetId });
+    },
+
+    setStreamingEnabled: (on) => setField({ ...get().field, streamingEnabled: !!on }),
+
+    runFieldPreview: async (pos) => {
+      const preset = activeFieldPreset();
+      if (!preset) {
+        set({ controlStatus: 'Pick a field preset before starting a live preview.' });
+        return;
+      }
+      // Bump + capture the supersede token: only the latest call may write the image.
+      const token = ++fieldPreviewToken;
+      setField({ ...get().field, previewPending: true });
+      try {
+        const patches = applyPresetAxes(preset, pos, 1);
+        const job = buildPreviewJob(get().workflow, patches, {
+          size: 320,
+          steps: 4,
+          wildcardSets: get().promptTools.wildcardSets,
+        });
+        const adapter = activeAdapter(get().backendSettings);
+        const result = await adapter.generate(job);
+        // A newer position superseded this one: drop the stale result (the render
+        // may have finished, but the latest position must win the preview).
+        if (token !== fieldPreviewToken) return;
+        setField({ ...get().field, previewImage: result.dataUrl, previewPending: false });
+      } catch (err) {
+        // Only the latest in-flight call clears pending + posts the loud error, so a
+        // superseded failure never overwrites a newer render's state.
+        if (token !== fieldPreviewToken) return;
+        setField({ ...get().field, previewPending: false });
+        set({
+          controlStatus: `Live preview needs the bridge — ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    },
+
+    promoteFieldPreviewToRender: async () => {
+      const preset = activeFieldPreset();
+      if (!preset) {
+        set({ controlStatus: 'Pick a field preset before promoting a preview to a full render.' });
+        return;
+      }
+      // Render the ACTIVE GHOST's real position — NOT a streaming midpoint. With
+      // streaming off, `lastFieldPreviewPos` was never set past its {0.5} default,
+      // so promoting it committed the field MIDPOINT over the ghost's real params.
+      const ghost = get().field.ghosts[0];
+      if (!ghost) {
+        set({ controlStatus: 'Move a ghost into the field first to promote its position to a full render.' });
+        return;
+      }
+      // Resolve the preset at the ghost's position + intensity, fan the rack
+      // aggregates into their enabled slots, apply the rest directly, then run the
+      // normal full-res gallery render (identical to the Render button path).
+      const patches = applyPresetAxes(preset, ghost.pos, ghost.intensity);
+      let next = fanOutRackPatches(get().workflow, patches);
+      for (const p of patches) {
+        if (isRackAggregatePatch(p)) continue;
+        const node = findNode(next, p.node);
+        if (node) next = updateNodeParam(next, node.id, p.param, p.value);
+      }
+      commit(next);
+      await get().enqueueRender();
     },
 
     // ---- Audio Reactivity ----
@@ -2042,6 +2333,311 @@ export const useStudio = create<StudioState>((set, get) => {
         commit(template.build());
         set({ selectedNodeId: null, view: 'recipe' });
       }
+    },
+
+    /* ------------------------------------------------ Creative OS actions */
+    analysisContext: () => buildAnalysisContext(get().gallery, get().creative.brains, get().shelf),
+
+    createProject: (name, type) => {
+      const brain = createBrain(name, type, new Date());
+      setCreative({ brains: [...get().creative.brains, brain], activeProjectId: brain.id });
+      return brain.id;
+    },
+
+    updateProjectBrain: (id, mutate) => {
+      setCreative({ brains: get().creative.brains.map((b) => (b.id === id ? mutate(b) : b)) });
+    },
+
+    deleteProject: (id) => {
+      const brains = get().creative.brains.filter((b) => b.id !== id);
+      const activeProjectId = get().creative.activeProjectId === id ? (brains[0]?.id ?? null) : get().creative.activeProjectId;
+      setCreative({ brains, activeProjectId });
+    },
+
+    setActiveProject: (id) => setCreative({ activeProjectId: id }),
+
+    openProject: (id) => {
+      editBrain(id, (b) => touchOpened(b, new Date()));
+      setCreative({ activeProjectId: id });
+      set({ view: 'projects' });
+    },
+
+    linkRenderToProject: (projectId, galleryId) => {
+      editBrain(projectId, (b) => {
+        if (b.renders.includes(galleryId)) return b;
+        return recordEvent({ ...b, renders: [...b.renders, galleryId] }, 'render-linked', 'Linked a render', new Date(), galleryId);
+      });
+    },
+
+    unlinkRenderFromProject: (projectId, galleryId) => {
+      editBrain(projectId, (b) =>
+        recordEvent({ ...b, renders: b.renders.filter((r) => r !== galleryId) }, 'render-unlinked', 'Unlinked a render', new Date(), galleryId),
+      );
+    },
+
+    addPromptToProject: (projectId, text, negative) => {
+      const prompt = { id: creativeId('pr'), text, negative, addedAt: new Date().toISOString() };
+      editBrain(projectId, (b) => recordEvent({ ...b, prompts: [...b.prompts, prompt] }, 'prompt-added', `Added prompt: ${text.slice(0, 32)}`, new Date(), prompt.id));
+    },
+
+    addAssetToProject: (projectId, label, kind, galleryId) => {
+      const asset = { id: creativeId('as'), label, kind, galleryId, status: 'ok' as const, addedAt: new Date().toISOString() };
+      editBrain(projectId, (b) => recordEvent({ ...b, assets: [...b.assets, asset] }, 'asset-linked', `Linked asset: ${label}`, new Date(), asset.id));
+    },
+
+    repairProjectAsset: (projectId, assetId, galleryId) => {
+      editBrain(projectId, (b) =>
+        recordEvent(
+          { ...b, assets: b.assets.map((a) => (a.id === assetId ? { ...a, status: 'ok' as const, galleryId: galleryId ?? a.galleryId } : a)) },
+          'asset-repaired',
+          'Repaired an asset link',
+          new Date(),
+          assetId,
+        ),
+      );
+    },
+
+    archiveProjectAsset: (projectId, assetId) => {
+      editBrain(projectId, (b) =>
+        recordEvent(
+          { ...b, assets: b.assets.map((a) => (a.id === assetId ? { ...a, archived: true } : a)) },
+          'asset-unlinked',
+          'Archived an asset',
+          new Date(),
+          assetId,
+        ),
+      );
+    },
+
+    addPublishedLink: (projectId, label, url) => {
+      const link = { id: creativeId('ln'), label, url, addedAt: new Date().toISOString() };
+      editBrain(projectId, (b) => recordEvent({ ...b, publishedLinks: [...b.publishedLinks, link] }, 'link-published', `Published: ${label}`, new Date(), link.id));
+    },
+
+    markProjectShipped: (projectId) => {
+      editBrain(projectId, (b) => updateBrain(b, { status: 'shipped' }, new Date()));
+    },
+
+    generateProjectCaptions: (projectId) => {
+      const b = getBrain(projectId);
+      if (!b) return;
+      const captions = generateSocialCaptions(b, 3);
+      editBrain(projectId, (brain) => updateBrain(brain, { copy: { ...brain.copy, socialCaptions: captions } }, new Date(), { type: 'captions-updated', label: 'Generated social captions' }));
+    },
+
+    buildProjectReleasePack: (projectId) => {
+      const b = getBrain(projectId);
+      if (!b) return null;
+      const now = new Date();
+      const ctx = buildAnalysisContext(get().gallery, get().creative.brains, get().shelf);
+      const gallery = get().gallery;
+      const resolveRender = (galleryId: string) => {
+        const item = gallery.find((g) => g.id === galleryId);
+        if (!item) return null;
+        return { dataUrl: item.dataUrl, extension: item.extension || (item.mediaType === 'video' ? 'mp4' : 'png') };
+      };
+      const pack = buildReleasePack(b, ctx, resolveRender, now);
+      // Download the assembled ZIP (browser/Tauri webview blob-anchor path).
+      try {
+        if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined') {
+          const bytes = new Uint8Array(pack.zip);
+          const blob = new Blob([bytes], { type: 'application/zip' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${pack.folderName}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+      } catch {
+        /* download is best-effort; the export is still recorded */
+      }
+      const record = packExportRecord(pack, now);
+      editBrain(projectId, (brain) => recordEvent({ ...brain, exports: [...brain.exports, record] }, 'export-built', `Built release pack (${pack.summary.present}/${pack.summary.total})`, now, record.id));
+      return pack;
+    },
+
+    exportProjectFile: (projectId) => {
+      const b = getBrain(projectId);
+      if (!b) return;
+      const file = buildProjectFile(b, get().creative.recipes, new Date());
+      downloadJson(file, `${b.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project'}.lumendeck.project.json`);
+    },
+
+    importProjectFile: (file) => {
+      const brains = get().creative.brains;
+      const existing = brains.findIndex((b) => b.id === file.brain.id);
+      const nextBrains = existing >= 0 ? brains.map((b, i) => (i === existing ? file.brain : b)) : [...brains, file.brain];
+      // Merge recipes the file carried (skip ids already present).
+      const have = new Set(get().creative.recipes.map((r) => r.id));
+      const newRecipes = file.recipes.filter((r) => !have.has(r.id));
+      setCreative({ brains: nextBrains, recipes: [...get().creative.recipes, ...newRecipes], activeProjectId: file.brain.id });
+      set({ view: 'projects' });
+    },
+
+    createCreativeRecipe: (name) => {
+      const recipe = createRecipePure(name, new Date());
+      setCreative({ recipes: [...get().creative.recipes, recipe] });
+      return recipe.id;
+    },
+
+    updateCreativeRecipe: (id, patch) => {
+      setCreative({ recipes: get().creative.recipes.map((r) => (r.id === id ? updateRecipePure(r, patch, new Date()) : r)) });
+    },
+
+    duplicateCreativeRecipe: (id) => {
+      const r = get().creative.recipes.find((x) => x.id === id);
+      if (!r) return;
+      setCreative({ recipes: [...get().creative.recipes, duplicateRecipePure(r, new Date())] });
+    },
+
+    deleteCreativeRecipe: (id) => {
+      setCreative({
+        recipes: get().creative.recipes.filter((r) => r.id !== id),
+        brains: get().creative.brains.map((b) => (b.recipes.includes(id) ? { ...b, recipes: b.recipes.filter((x) => x !== id) } : b)),
+      });
+    },
+
+    applyCreativeRecipe: (id, subject) => {
+      const recipe = get().creative.recipes.find((r) => r.id === id);
+      if (!recipe) return;
+      const app = applyRecipePure(recipe, subject);
+      const wf = get().workflow;
+      const promptNode = findNode(wf, 'prompt');
+      const modelNode = findNode(wf, 'model');
+      const canvasNode = findNode(wf, 'canvas');
+      if (promptNode) {
+        get().updateParam(promptNode.id, 'positive', app.prompt);
+        if (app.negativePrompt) get().updateParam(promptNode.id, 'negative', app.negativePrompt);
+      }
+      if (modelNode && app.modelId) get().updateParam(modelNode.id, 'assetId', app.modelId);
+      if (canvasNode) {
+        get().updateParam(canvasNode.id, 'width', app.canvas.width);
+        get().updateParam(canvasNode.id, 'height', app.canvas.height);
+      }
+      setCreative({ recipes: get().creative.recipes.map((r) => (r.id === id ? markRecipeUsed(r, new Date()) : r)) });
+      set({ view: 'recipe' });
+    },
+
+    promoteToRecipe: ({ galleryId, name, text }) => {
+      const now = new Date();
+      const wf = get().workflow;
+      // Explicit `text` (e.g. promoting a stored prompt) wins over the live graph.
+      let promptText = text ?? String(findNode(wf, 'prompt')?.params.positive ?? '');
+      let negative = String(findNode(wf, 'prompt')?.params.negative ?? '');
+      let modelId = String(findNode(wf, 'model')?.params.assetId ?? '');
+      let aspect: '16:9' | '1:1' | '9:16' = '1:1';
+      if (galleryId) {
+        const item = get().gallery.find((g) => g.id === galleryId);
+        if (item?.manifest) {
+          promptText = item.manifest.resolvedPrompt || item.manifest.prompt || promptText;
+          negative = item.manifest.negativePrompt || negative;
+          modelId = item.manifest.model?.id || modelId;
+          const c = item.manifest.canvas;
+          const r = c.width / Math.max(1, c.height);
+          aspect = Math.abs(r - 16 / 9) < 0.06 ? '16:9' : Math.abs(r - 9 / 16) < 0.06 ? '9:16' : '1:1';
+        }
+      }
+      const recipe = createRecipePure(name || 'Promoted recipe', now, {
+        promptTemplate: promptText,
+        negativePrompt: negative,
+        modelId,
+        aspectRatios: [aspect],
+      });
+      setCreative({ recipes: [...get().creative.recipes, recipe] });
+      return recipe.id;
+    },
+
+    linkRecipeToProject: (projectId, recipeId) => {
+      editBrain(projectId, (b) => {
+        if (b.recipes.includes(recipeId)) return b;
+        return recordEvent({ ...b, recipes: [...b.recipes, recipeId] }, 'recipe-linked', 'Linked a recipe', new Date(), recipeId);
+      });
+    },
+
+    resolveEntropyItem: (item, action) => {
+      const now = new Date();
+      switch (action) {
+        case 'delete':
+          if (item.ref && (item.kind === 'duplicate-render' || item.kind === 'unused-render' || item.kind === 'unlabeled-render')) {
+            get().removeGalleryItem(item.ref);
+          } else if (item.projectId && item.ref) {
+            editBrain(item.projectId, (b) => ({
+              ...b,
+              assets: b.assets.filter((a) => a.id !== item.ref),
+              prompts: b.prompts.filter((p) => p.id !== item.ref),
+              renders: b.renders.filter((r) => r !== item.ref),
+            }));
+          }
+          break;
+        case 'archive':
+          if (item.projectId && item.ref && item.kind !== 'unlabeled-render' && item.kind !== 'unused-render' && item.kind !== 'duplicate-render') {
+            editBrain(item.projectId, (b) => ({ ...b, assets: b.assets.map((a) => (a.id === item.ref ? { ...a, archived: true } : a)) }));
+          } else if (item.ref) {
+            // Gallery-global renders (unlabeled / unused / duplicate) have no project
+            // to archive into — tag them 'archived' so the finding clears on rescan.
+            void get().addTag(item.ref, 'archived');
+          }
+          break;
+        case 'retag':
+          if (item.ref) void get().addTag(item.ref, 'reviewed');
+          break;
+        case 'repair':
+          if (item.projectId && item.ref && item.kind === 'orphaned-render-link') {
+            editBrain(item.projectId, (b) => recordEvent({ ...b, renders: b.renders.filter((r) => r !== item.ref) }, 'render-unlinked', 'Removed a dead render link', now, item.ref));
+          } else if (item.projectId && item.ref) {
+            editBrain(item.projectId, (b) => recordEvent({ ...b, assets: b.assets.map((a) => (a.id === item.ref ? { ...a, status: 'ok' as const } : a)) }, 'asset-repaired', 'Marked asset repaired', now, item.ref));
+          }
+          break;
+        case 'promote-to-recipe':
+          if (item.ref && item.kind === 'unused-render') get().promoteToRecipe({ galleryId: item.ref });
+          else if (item.projectId && item.ref && item.kind === 'stale-prompt') {
+            const b = getBrain(item.projectId);
+            const p = b?.prompts.find((x) => x.id === item.ref);
+            if (p) get().promoteToRecipe({ name: `From: ${p.text.slice(0, 24)}`, text: p.text });
+          }
+          break;
+        case 'merge':
+          // Merge = keep the first duplicate, delete this one.
+          if (item.ref) get().removeGalleryItem(item.ref);
+          break;
+        case 'regenerate':
+          // Route the user to the graph to regenerate; deterministic engines can't render.
+          set({ view: 'graph' });
+          break;
+      }
+    },
+
+    setAiEnabled: (on) => setCreative({ aiEnabled: on }),
+
+    seedCreativeDemo: () => {
+      // Guard against a second seed (double-click / racing effect): once seeded,
+      // do nothing so demo renders can never be inserted into the gallery twice.
+      if (get().creative.seeded) return;
+      const now = new Date();
+      const { brains, recipes, renders } = buildCreativeDemo(now);
+      // Skip demo brains/recipes already present so re-seeding is idempotent.
+      const haveBrains = new Set(get().creative.brains.map((b) => b.id));
+      const haveRecipes = new Set(get().creative.recipes.map((r) => r.id));
+      const newBrains = brains.filter((b) => !haveBrains.has(b.id));
+      const newRecipes = recipes.filter((r) => !haveRecipes.has(r.id));
+      // Insert demo renders into the durable gallery so release-ready assets resolve.
+      // The .then re-checks the LIVE gallery by id (hydrateGallery may land first)
+      // so a render is never duplicated in the in-memory list.
+      void Promise.all(renders.map((r) => galleryStore.putRender(r).catch(() => {})))
+        .then(() => {
+          const present = new Set(get().gallery.map((g) => g.id));
+          const missing = renders.filter((r) => !present.has(r.id));
+          if (missing.length) set({ gallery: [...missing, ...get().gallery] });
+        });
+      setCreative({
+        brains: [...get().creative.brains, ...newBrains],
+        recipes: [...get().creative.recipes, ...newRecipes],
+        activeProjectId: newBrains[0]?.id ?? get().creative.activeProjectId,
+        seeded: true,
+      });
     },
   };
 });

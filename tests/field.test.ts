@@ -7,7 +7,7 @@ import {
 } from '../src/core/field/fieldProfile';
 import { applyField, fieldPosition } from '../src/core/field/applyField';
 import { pathToClip, type PathSample } from '../src/core/field/pathToClip';
-import { defaultFieldState, hydrateField, type FieldState } from '../src/state/field';
+import { defaultFieldState, hydrateField, type PersistedFieldState } from '../src/state/field';
 import { findNode } from '../src/core/workflow';
 import type { ControlNetFamily } from '../src/core/controlnet';
 import type { MotionParamPatch } from '../src/core/motion/renderPlan';
@@ -222,16 +222,28 @@ describe('pathToClip', () => {
 // field state slice — default + additive hydration (old blobs load)
 // ---------------------------------------------------------------------------
 describe('field state slice', () => {
-  it('defaultFieldState is empty', () => {
-    expect(defaultFieldState()).toEqual({ ghosts: [], anchors: [] });
+  it('defaultFieldState has no ghosts/anchors and seeds the 10 builtin presets', () => {
+    const s = defaultFieldState();
+    expect(s.ghosts).toEqual([]);
+    expect(s.anchors).toEqual([]);
+    expect(s.presets).toHaveLength(10);
+    expect(s.activePresetId).toBeNull();
+    // Preview fields always start clean (never resurrected).
+    expect(s.previewImage).toBeNull();
+    expect(s.previewPending).toBe(false);
+    expect(s.streamingEnabled).toBe(false);
   });
 
-  it('hydrateField(undefined) → empty state', () => {
-    expect(hydrateField(undefined)).toEqual({ ghosts: [], anchors: [] });
+  it('hydrateField(undefined) → seeded default state', () => {
+    const s = hydrateField(undefined);
+    expect(s.ghosts).toEqual([]);
+    expect(s.anchors).toEqual([]);
+    expect(s.presets).toHaveLength(10);
+    expect(s.activePresetId).toBeNull();
   });
 
   it('resets the transient recording flag on hydrate (never resume a session)', () => {
-    const persisted: FieldState = {
+    const persisted: PersistedFieldState = {
       ghosts: [{ id: 'g1', nodeId: 'n1', pos: { x: 0.2, y: 0.3, z: 0.4 }, intensity: 0.7, pinned: true, recording: true }],
       anchors: [],
     };
@@ -245,7 +257,7 @@ describe('field state slice', () => {
     const junk = {
       ghosts: [null, { nodeId: 'n1' }, { id: 'ok', nodeId: 'n1', pos: {}, intensity: 1, pinned: false, recording: false }],
       anchors: [{ id: 'a1', nodeId: 'n1', name: 'A', pos: { x: 0, y: 0, z: 0 }, values: [{ nodeId: 'n1', param: 'cfg', value: 7 }] }, 'bad'],
-    } as unknown as FieldState;
+    } as unknown as PersistedFieldState;
     const hydrated = hydrateField(junk);
     expect(hydrated.ghosts).toHaveLength(1);
     expect(hydrated.ghosts[0].id).toBe('ok');
@@ -260,8 +272,8 @@ describe('field state slice', () => {
 describe('store — ghost controller actions', () => {
   beforeEach(() => {
     useStudio.getState().resetWorkflow();
-    // Clear any ghosts/anchors + reset motion to a clean baseline for record tests.
-    useStudio.setState({ field: { ghosts: [], anchors: [] } });
+    // Clear any ghosts/anchors (preserving presets/preview slice) for record tests.
+    useStudio.setState({ field: { ...useStudio.getState().field, ghosts: [], anchors: [] } });
   });
 
   it('spawnGhost no-ops on a node with an empty profile (e.g. prompt)', () => {

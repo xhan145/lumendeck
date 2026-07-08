@@ -1,0 +1,300 @@
+/* Field Presets + Streaming Preview — the constellation parameter-navigation
+   panels (imported by FieldPresetsPanel.tsx + StreamingPreview.tsx). Reuse the
+   shared chrome (.btn, .field-help, .mono, brand tokens) and sit in the same
+   graph/motion dock as the Motion / Audio / Evolve panels, so they inherit that
+   panel's surface. Only field-preset-specific layout lives here. */
+
+.fieldpresets-panel,
+.streaming-preview {
+  display: grid;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--ld-border);
+}
+
+/* ---- shared header ------------------------------------------------------- */
+.fp-head,
+.sp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.fp-title,
+.sp-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ld-text);
+}
+.fp-title svg,
+.sp-title svg { color: var(--ld-cyan); }
+.fp-status,
+.sp-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text-faint);
+  white-space: nowrap;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-status.live { color: var(--ld-cyan); }
+.fp-note,
+.sp-note { margin: 0; }
+
+/* ---- axis glyph badges (shared X/Y/Z tint) ------------------------------- */
+.fp-axis-glyph,
+.sp-axis-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #04121a;
+  flex: none;
+}
+.fp-axis-x, .sp-axis-x { background: #34d6f4; }
+.fp-axis-y, .sp-axis-y { background: #a78bfa; }
+.fp-axis-z, .sp-axis-z { background: #ff8a3d; }
+
+/* ===== Field Presets ===================================================== */
+.fp-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fp-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.fp-item {
+  flex: 1;
+  display: grid;
+  gap: 4px;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--ld-text);
+  background: color-mix(in srgb, var(--ld-surface) 70%, #000 30%);
+  border: 1px solid var(--ld-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fp-item:hover { border-color: var(--ld-border-strong); }
+.fp-item:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.fp-item.active {
+  border-color: var(--ld-cyan);
+  box-shadow: 0 0 0 1px var(--ld-cyan);
+}
+.fp-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.fp-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: var(--rad-pill);
+  color: var(--ld-text-faint);
+  background: color-mix(in srgb, var(--ld-surface-3) 80%, transparent);
+}
+.fp-badge.custom { color: var(--ld-violet); }
+.fp-item-axes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 10px;
+  color: var(--ld-text-dim);
+}
+.fp-none .fp-item-axes { color: var(--ld-text-faint); font-style: italic; }
+.fp-axis-chip { white-space: nowrap; }
+.fp-axis-chip b {
+  color: var(--ld-cyan);
+  font-weight: 800;
+  margin-right: 2px;
+}
+.fp-del { align-self: center; flex: none; }
+
+/* ---- inert-param hint ---------------------------------------------------- */
+.fp-inert {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 9px;
+  font-size: 11px;
+  color: var(--ld-warn);
+  background: rgba(255, 138, 0, 0.10);
+  border: 1px solid rgba(255, 138, 0, 0.40);
+  border-radius: 8px;
+}
+.fp-inert svg { color: var(--ld-warn); flex: none; margin-top: 1px; }
+
+/* ---- axis editor --------------------------------------------------------- */
+.fp-editor {
+  display: grid;
+  gap: 6px;
+  padding: var(--sp-2);
+  background: color-mix(in srgb, var(--ld-surface) 80%, #000 20%);
+  border: 1px solid var(--ld-border);
+  border-radius: 8px;
+}
+.fp-editor-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.fp-editor-title { font-size: 12px; font-weight: 700; color: var(--ld-text); }
+.fp-axis-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.fp-axis-edit.empty .fp-axis-name,
+.fp-axis-edit.empty .fp-axis-param {
+  border-color: rgba(255, 138, 0, 0.55);
+}
+.fp-axis-name { flex: 1 1 8ch; min-width: 7ch; }
+.fp-axis-param { flex: 1 1 7ch; min-width: 6ch; }
+.fp-axis-node { flex: 0 1 auto; }
+.fp-axis-num { width: 6ch; min-width: 5ch; }
+.fp-axis-apply { flex: none; }
+
+.fp-save-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.fp-save-name { flex: 1; min-width: 8ch; }
+.fp-save { flex: none; }
+.fp-save-hint { margin: 0; color: var(--ld-warn); }
+
+/* ===== Streaming Preview ================================================= */
+.sp-note { margin: 0; }
+.sp-nobridge {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ld-warn);
+  background: rgba(255, 138, 0, 0.10);
+  border: 1px solid rgba(255, 138, 0, 0.45);
+  border-radius: 8px;
+}
+.sp-nobridge svg { color: var(--ld-warn); flex: none; margin-top: 1px; }
+
+.sp-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1;
+  max-height: 240px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ld-cyan) 8%, transparent), color-mix(in srgb, var(--ld-violet) 8%, transparent)),
+    color-mix(in srgb, var(--ld-surface) 55%, #000 45%);
+  border: 1px solid var(--ld-border);
+  border-radius: 10px;
+}
+.sp-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+.sp-empty {
+  padding: var(--sp-4);
+  font-size: 12px;
+  color: var(--ld-text-faint);
+  text-align: center;
+}
+.sp-rendering {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ld-text);
+  background: color-mix(in srgb, var(--ld-surface) 82%, transparent);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-pill);
+  backdrop-filter: blur(4px);
+}
+.sp-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ld-cyan) 35%, transparent);
+  border-top-color: var(--ld-cyan);
+  animation: sp-spin 0.7s linear infinite;
+}
+@keyframes sp-spin { to { transform: rotate(360deg); } }
+.sp-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 7px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ld-text);
+  background: color-mix(in srgb, var(--ld-surface) 82%, transparent);
+  border: 1px solid var(--ld-border);
+  border-radius: var(--rad-pill);
+}
+.sp-mock-note { margin: 0; }
+
+/* ---- live per-axis values ------------------------------------------------ */
+.sp-axes {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sp-axis {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-axis-label { flex: 1; font-size: 12px; color: var(--ld-text-dim); }
+.sp-axis-val { font-size: 12px; color: var(--ld-text); min-width: 5ch; text-align: right; }
+
+.sp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sp-render-full { margin-left: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sp-spinner { animation: none; }
+}

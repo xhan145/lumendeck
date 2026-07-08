@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useStudio } from '../../state/store';
 import { GraphView } from './GraphView';
 import { Graph3DView } from './Graph3DView';
+import { ConstellationCommand } from '../creative/ConstellationCommand';
 import '../../styles/graph3d.css';
 
 /** One-time probe: can this machine create a WebGL context at all? */
@@ -81,6 +82,7 @@ export function GraphWorkspace() {
           3D view unavailable (WebGL could not start) — showing the classic 2D editor.
         </div>
       ) : null}
+      <ConstellationCommand />
     </div>
   );
 }
