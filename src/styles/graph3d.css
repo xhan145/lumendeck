@@ -326,3 +326,19 @@
   backdrop-filter: blur(6px);
   pointer-events: none;
 }
+
+/* Live frame-stats overlay (shown only when Diagnostics is enabled). */
+.graph3d-stats {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 6;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font: 500 11px/1.4 var(--ld-mono, ui-monospace, monospace);
+  color: var(--ld-cyan, #34d6f4);
+  background: rgba(7, 20, 38, 0.72);
+  border: 1px solid rgba(52, 214, 244, 0.25);
+  pointer-events: none;
+  white-space: nowrap;
+}

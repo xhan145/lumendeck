@@ -39,6 +39,12 @@ import {
 } from './graph3d/ghostGizmo';
 import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
 import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
+import { createFrameStats, type FrameStatsAccumulator } from './graph3d/frameStats';
+import { createFabric, packWells, MAX_WELLS, FABRIC_EXTENT, type FabricHandle, type FabricTier } from './graph3d/fabric';
+import { nodeAnomaly, makeAnomalyRing } from './graph3d/anomaly';
+import { settleShouldRun } from './graph3d/settle';
+import { createFlashLimiter, type FlashLimiter } from './graph3d/flashLimiter';
+import { createParticleField, type ParticleField } from './graph3d/particles';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
@@ -52,9 +58,11 @@ import {
   makeOrbRing,
   makeWireLine,
   resolveCssColor,
+  setOrbEmissive,
   updateOrbMaterial,
   updateWireLine,
 } from './graph3d/scene';
+import { emissiveFor } from '../../state/nodeMeta';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../../core/controlnet';
 import { fieldProfile, type FieldProfile } from '../../core/field/fieldProfile';
 import { applyField } from '../../core/field/applyField';
@@ -123,6 +131,10 @@ interface OrbEntry {
   ringT: number;
   /** Gradient+accent signature of the current material tint (skip no-op updates). */
   tintKey: string;
+  /** Palette-breaking health outline ring (constellation anomaly encoding). */
+  anomalyRing: THREE.Mesh | null;
+  /** Anomaly level the current ring was built for ('' = none) — skip no-op rebuilds. */
+  anomalyKey: string;
 }
 
 /** Gradient stops for weightless kinds: a neutral slate orb. */
@@ -232,6 +244,15 @@ export function Graph3DView({ onContextFailed }: Props) {
   const workflow = useStudio((s) => s.workflow);
   const selectedNodeId = useStudio((s) => s.selectedNodeId);
   const graph3dStyle = useStudio((s) => s.appSettings.graph3dStyle ?? 'orbs');
+  const graph3dEffects = useStudio((s) => s.appSettings.graph3dEffects ?? 'off');
+  const showDiagnostics = useStudio((s) => s.appSettings.showDiagnostics);
+  // Health drives the anomaly outline encoding. Recomputed on every workflow
+  // commit (a new array), so this coincides with the workflow subscription — no
+  // extra re-render churn — but keeps the anomaly rings live on shelf changes too.
+  const health = useStudio((s) => s.health);
+  // Per-node activity metadata drives the luminosity glow. Reference changes on
+  // every touch (like health) so the reconcile re-snapshots emissive on edits.
+  const nodeMeta = useStudio((s) => s.nodeMeta);
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   const selectNode = useStudio((s) => s.selectNode);
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
@@ -308,6 +329,28 @@ export function Graph3DView({ onContextFailed }: Props) {
   onContextFailedRef.current = onContextFailed;
   /** The starvation-proof playback driver (rAF + timer fallback); null when not playing. */
   const playbackDriver = useRef<PlaybackDriver | null>(null);
+  // ---- constellation GPU overhaul (First Slice: gravity fabric) ------------
+  /** Pure frame-time instrument, fed at every render site; published to the overlay at ~2Hz. */
+  const frameStatsRef = useRef<FrameStatsAccumulator | null>(null);
+  if (!frameStatsRef.current) frameStatsRef.current = createFrameStats();
+  const lastFrameTsRef = useRef(0);
+  const lastStatsPublishRef = useRef(0);
+  const statsElRef = useRef<HTMLDivElement | null>(null);
+  /** The gravity-fabric layer (own Group); null when the effects flag is off. */
+  const fabricRef = useRef<FabricHandle | null>(null);
+  /** True once we've warned about >MAX_WELLS nodes (warn once, not per reconcile). */
+  const clampWarnedRef = useRef(false);
+  /** Short-lived rAF+timer driver animating idle-time ripples until they settle. */
+  const settleDriverRef = useRef<PlaybackDriver | null>(null);
+  /** Shared WCAG flash limiter across all ripple sources (≤3 onsets / rolling sec). */
+  const flashLimiterRef = useRef<FlashLimiter | null>(null);
+  if (!flashLimiterRef.current) flashLimiterRef.current = createFlashLimiter();
+  /** Node ids that carried a health ERROR at the last commit (new-error diffing). */
+  const prevErrorNodesRef = useRef<Set<string>>(new Set());
+  /** Seed the error set on the first health pass so pre-existing errors don't burst. */
+  const healthSeededRef = useRef(false);
+  /** Ambient gravity-dust field (rich tier only); its existence == "particles active". */
+  const particleFieldRef = useRef<ParticleField | null>(null);
 
   const [ready, setReady] = useState(false);
   const [wire, setWire] = useState<WireDraft | null>(null);
@@ -334,6 +377,28 @@ export function Graph3DView({ onContextFailed }: Props) {
    * with the store when the tab is hidden or the browser only produces frames
    * on demand (headless), where rAF alone would starve forever.
    */
+  /**
+   * Sample one rendered frame into the pure frameStats accumulator and, at ~2Hz,
+   * publish a one-line readout to the diagnostics overlay imperatively (no React
+   * re-render). Called right after every renderer.render pair (flush + loops).
+   * Closes over refs only, so it is safe to reference inside the flush body below.
+   */
+  const recordFrame = useCallback(() => {
+    const t = threeRef.current;
+    const fs = frameStatsRef.current;
+    if (!t || !fs) return;
+    const now = performance.now();
+    const prev = lastFrameTsRef.current;
+    lastFrameTsRef.current = now;
+    if (prev > 0) fs.sample(now - prev);
+    fs.setDrawCalls(t.renderer.info.render.calls);
+    if (statsElRef.current && now - lastStatsPublishRef.current > 500) {
+      lastStatsPublishRef.current = now;
+      const s = fs.read();
+      statsElRef.current.textContent = `${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)}ms · worst ${s.worstMs.toFixed(1)}ms · ${s.drawCalls} draws`;
+    }
+  }, []);
+
   if (!flushRef.current) {
     flushRef.current = createFlushScheduler(
       () => {
@@ -341,6 +406,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         if (!t) return;
         t.renderer.render(t.scene, t.camera);
         t.cssRenderer.render(t.scene, t.camera);
+        recordFrame();
       },
       {
         requestFrame: (cb) => requestAnimationFrame(cb),
@@ -353,6 +419,68 @@ export function Graph3DView({ onContextFailed }: Props) {
   const requestRender = useCallback(() => {
     flushRef.current?.request();
   }, []);
+
+  /**
+   * Fade every orb's luminosity glow from live activity recency. Called each frame
+   * by the animating loops so the glow decays smoothly while anything animates; the
+   * orb-reconcile snapshots it otherwise (idle-safe). MUST use Date.now() — the
+   * store stamps lastActiveAt with Date.now(), and mixing in performance.now()
+   * would make age hugely negative and pin every orb to full glow. Forces 0 when
+   * the effects flag is off so flag-off playback/audio renders identically to before.
+   */
+  const updateEmissive = useCallback(() => {
+    const s = useStudio.getState();
+    const off = (s.appSettings.graph3dEffects ?? 'off') === 'off';
+    const now = Date.now();
+    const meta = s.nodeMeta;
+    for (const [id, entry] of orbsRef.current) setOrbEmissive(entry.material, off ? 0 : emissiveFor(meta[id], now));
+  }, []);
+
+  /**
+   * Ensure the idle animator is running while there is idle-time animation to do —
+   * live ripples decaying and/or ambient gravity dust (rich tier). Idempotent
+   * (no-op if already running). It NEVER starts while playback/audio owns the
+   * frame — that mutual exclusion (graph3d/settle.ts) is what keeps "exactly one
+   * render per frame". While the tab is hidden it stays armed but skips the draw
+   * (no GPU burn), and it self-stops once nothing needs animating, restoring the
+   * dirty-flag idle sleep.
+   */
+  const wakeSettle = useCallback(() => {
+    if (settleDriverRef.current?.running()) return;
+    const s = useStudio.getState();
+    const decayActive = particleFieldRef.current != null || (fabricRef.current?.ripplesAlive(performance.now()) ?? false);
+    if (!settleShouldRun({ decayActive, playing: s.transport.playing, audioRunning: s.audio.running })) return;
+    let last = performance.now();
+    settleDriverRef.current = createPlaybackDriver(
+      () => {
+        const t = threeRef.current;
+        if (!t) return false;
+        const now = performance.now();
+        const dt = (now - last) / 1000;
+        last = now;
+        const pf = particleFieldRef.current;
+        const fab = fabricRef.current;
+        // Hidden tab: stay armed only if something still needs animating, but skip
+        // the GPU draw entirely (R4 — no rendering into an invisible window).
+        if (typeof document !== 'undefined' && document.hidden) {
+          return pf != null || (fab ? fab.ripplesAlive(now) : false);
+        }
+        if (pf) pf.advance(dt);
+        const rAlive = fab ? fab.tickRipples(now) : false;
+        updateEmissive();
+        t.renderer.render(t.scene, t.camera);
+        t.cssRenderer.render(t.scene, t.camera);
+        recordFrame();
+        return pf != null || rAlive; // ambient dust keeps it alive; else stop when ripples die
+      },
+      {
+        requestFrame: (cb) => requestAnimationFrame(cb),
+        cancelFrame: (id) => cancelAnimationFrame(id),
+        setTimer: (cb, ms) => setTimeout(cb, ms) as unknown as number,
+        clearTimer: (id) => clearTimeout(id),
+      },
+    );
+  }, [recordFrame, updateEmissive]);
 
   const applyCamera = useCallback(() => {
     const t = threeRef.current;
@@ -573,6 +701,10 @@ export function Graph3DView({ onContextFailed }: Props) {
         host.removeEventListener('wheel', onWheel);
         host.removeEventListener('scroll', resetScroll, true);
         flushRef.current?.cancel();
+        settleDriverRef.current?.stop();
+        settleDriverRef.current = null;
+        particleFieldRef.current?.dispose();
+        particleFieldRef.current = null;
         orbsRef.current.clear();
         // Ghost/anchor overlays are disposed by the scene traversal below (their
         // geometries/materials live under the scene); just drop the id maps.
@@ -667,7 +799,7 @@ export function Graph3DView({ onContextFailed }: Props) {
           sphere.userData.nodeId = node.id;
           group.add(sphere);
           t.orbGroup.add(group);
-          entry = { group, material, ring: null, ringT: -1, tintKey };
+          entry = { group, material, ring: null, ringT: -1, tintKey, anomalyRing: null, anomalyKey: '' };
           orbs.set(node.id, entry);
         } else if (entry.tintKey !== tintKey) {
           updateOrbMaterial(entry.material, stops, accent);
@@ -686,6 +818,28 @@ export function Graph3DView({ onContextFailed }: Props) {
           }
           entry.ringT = ringT;
         }
+        // Anomaly outline (constellation encoding): a palette-breaking ring for a
+        // node with a health error/warning, gated on the effects flag. Additive to
+        // the value-ring above — the existing tint/ring/position paths are untouched.
+        // The node chip's icon+text carries the same signal (never color alone).
+        const anomaly = graph3dEffects === 'off' ? null : nodeAnomaly(node.id, health);
+        const anomalyKey = anomaly ?? '';
+        if (entry.anomalyKey !== anomalyKey) {
+          if (entry.anomalyRing) {
+            entry.group.remove(entry.anomalyRing);
+            disposeObject3D(entry.anomalyRing);
+            entry.anomalyRing = null;
+          }
+          if (anomaly) {
+            entry.anomalyRing = makeAnomalyRing(ORB_RADIUS, anomaly);
+            entry.group.add(entry.anomalyRing);
+          }
+          entry.anomalyKey = anomalyKey;
+        }
+        // Luminosity: snapshot the activity glow from edit/create recency. This is
+        // the idle-safe path (updates on graph changes); the animating loops fade
+        // it smoothly while they run (see updateEmissive).
+        setOrbEmissive(entry.material, graph3dEffects === 'off' ? 0 : emissiveFor(nodeMeta[node.id], Date.now()));
         const c = orbWorldCenter(node);
         entry.group.position.set(c.x, c.y, c.z);
       }
@@ -696,10 +850,128 @@ export function Graph3DView({ onContextFailed }: Props) {
       t.orbGroup.remove(entry.group);
       entry.material.dispose();
       if (entry.ring) disposeObject3D(entry.ring); // shared sphere geometry survives
+      if (entry.anomalyRing) disposeObject3D(entry.anomalyRing);
       orbs.delete(id);
     }
+    // Fabric wells track graph mass. Refresh here (this effect already re-runs on
+    // any workflow/selection change); no-op when the fabric flag is off.
+    const fab = fabricRef.current;
+    if (fab) {
+      const { clamped } = fab.update(workflow.nodes);
+      if (clamped && !clampWarnedRef.current) {
+        console.warn(`LumenDeck: more than ${MAX_WELLS} weighted nodes — the fabric shows the ${MAX_WELLS} deepest wells.`);
+        clampWarnedRef.current = true;
+      } else if (!clamped) {
+        clampWarnedRef.current = false;
+      }
+    }
+    // Rebuild the gravity-dust grid from the same (home) wells so the particles
+    // fall toward the current mass distribution. Rich tier only (field non-null).
+    particleFieldRef.current?.setWells(packWells(workflow.nodes).wells);
     requestRender();
-  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender]);
+  }, [ready, workflow, selectedNodeId, graph3dStyle, capsuleAccent, requestRender, graph3dEffects, health, nodeMeta]);
+
+  // ---- gravity fabric lifecycle (constellation GPU overhaul, First Slice) ----
+  // Own Group beside the GridHelpers; constructed only when the flag is on, at
+  // the tier's density; disposed on flag-off / tier-change / unmount. Wells are
+  // refreshed by the orb-reconcile effect above (graph changes), redrawn via the
+  // dirty-flag scheduler — there is deliberately NO animation loop here.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    settleDriverRef.current?.stop();
+    settleDriverRef.current = null;
+    fabricRef.current?.dispose();
+    fabricRef.current = null;
+    if (graph3dEffects === 'off') { requestRender(); return; }
+    const host = viewportRef.current ?? document.documentElement;
+    const shallow = resolveCssColor('var(--ld-cyan)', host);
+    const deep = resolveCssColor('var(--ld-violet)', host);
+    const tier: FabricTier = graph3dEffects === 'minimal' ? 'minimal' : graph3dEffects === 'rich' ? 'rich' : 'standard';
+    const fabric = createFabric(tier, shallow, deep);
+    fabric.update(useStudio.getState().workflow.nodes);
+    t.scene.add(fabric.group);
+    fabricRef.current = fabric;
+    clampWarnedRef.current = false;
+    requestRender();
+    return () => {
+      settleDriverRef.current?.stop();
+      settleDriverRef.current = null;
+      fabricRef.current?.dispose();
+      fabricRef.current = null;
+      requestRender();
+    };
+  }, [ready, graph3dEffects, requestRender]);
+
+  // ---- ambient gravity dust (Phase 3): particles fall toward mass wells --------
+  // Heaviest layer → RICH tier only, and never under reduced motion. When present
+  // it drives a continuous idle loop (the deliberate trade for ambient particles),
+  // visibility-gated so a hidden tab draws nothing. Disposed on tier/flag change.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    particleFieldRef.current?.dispose();
+    particleFieldRef.current = null;
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (graph3dEffects !== 'rich' || reduced) { requestRender(); return; }
+    // Warm stardust — pops against the cool cyan/violet liquid metal so the dust
+    // reads as stars streaming into the gravity wells rather than blending in.
+    const field = createParticleField(1600, FABRIC_EXTENT, '#FFE7B8');
+    field.setWells(packWells(useStudio.getState().workflow.nodes).wells);
+    t.scene.add(field.points);
+    particleFieldRef.current = field;
+    requestRender();
+    wakeSettle(); // start the ambient idle loop
+    return () => {
+      particleFieldRef.current?.dispose();
+      particleFieldRef.current = null;
+      requestRender();
+    };
+  }, [ready, graph3dEffects, requestRender, wakeSettle]);
+
+  // ---- event ripples: a fabric wave when a node NEWLY errors (Phase 2C) ------
+  // Diffs the node-attributed ERROR set across health commits; each newly-errored
+  // node fires ONE ripple at its orb, through the shared flash limiter (≤3/sec).
+  // Reduced motion + flag-off suppress ripples — the persistent anomaly ring is
+  // the static equivalent. Pre-existing errors at mount are seeded, never bursted.
+  useEffect(() => {
+    if (!ready) return;
+    const cur = new Set<string>();
+    for (const h of health) if (h.nodeId && h.severity === 'error') cur.add(h.nodeId);
+    const prev = prevErrorNodesRef.current;
+    prevErrorNodesRef.current = cur;
+    if (!healthSeededRef.current) { healthSeededRef.current = true; return; } // seed, no burst
+    const fab = fabricRef.current;
+    if (!fab || graph3dEffects === 'off') return;
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) return;
+    const now = performance.now();
+    const fl = flashLimiterRef.current!;
+    let pushed = false;
+    for (const nodeId of cur) {
+      if (prev.has(nodeId)) continue; // already errored — not a NEW event
+      const node = workflow.nodes.find((n) => n.id === nodeId);
+      if (!node) continue;
+      if (!fl.tryAdd(now)) break; // flash budget spent this second
+      const c = orbWorldCenter(node);
+      fab.pushRipple(c.x, c.z, now);
+      pushed = true;
+    }
+    if (pushed) wakeSettle();
+  }, [ready, health, workflow, graph3dEffects, wakeSettle]);
+
+  // Playback/audio own the frame → stop the settle driver (double-render safety).
+  // Returning to idle with a ripple still alive → resume settling it.
+  useEffect(() => {
+    if (transportPlaying || audioRunning) {
+      settleDriverRef.current?.stop();
+      settleDriverRef.current = null;
+    } else if (particleFieldRef.current != null || fabricRef.current?.ripplesAlive(performance.now())) {
+      wakeSettle();
+    }
+  }, [transportPlaying, audioRunning, wakeSettle]);
 
   // ---- ghost chip DOM anchors (value chip + toolbar + intensity slider) -----
   const getGhostChipAnchor = useCallback((id: string): HTMLDivElement => {
@@ -964,6 +1236,17 @@ export function Graph3DView({ onContextFailed }: Props) {
       const b = toOrb ? orbSurfacePoint(bAnchor, aAnchor, ORB_RADIUS) : bAnchor;
       updateWireLine(child as THREE.Line, a, b);
     }
+    // Fabric depressions follow the live orbs (playback/audio move orbs via
+    // direct scene mutation, no store commit) so wells never detach. On restore,
+    // orbs are back at home and this re-homes the wells for free. No-op if the
+    // fabric flag is off. Depth/sigma come from the last home re-pack.
+    const fab = fabricRef.current;
+    if (fab) {
+      fab.syncLive((nodeId) => {
+        const e = orbs.get(nodeId);
+        return e ? { x: e.group.position.x, z: e.group.position.z } : undefined;
+      });
+    }
   }, [graph3dStyle]);
 
   /** Apply one animated frame (positions, scale, tint, ring) to every orb. */
@@ -1047,8 +1330,9 @@ export function Graph3DView({ onContextFailed }: Props) {
       entry.group.scale.setScalar(1);
     }
     routeWiresLive();
+    updateEmissive(); // reset the glow snapshot so a stopped loop leaves no stranded emissive
     requestRender();
-  }, [capsuleAccent, routeWiresLive, requestRender]);
+  }, [capsuleAccent, routeWiresLive, requestRender, updateEmissive]);
 
   useEffect(() => {
     if (!ready || !transportPlaying) return;
@@ -1095,8 +1379,12 @@ export function Graph3DView({ onContextFailed }: Props) {
       });
       localT = nextT;
       applyPlaybackFrame(active, localT);
+      fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
+      particleFieldRef.current?.advance(dt); // ambient dust drifts on the playback frame too
+      updateEmissive(); // luminosity fades smoothly during playback
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
+      recordFrame();
       if (ended) {
         // Non-looping clip reached the end: settle the playhead AT the end (so
         // the scrubber shows the final frame) and pause. Cleanup restores idle.
@@ -1154,6 +1442,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       applyPlaybackFrame(clip, s.transport.t);
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
+      recordFrame();
     });
     return unsub;
   }, [ready, applyPlaybackFrame]);
@@ -1212,16 +1501,24 @@ export function Graph3DView({ onContextFailed }: Props) {
   useEffect(() => {
     if (!ready || !audioRunning) return;
     let raf = 0;
+    let lastTick = performance.now();
     const tick = () => {
       const t = threeRef.current;
       const s = useStudio.getState();
       // Stop if audio ended or motion playback took over (mutual exclusion).
       if (!t || !s.audio.running || s.transport.playing) return;
+      const nowT = performance.now();
+      const dt = (nowT - lastTick) / 1000;
+      lastTick = nowT;
       const bands = scaleBands(computeBands(readAudioFrequency()), s.audio.sensitivity);
       const reaction = applyAudio(bands, s.audio.mapping);
       applyAudioFrame(reaction);
+      fabricRef.current?.tickRipples(nowT); // ripples animate on the audio frame
+      particleFieldRef.current?.advance(dt); // ambient dust drifts on the audio frame too
+      updateEmissive(); // luminosity fades smoothly during audio
       t.renderer.render(t.scene, t.camera);
       t.cssRenderer.render(t.scene, t.camera);
+      recordFrame();
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -1622,6 +1919,8 @@ export function Graph3DView({ onContextFailed }: Props) {
     >
       <div ref={viewportRef} className="graph3d-viewport" />
 
+      {showDiagnostics && <div className="graph3d-stats" ref={statsElRef} aria-hidden="true" />}
+
       <CollapsiblePalette>
         <div className="graph-palette-head">
           <strong>Nodes</strong>
@@ -1662,6 +1961,21 @@ export function Graph3DView({ onContextFailed }: Props) {
             : 'Showing full cards — switch to gradient orbs'}
         >
           Orbs ⇄ Cards
+        </button>
+        <button
+          className="btn"
+          type="button"
+          aria-pressed={graph3dEffects !== 'off'}
+          onClick={() => updateAppSettings({
+            graph3dEffects: graph3dEffects === 'off' ? 'standard' : graph3dEffects === 'rich' ? 'off' : 'rich',
+          })}
+          title={graph3dEffects === 'off'
+            ? 'Spacetime off — click for the liquid-metal fabric (mass warps it)'
+            : graph3dEffects === 'rich'
+              ? 'Spacetime + gravity dust on — click to turn off'
+              : 'Liquid-metal fabric on — click to add gravity dust'}
+        >
+          Spacetime {graph3dEffects === 'off' ? 'Off' : graph3dEffects === 'rich' ? 'Rich' : 'On'}
         </button>
         <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
           Duplicate

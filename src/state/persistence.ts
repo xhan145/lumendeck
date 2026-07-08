@@ -9,6 +9,7 @@ import { BUILTIN_FIELD_PRESETS } from '../core/field/presets';
 import type { AudioState } from './audio';
 import type { AudioMapping } from '../core/audio/mapping';
 import type { CreativeState } from './creative';
+import { pruneNodeMeta, type NodeMetaMap } from './nodeMeta';
 
 const KEY = 'lumendeck.v1';
 
@@ -60,6 +61,12 @@ export interface PersistedState {
    * gallery id only, so this stays light enough for the localStorage projection.
    */
   creative?: CreativeState;
+  /**
+   * Per-node activity metadata (createdAt / lastActiveAt) driving the constellation
+   * LUMINOSITY encoding. Optional so state saved before this feature still loads —
+   * a missing slice hydrates to {} and re-seeds from the current workflow nodes.
+   */
+  nodeMeta?: NodeMetaMap;
 }
 
 /**
@@ -82,10 +89,15 @@ export function persistedProjection(state: {
   audio?: AudioState;
   /** Optional so callers assembled before this slice existed still typecheck. */
   creative?: CreativeState;
+  /** Optional so callers assembled before this slice existed still typecheck. */
+  nodeMeta?: NodeMetaMap;
 }): PersistedState {
   return {
     workflow: state.workflow,
     rackPresets: state.rackPresets,
+    // Prune node-meta to the LIVE node set so deleted/reset nodes' entries can't
+    // accumulate unbounded in localStorage across a long-lived project.
+    nodeMeta: state.nodeMeta ? pruneNodeMeta(state.nodeMeta, state.workflow.nodes.map((n) => n.id)) : undefined,
     // gallery is intentionally omitted — renders live in IndexedDB now.
     backendSettings: state.backendSettings,
     appSettings: state.appSettings,

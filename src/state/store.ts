@@ -91,6 +91,7 @@ import { fanOutRackPatches, isRackAggregatePatch } from '../core/field/rackFanou
 import { pathToClip, type PathSample } from '../core/field/pathToClip';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../core/controlnet';
 import { defaultAudioState, hydrateAudio, SENSITIVITY_MIN, SENSITIVITY_MAX, type AudioSourceKind, type AudioState } from './audio';
+import { hydrateNodeMeta, seedNodeMeta, touchNode, type NodeMetaMap } from './nodeMeta';
 import { AudioEngine, type AudioSource } from '../audio/engine';
 import { computeBands, scaleBands } from '../core/audio/bands';
 import { audioToClip, type AudioSample } from '../core/audio/audioToClip';
@@ -276,6 +277,8 @@ interface StudioState {
   shelf: ModelAsset[];
   shelfSource: 'demo' | 'bridge';
   health: HealthIssue[];
+  /** Per-node activity metadata (createdAt / lastActiveAt) for the luminosity glow. */
+  nodeMeta: NodeMetaMap;
   view: ViewId;
   selectedNodeId: string | null;
   rackPresets: RackPreset[];
@@ -689,6 +692,11 @@ const initialWorkflow = applyAutoCheckpoint(persisted.workflow ?? createDefaultW
 const initialMotion = hydrateMotion(persisted.motion, initialWorkflow);
 const initialField = hydrateField(persisted.field);
 const initialAudio = hydrateAudio(persisted.audio, initialWorkflow);
+const initialNodeMeta = seedNodeMeta(
+  hydrateNodeMeta(persisted.nodeMeta),
+  initialWorkflow.nodes.map((n) => n.id),
+  Date.now(),
+);
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
 const initialCreative = hydrateCreative(persisted.creative);
@@ -699,8 +707,25 @@ const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
     : 'mission';
 
 export const useStudio = create<StudioState>((set, get) => {
-  const commit = (wf: Workflow) =>
-    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null });
+  /**
+   * Commit a workflow mutation (+ recompute health), stamping luminosity activity
+   * in the SAME set. A node counts as "active" when it is brand-new OR its params
+   * object reference changed — updateNodeParam preserves the reference of every
+   * UNCHANGED node, so this diff catches EVERY edit path (inspector, ghost drags,
+   * presets, history, bake, rack edits, …) and node creation, without threading
+   * ids through each action. Move/connect/layout leave params refs intact, so
+   * they are correctly NOT treated as activity.
+   */
+  const commit = (wf: Workflow) => {
+    const prev = new Map(get().workflow.nodes.map((n) => [n.id, n]));
+    const now = Date.now();
+    let nodeMeta = get().nodeMeta;
+    for (const n of wf.nodes) {
+      const before = prev.get(n.id);
+      if (!before || before.params !== n.params) nodeMeta = touchNode(nodeMeta, n.id, now);
+    }
+    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null, nodeMeta });
+  };
 
   // ---- Motion helpers (keep the actions terse; all pure list edits) ----
   const setMotion = (motion: MotionState) => set({ motion });
@@ -870,6 +895,7 @@ export const useStudio = create<StudioState>((set, get) => {
     shelf: DEMO_SHELF,
     shelfSource: 'demo',
     health: checkHealth(initialWorkflow, DEMO_SHELF),
+    nodeMeta: initialNodeMeta,
     view: initialView,
     selectedNodeId: null,
     rackPresets: persisted.rackPresets ?? [],
@@ -930,20 +956,20 @@ export const useStudio = create<StudioState>((set, get) => {
         const node = get().workflow.nodes.find((n) => n.id === nodeId);
         if (node?.kind === 'model') userPinnedModel = true;
       }
-      commit(updateNodeParam(get().workflow, nodeId, paramId, value));
+      commit(updateNodeParam(get().workflow, nodeId, paramId, value)); // commit's diff stamps this node
     },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
     addCapsule: (kind, x, y) => {
       const node = createNode(kind, x, y);
-      commit(addNode(get().workflow, node));
+      commit(addNode(get().workflow, node)); // commit's diff stamps the new node
       set({ selectedNodeId: node.id });
     },
     duplicateCapsule: (nodeId) => {
       const before = get().workflow;
       const next = duplicateNode(before, nodeId);
-      commit(next);
+      commit(next); // commit's diff stamps the new copy
       const copy = next.nodes.find((node) => !before.nodes.some((old) => old.id === node.id));
       if (copy) set({ selectedNodeId: copy.id });
     },
