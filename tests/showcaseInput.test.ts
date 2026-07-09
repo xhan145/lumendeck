@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { showcaseInputFromRenders, utf8ToBase64, type RenderSource } from '../src/core/share/showcaseInput';
+import { buildShowcaseHtml } from '../src/core/share/showcase';
+import { parseLumenFile } from '../src/core/lumenFile';
 import type { ExportManifest } from '../src/core/manifest';
 import type { Workflow } from '../src/core/types';
 
@@ -79,6 +81,21 @@ describe('showcaseInputFromRenders', () => {
 
   it('throws on no renders', () => {
     expect(() => showcaseInputFromRenders('X', [], [], new Date())).toThrow(/no render/i);
+  });
+});
+
+describe('end-to-end remix chain', () => {
+  it('embedded .lumen extracted from the generated showcase parses via parseLumenFile', () => {
+    const input = showcaseInputFromRenders('Cat', [source()], [], new Date('2026-07-08T00:00:00Z'));
+    const { html } = buildShowcaseHtml(input);
+    const b64 = html.match(/id="lumen-data"[^>]*>([^<]+)</)![1].trim();
+    const json = Buffer.from(b64, 'base64').toString('utf-8');
+    const parsed = parseLumenFile(json);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.file.workflow.id).toBe('w1');
+      expect(parsed.file.workflow.nodes).toHaveLength(1);
+    }
   });
 });
 

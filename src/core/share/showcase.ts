@@ -72,7 +72,9 @@ function renderItem(item: ShowcaseItem, posterOnly: boolean): string {
     }
     return `<figure class="media"><video src="${item.dataUrl}" controls loop muted playsinline></video>${cap}</figure>`;
   }
-  return `<figure class="media"><img src="${item.dataUrl}" alt="${escapeHtml(item.caption ?? 'render')}" loading="lazy"/>${cap}</figure>`;
+  // Eager loading: the render IS the content and is above the fold — `loading="lazy"`
+  // would leave it blank in any viewer that doesn't scroll (verified in preview).
+  return `<figure class="media"><img src="${item.dataUrl}" alt="${escapeHtml(item.caption ?? 'render')}"/>${cap}</figure>`;
 }
 
 function provenanceRows(p: ShowcaseProvenance): string {
