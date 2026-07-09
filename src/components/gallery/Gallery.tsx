@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { downloadDataUrl, downloadJson, slugify } from '../../bridge/exporter';
+import { downloadDataUrl, downloadJson, downloadText, slugify } from '../../bridge/exporter';
 import type { ExportManifest } from '../../core/manifest';
+import { buildShowcaseHtml } from '../../core/share/showcase';
+import { showcaseInputFromRenders } from '../../core/share/showcaseInput';
 import { fallbackReasonFor, isFallbackRender, renderBackendLabel, renderModeLabel } from '../../core/renderHonesty';
 import { allTags, collectionCounts, filterGallery } from '../../core/gallery/filter';
 import type { TurboForgeManifestData } from '../../turboForge/types';
@@ -95,6 +97,31 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const fallback = isFallbackRender(item);
   const fallbackReason = fallbackReasonFor(item);
 
+  // Export a single self-contained Showcase HTML file for this render.
+  const shareShowcase = () => {
+    const source = {
+      dataUrl: item.dataUrl,
+      mediaType: item.mediaType ?? ('image' as const),
+      mimeType: item.mimeType,
+      manifest: item.manifest,
+    };
+    const title = m.prompt ? m.prompt.slice(0, 60) : 'LumenDeck render';
+    const input = showcaseInputFromRenders(title, [source], new Date());
+    let result = buildShowcaseHtml(input);
+    if (result.oversized) {
+      // Poster-only can only shrink a real video; for a large still there is nothing
+      // to drop, so warn honestly rather than claim a video was omitted.
+      const isVideo = !!item.mimeType && item.mimeType.startsWith('video/');
+      if (isVideo) {
+        result = buildShowcaseHtml({ ...input, posterOnly: true });
+        window.alert('This clip is large, so the shared file omits the video (poster-only) to keep the size reasonable.');
+      } else {
+        window.alert('This render is very large (over 50 MB); the shared file will be large too.');
+      }
+    }
+    downloadText(result.html, `${base}.showcase.html`);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -125,6 +152,9 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
             </button>
             <button className="btn" type="button" onClick={() => downloadJson(m, `${base}-${m.seed}.manifest.json`)}>
               {Icon.download()} Manifest JSON
+            </button>
+            <button className="btn" type="button" onClick={shareShowcase} title="Export a self-contained showcase page (opens in any browser; embeds the .lumen for remix)">
+              {Icon.link()} Share showcase
             </button>
             <button className="btn primary" type="button" onClick={() => { restoreSnapshot(item); onClose(); }}>
               {Icon.restore()} Restore graph

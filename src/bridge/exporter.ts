@@ -20,6 +20,14 @@ export function downloadDataUrl(dataUrl: string, filename: string): void {
   triggerDownload(dataUrl, filename);
 }
 
+/** Save arbitrary text (e.g. a self-contained showcase HTML file) to disk. */
+export function downloadText(text: string, filename: string, mime = 'text/html'): void {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, filename);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** Filesystem-safe slug from a prompt for use in filenames. */
 export function slugify(text: string, fallback = 'render'): string {
   const slug = text

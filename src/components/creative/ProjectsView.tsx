@@ -11,6 +11,9 @@ import { detectMissing } from '../../core/creative/missing';
 import { scoreReadiness } from '../../core/creative/readiness';
 import { nextAction } from '../../core/creative/nextAction';
 import { parseProjectFile } from '../../core/creative/brain';
+import { buildShowcaseHtml } from '../../core/share/showcase';
+import { showcaseInputFromRenders } from '../../core/share/showcaseInput';
+import { downloadText, slugify } from '../../bridge/exporter';
 import type { ProjectBrain, ProjectStatus, ProjectType } from '../../core/creative/types';
 import '../../styles/creative.css';
 
@@ -59,6 +62,25 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
   const linkable = gallery.filter((g) => !linkedIds.has(g.id)).slice(0, 12);
   const renderById = new Map(gallery.map((g) => [g.id, g]));
 
+  // Export a multi-render Showcase for this project (up to 8 linked renders).
+  const shareProjectShowcase = () => {
+    const sources = brain.renders
+      .map((id) => renderById.get(id))
+      .filter((g): g is NonNullable<typeof g> => Boolean(g))
+      .slice(0, 8)
+      .map((g) => ({ dataUrl: g.dataUrl, mediaType: g.mediaType ?? ('image' as const), mimeType: g.mimeType, manifest: g.manifest }));
+    if (sources.length === 0) {
+      setPackNote('Link at least one render to this project before sharing a showcase.');
+      return;
+    }
+    const name = slugify(brain.name, 'project');
+    const input = showcaseInputFromRenders(brain.name || 'LumenDeck project', sources, new Date());
+    let result = buildShowcaseHtml(input);
+    if (result.oversized) result = buildShowcaseHtml({ ...input, posterOnly: true });
+    downloadText(result.html, `${name}.showcase.html`);
+    setPackNote(`Exported showcase (${sources.length} render${sources.length > 1 ? 's' : ''}) → ${name}.showcase.html`);
+  };
+
   return (
     <div className="project-detail">
       <header className="project-detail-head card creative-card">
@@ -78,6 +100,7 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
           <button className="btn primary" type="button" onClick={() => { const p = buildPack(brain.id); setPackNote(p ? `Built ${p.summary.present}/${p.summary.total} slots → ${p.folderName}.zip` : null); }}>
             {Icon.download({ size: 15 })} Build Release Pack
           </button>
+          <button className="btn" type="button" onClick={shareProjectShowcase} title="Export a self-contained showcase page (opens in any browser; embeds the .lumen for remix)">{Icon.link({ size: 14 })} Share showcase</button>
           <button className="btn" type="button" onClick={() => genCaptions(brain.id)}>{Icon.edit({ size: 14 })} Captions</button>
           <button className="btn" type="button" onClick={() => markShipped(brain.id)}>{Icon.trophy({ size: 14 })} Ship</button>
           <button className="btn icon" type="button" aria-label="Export project file" title="Export .lumendeck.project.json" onClick={() => exportFile(brain.id)}>{Icon.save({ size: 15 })}</button>
