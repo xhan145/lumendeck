@@ -1,4 +1,4 @@
-import type { CapsuleKind, Workflow } from '../types';
+import type { Workflow } from '../types';
 
 /**
  * Pure, DOM-free renderer: turns a workflow graph into a standalone inline
@@ -14,25 +14,40 @@ const BRAND = {
 } as const;
 type BrandKey = keyof typeof BRAND;
 
-// Node kind -> orb color family (mirrors the app's orb ramp intent). Unknown
-// kinds fall back to cyan so a new capsule never renders colorless.
-const KIND_COLOR: Partial<Record<CapsuleKind, BrandKey>> = {
+// Node kind -> orb color family (mirrors the app's orb ramp intent). Keyed by
+// the kind string so it is robust to the exact CapsuleKind union: text/
+// conditioning = cyan, models/loras/control = violet, latent/image = mango.
+// Unknown kinds fall back to cyan so a new capsule never renders colorless.
+const KIND_COLOR: Record<string, BrandKey> = {
   prompt: 'cyan',
-  model: 'cyan',
-  canvas: 'cyan',
+  clipTextEncode: 'cyan',
+  clipSetLastLayer: 'cyan',
+  conditioningCombine: 'cyan',
+  conditioningAverage: 'cyan',
+  conditioningSetArea: 'cyan',
+  model: 'violet',
+  checkpointLoader: 'violet',
+  vaeLoader: 'violet',
+  loraLoader: 'violet',
   loraRack: 'violet',
   control: 'violet',
+  controlNetLoader: 'violet',
+  controlNetApply: 'violet',
   controlNetRack: 'violet',
-  sampler: 'violet',
-  video: 'mango',
-  queue: 'mango',
-  export: 'mango',
-  image: 'mango',
-  hiresFix: 'mango',
+  cannyPreprocessor: 'violet',
+  depthPreprocessor: 'violet',
+  posePreprocessor: 'violet',
+  emptyLatent: 'mango',
+  latentNoise: 'mango',
+  latentUpscale: 'mango',
+  latentCrop: 'mango',
+  latentComposite: 'mango',
+  vaeEncode: 'mango',
+  vaeDecode: 'mango',
   imageLoader: 'mango',
 };
 
-function colorFor(kind: CapsuleKind): BrandKey {
+function colorFor(kind: string): BrandKey {
   return KIND_COLOR[kind] ?? 'cyan';
 }
 
