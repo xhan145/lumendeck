@@ -1,9 +1,19 @@
 import { defineConfig, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
 
 const BRIDGE_PORT = 8787;
+
+// Single source of truth for the app version: read it from package.json and inject
+// it as the __APP_VERSION__ global (used by src/state/storeConstants.ts). This
+// applies to both the production build and vitest (they share this config), so the
+// displayed version can never drift from package.json again. A dedicated
+// versionSync test asserts package.json / tauri.conf.json / Cargo.toml all agree.
+const PKG_VERSION: string = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf-8'),
+).version;
 
 function portOpen(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -59,6 +69,9 @@ const bridgeProxy = {
 
 export default defineConfig({
   plugins: [react(), bridgePlugin()],
+  define: {
+    __APP_VERSION__: JSON.stringify(PKG_VERSION),
+  },
   server: {
     port: Number(process.env.PORT) || 5178,
     // Same-origin API: the browser calls /health etc. on the dev server, which

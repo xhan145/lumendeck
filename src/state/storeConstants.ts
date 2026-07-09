@@ -1,4 +1,10 @@
-export const APP_VERSION = '0.19.1';
+// Injected by Vite (see vite.config.ts `define`) from package.json — the single
+// source of truth for the app version. Never hardcode a version here again: it
+// silently drifted to 0.19.1 while package.json/tauri.conf.json were bumped, so a
+// released 0.20.0 build displayed "v0.19.1". The `?? '0.0.0-dev'` guards the rare
+// path where the define is absent (e.g. a raw ts-node import outside Vite/Vitest).
+export const APP_VERSION =
+  typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0-dev';
 
 /** Product name, surfaced in Support/Credits and OSS docs. */
 export const PROJECT_NAME = 'LumenDeck';
