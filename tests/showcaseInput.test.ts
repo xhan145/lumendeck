@@ -45,7 +45,7 @@ const source = (over: Partial<RenderSource> = {}): RenderSource => ({
 
 describe('showcaseInputFromRenders', () => {
   it('maps manifest facts into provenance', () => {
-    const input = showcaseInputFromRenders('My Cat', [source()], [], new Date('2026-07-08T00:00:00Z'));
+    const input = showcaseInputFromRenders('My Cat', [source()], new Date('2026-07-08T00:00:00Z'));
     expect(input.provenance.prompt).toBe('a cat');
     expect(input.provenance.model).toBe('sd-turbo');
     expect(input.provenance.seed).toBe(42);
@@ -56,7 +56,7 @@ describe('showcaseInputFromRenders', () => {
   });
 
   it('embeds a remixable .lumen that round-trips to the source workflow', () => {
-    const input = showcaseInputFromRenders('My Cat', [source()], [], new Date('2026-07-08T00:00:00Z'));
+    const input = showcaseInputFromRenders('My Cat', [source()], new Date('2026-07-08T00:00:00Z'));
     expect(input.lumen).toBeTruthy();
     const json = Buffer.from(input.lumen!.base64, 'base64').toString('utf-8');
     const parsed = JSON.parse(json);
@@ -68,25 +68,36 @@ describe('showcaseInputFromRenders', () => {
 
   it('is provenance-only (no lumen/constellation) when the graph is empty', () => {
     const emptyGraph = { ...graph, nodes: [], edges: [] };
-    const input = showcaseInputFromRenders('X', [source({ manifest: mkManifest({ graph: emptyGraph }) })], [], new Date());
+    const input = showcaseInputFromRenders('X', [source({ manifest: mkManifest({ graph: emptyGraph }) })], new Date());
     expect(input.lumen).toBeUndefined();
     expect(input.constellationSvg).toBeUndefined();
   });
 
-  it('carries every source as an item', () => {
-    const input = showcaseInputFromRenders('Multi', [source(), source({ caption: 'two' })], [], new Date());
+  it('carries every source as an item, including mimeType', () => {
+    const input = showcaseInputFromRenders(
+      'Multi',
+      [source(), source({ caption: 'two', mediaType: 'video', mimeType: 'image/gif' })],
+      new Date(),
+    );
     expect(input.items).toHaveLength(2);
     expect(input.items[1].caption).toBe('two');
+    expect(input.items[1].mimeType).toBe('image/gif');
+  });
+
+  it('embeds an EMPTY preset list (never leaks the user rack-preset library)', () => {
+    const input = showcaseInputFromRenders('My Cat', [source()], new Date('2026-07-08T00:00:00Z'));
+    const parsed = JSON.parse(Buffer.from(input.lumen!.base64, 'base64').toString('utf-8'));
+    expect(parsed.rackPresets).toEqual([]);
   });
 
   it('throws on no renders', () => {
-    expect(() => showcaseInputFromRenders('X', [], [], new Date())).toThrow(/no render/i);
+    expect(() => showcaseInputFromRenders('X', [], new Date())).toThrow(/no render/i);
   });
 });
 
 describe('end-to-end remix chain', () => {
   it('embedded .lumen extracted from the generated showcase parses via parseLumenFile', () => {
-    const input = showcaseInputFromRenders('Cat', [source()], [], new Date('2026-07-08T00:00:00Z'));
+    const input = showcaseInputFromRenders('Cat', [source()], new Date('2026-07-08T00:00:00Z'));
     const { html } = buildShowcaseHtml(input);
     const b64 = html.match(/id="lumen-data"[^>]*>([^<]+)</)![1].trim();
     const json = Buffer.from(b64, 'base64').toString('utf-8');

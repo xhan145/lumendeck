@@ -56,6 +56,35 @@ describe('buildShowcaseHtml', () => {
     expect(html).toContain('<video');
   });
 
+  it('renders a GIF/SVG "video" render (mediaType video, image/* mime) as <img>, not <video>', () => {
+    // Motion renders default to GIF (mimeType image/gif) and mock renders to SVG —
+    // a <video> cannot decode them; they must animate in an <img>.
+    const gif = { dataUrl: 'data:image/gif;base64,R0lGOD', mediaType: 'video' as const, mimeType: 'image/gif' };
+    const { html } = buildShowcaseHtml({ ...base, items: [gif] });
+    expect(html).not.toContain('<video');
+    expect(html).toContain('<img');
+    expect(html).toContain('data:image/gif;base64,R0lGOD');
+  });
+
+  it('uses <video> only for a real video/* mime', () => {
+    const mp4 = { dataUrl: 'data:video/mp4;base64,AAA', mediaType: 'video' as const, mimeType: 'video/mp4' };
+    expect(buildShowcaseHtml({ ...base, items: [mp4] }).html).toContain('<video');
+  });
+
+  it('escapes a hostile data URL so it cannot break out of the src attribute (XSS)', () => {
+    const evil = { dataUrl: 'data:image/png"><script>alert(1)</script>;base64,AAA', mediaType: 'image' as const };
+    const { html } = buildShowcaseHtml({ ...base, items: [evil] });
+    expect(html).not.toContain('"><script>');
+    expect(html).toContain('&quot;&gt;&lt;script&gt;');
+  });
+
+  it('renders a placeholder for a non-data: URL (never embeds a remote src)', () => {
+    const remote = { dataUrl: 'https://evil.example/x.png', mediaType: 'image' as const };
+    const { html } = buildShowcaseHtml({ ...base, items: [remote] });
+    expect(html).not.toContain('https://evil.example');
+    expect(html.toLowerCase()).toContain('unavailable');
+  });
+
   it('flags oversized output past the size constant', () => {
     const big = 'data:image/png;base64,' + 'A'.repeat(SHOWCASE_MAX_BYTES + 1000);
     const { oversized } = buildShowcaseHtml({ ...base, items: [{ dataUrl: big, mediaType: 'image' }] });

@@ -1,4 +1,5 @@
 import type { Workflow } from '../types';
+import { escapeHtml } from './showcase';
 
 /**
  * Pure, DOM-free renderer: turns a workflow graph into a standalone inline
@@ -51,13 +52,12 @@ function colorFor(kind: string): BrandKey {
   return KIND_COLOR[kind] ?? 'cyan';
 }
 
-function esc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+/** Coerce a (possibly hostile, e.g. from a crafted .lumen) coordinate to a finite
+ * number. A non-numeric value becomes 0 — this is what blocks SVG-attribute
+ * injection: the coordinate can never carry markup into the output. */
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
 }
 
 const R = 26; // orb radius
@@ -67,9 +67,12 @@ export function renderConstellationSvg(
   graph: Workflow,
   opts: { width?: number } = {},
 ): string {
-  const nodes = graph.nodes ?? [];
-  if (nodes.length === 0) return '';
+  const rawNodes = graph.nodes ?? [];
+  if (rawNodes.length === 0) return '';
 
+  // Normalize coordinates to finite numbers ONCE, up front, so no raw (possibly
+  // string/injected) coordinate ever reaches an SVG attribute.
+  const nodes = rawNodes.map((n) => ({ id: n.id, kind: n.kind, x: num(n.x), y: num(n.y) }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const minX = Math.min(...nodes.map((n) => n.x));
   const minY = Math.min(...nodes.map((n) => n.y));
@@ -109,7 +112,7 @@ export function renderConstellationSvg(
       return (
         `<g>` +
         `<circle cx="${n.x}" cy="${n.y}" r="${R}" fill="url(#orb-${c})" stroke="${BRAND[c]}" stroke-opacity="0.55" stroke-width="1.5"/>` +
-        `<text x="${n.x}" y="${n.y + R + 20}" text-anchor="middle" font-size="18" fill="#C9E9F5" font-family="system-ui, sans-serif">${esc(String(n.kind))}</text>` +
+        `<text x="${n.x}" y="${n.y + R + 20}" text-anchor="middle" font-size="18" fill="#C9E9F5" font-family="system-ui, sans-serif">${escapeHtml(String(n.kind))}</text>` +
         `</g>`
       );
     })

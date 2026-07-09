@@ -37,6 +37,22 @@ describe('renderConstellationSvg', () => {
     expect(svg).not.toMatch(/src="http|href="http|url\(http/);
   });
 
+  it('sanitizes non-numeric (injected) coordinates — no markup escapes into the SVG', () => {
+    const evil = {
+      ...graph,
+      nodes: [
+        // A crafted .lumen could carry a string x that tries to break out of the attr.
+        { id: 'a', kind: 'prompt', x: '0"/><script>alert(1)</script>' as unknown as number, y: 0, params: {} },
+        { id: 'b', kind: 'sampler', x: 100, y: 100, params: {} },
+      ],
+    };
+    const svg = renderConstellationSvg(evil as unknown as Workflow);
+    expect(svg).not.toContain('<script>');
+    expect(svg).not.toContain('alert(1)');
+    // The bad coordinate is coerced to a finite number (0), keeping valid geometry.
+    expect(svg).toContain('cx="0"');
+  });
+
   it('drops an edge whose endpoint node is missing (no crash)', () => {
     const svg = renderConstellationSvg({
       ...graph,

@@ -10,6 +10,13 @@ export interface ShowcaseItem {
   /** base64 `data:` URL for the render (image or video). */
   dataUrl: string;
   mediaType: 'image' | 'video';
+  /**
+   * The render's real MIME type. Decides `<video>` vs `<img>`: LumenDeck's motion
+   * renders are often GIF/SVG (`mediaType:'video'` but `mimeType:'image/gif'`),
+   * which a `<video>` element cannot decode — they must animate in an `<img>` (the
+   * same rule the in-app gallery uses). When absent, falls back to `mediaType`.
+   */
+  mimeType?: string;
   caption?: string;
 }
 
@@ -63,18 +70,33 @@ function placeholder(label: string): string {
   return `<div class="ph" role="img" aria-label="${escapeHtml(label)}">${escapeHtml(label)}</div>`;
 }
 
+/**
+ * The only scheme we embed is `data:`. Escaping the value blocks attribute
+ * breakout even if a hostile/MITM render backend crafted the MIME prefix (e.g.
+ * `data:image/png"><script>…`); a non-`data:` URL returns null → placeholder.
+ */
+function safeMediaSrc(dataUrl: string): string | null {
+  if (!dataUrl.startsWith('data:')) return null;
+  return escapeHtml(dataUrl);
+}
+
 function renderItem(item: ShowcaseItem, posterOnly: boolean): string {
   const cap = item.caption ? `<figcaption>${escapeHtml(item.caption)}</figcaption>` : '';
-  if (!item.dataUrl) return `<figure class="media">${placeholder('Media unavailable')}${cap}</figure>`;
-  if (item.mediaType === 'video') {
+  const src = item.dataUrl ? safeMediaSrc(item.dataUrl) : null;
+  if (!src) return `<figure class="media">${placeholder('Media unavailable')}${cap}</figure>`;
+  // Only a real `video/*` MIME plays in <video>; GIF/SVG/PNG "video" renders
+  // animate in <img> (mirrors the in-app gallery's MediaPreview). Fall back to
+  // mediaType only when the MIME is unknown.
+  const isVideo = item.mimeType ? item.mimeType.startsWith('video/') : item.mediaType === 'video';
+  if (isVideo) {
     if (posterOnly) {
       return `<figure class="media">${placeholder('Video unavailable in poster-only mode (kept out to shrink the file)')}${cap}</figure>`;
     }
-    return `<figure class="media"><video src="${item.dataUrl}" controls loop muted playsinline></video>${cap}</figure>`;
+    return `<figure class="media"><video src="${src}" controls loop muted playsinline></video>${cap}</figure>`;
   }
   // Eager loading: the render IS the content and is above the fold — `loading="lazy"`
   // would leave it blank in any viewer that doesn't scroll (verified in preview).
-  return `<figure class="media"><img src="${item.dataUrl}" alt="${escapeHtml(item.caption ?? 'render')}"/>${cap}</figure>`;
+  return `<figure class="media"><img src="${src}" alt="${escapeHtml(item.caption ?? 'render')}"/>${cap}</figure>`;
 }
 
 function provenanceRows(p: ShowcaseProvenance): string {

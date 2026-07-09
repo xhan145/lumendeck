@@ -1,6 +1,5 @@
 import { buildLumenFile } from '../lumenFile';
 import type { ExportManifest } from '../manifest';
-import type { RackPreset } from '../types';
 import { renderConstellationSvg } from './showcaseSvg';
 import type { ShowcaseInput, ShowcaseProvenance } from './showcase';
 
@@ -13,6 +12,8 @@ import type { ShowcaseInput, ShowcaseProvenance } from './showcase';
 export interface RenderSource {
   dataUrl: string;
   mediaType: 'image' | 'video';
+  /** real MIME (e.g. image/gif for GIF motion) — decides <video> vs <img>. */
+  mimeType?: string;
   manifest: ExportManifest;
   caption?: string;
 }
@@ -64,7 +65,6 @@ function provenanceOf(m: ExportManifest): ShowcaseProvenance {
 export function showcaseInputFromRenders(
   title: string,
   sources: RenderSource[],
-  rackPresets: RackPreset[],
   now: Date,
 ): ShowcaseInput {
   if (sources.length === 0) throw new Error('Cannot build a showcase with no renders.');
@@ -72,16 +72,20 @@ export function showcaseInputFromRenders(
   const graph = primary.manifest.graph;
   const hasGraph = Boolean(graph && Array.isArray(graph.nodes) && graph.nodes.length > 0);
 
+  // Embed the workflow with an EMPTY preset list. The render is fully reproducible
+  // from `graph` alone (the loraRack node carries its slots inline), so bundling the
+  // user's live rack-preset library would (a) leak their private preset names into a
+  // publicly-shared file and (b) clobber the recipient's presets on import.
   const lumen = hasGraph
     ? {
-        base64: utf8ToBase64(JSON.stringify(buildLumenFile(graph, rackPresets, now))),
+        base64: utf8ToBase64(JSON.stringify(buildLumenFile(graph, [], now))),
         filename: `${slugish(title)}.lumen`,
       }
     : undefined;
 
   return {
     title,
-    items: sources.map((s) => ({ dataUrl: s.dataUrl, mediaType: s.mediaType, caption: s.caption })),
+    items: sources.map((s) => ({ dataUrl: s.dataUrl, mediaType: s.mediaType, mimeType: s.mimeType, caption: s.caption })),
     provenance: provenanceOf(primary.manifest),
     lumen,
     constellationSvg: hasGraph ? renderConstellationSvg(graph) : undefined,

@@ -33,7 +33,6 @@ function CommaField({ label, value, onCommit, placeholder }: { label: string; va
 function ProjectDetail({ brain }: { brain: ProjectBrain }) {
   const update = useStudio((s) => s.updateProjectBrain);
   const gallery = useStudio((s) => s.gallery);
-  const rackPresets = useStudio((s) => s.rackPresets);
   const analysisContext = useStudio((s) => s.analysisContext);
   const buildPack = useStudio((s) => s.buildProjectReleasePack);
   const genCaptions = useStudio((s) => s.generateProjectCaptions);
@@ -69,16 +68,15 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
       .map((id) => renderById.get(id))
       .filter((g): g is NonNullable<typeof g> => Boolean(g))
       .slice(0, 8)
-      .map((g) => ({ dataUrl: g.dataUrl, mediaType: g.mediaType ?? ('image' as const), manifest: g.manifest }));
+      .map((g) => ({ dataUrl: g.dataUrl, mediaType: g.mediaType ?? ('image' as const), mimeType: g.mimeType, manifest: g.manifest }));
     if (sources.length === 0) {
       setPackNote('Link at least one render to this project before sharing a showcase.');
       return;
     }
     const name = slugify(brain.name, 'project');
-    let result = buildShowcaseHtml(showcaseInputFromRenders(brain.name || 'LumenDeck project', sources, rackPresets, new Date()));
-    if (result.oversized) {
-      result = buildShowcaseHtml({ ...showcaseInputFromRenders(brain.name || 'LumenDeck project', sources, rackPresets, new Date()), posterOnly: true });
-    }
+    const input = showcaseInputFromRenders(brain.name || 'LumenDeck project', sources, new Date());
+    let result = buildShowcaseHtml(input);
+    if (result.oversized) result = buildShowcaseHtml({ ...input, posterOnly: true });
     downloadText(result.html, `${name}.showcase.html`);
     setPackNote(`Exported showcase (${sources.length} render${sources.length > 1 ? 's' : ''}) → ${name}.showcase.html`);
   };

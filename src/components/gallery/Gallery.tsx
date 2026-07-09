@@ -91,29 +91,33 @@ function DrawerOrganizer({ item }: { item: GalleryItem }) {
 
 function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const restoreSnapshot = useStudio((s) => s.restoreSnapshot);
-  const rackPresets = useStudio((s) => s.rackPresets);
   const m = item.manifest as ManifestWithTurbo;
   const base = slugify(m.prompt);
   const ext = mediaExtension(item);
   const fallback = isFallbackRender(item);
   const fallbackReason = fallbackReasonFor(item);
 
-  // Export a single self-contained Showcase HTML file for this render. Retries in
-  // poster-only mode if a large video would push the file past the size budget.
+  // Export a single self-contained Showcase HTML file for this render.
   const shareShowcase = () => {
     const source = {
       dataUrl: item.dataUrl,
-      mediaType: item.mediaType ?? 'image',
+      mediaType: item.mediaType ?? ('image' as const),
+      mimeType: item.mimeType,
       manifest: item.manifest,
     };
     const title = m.prompt ? m.prompt.slice(0, 60) : 'LumenDeck render';
-    let input = showcaseInputFromRenders(title, [source], rackPresets, new Date());
+    const input = showcaseInputFromRenders(title, [source], new Date());
     let result = buildShowcaseHtml(input);
     if (result.oversized) {
-      result = buildShowcaseHtml({ ...input, posterOnly: true });
-      window.alert(
-        'This render is large, so the shared file uses poster-only mode (the video is omitted) to keep the file size reasonable.',
-      );
+      // Poster-only can only shrink a real video; for a large still there is nothing
+      // to drop, so warn honestly rather than claim a video was omitted.
+      const isVideo = !!item.mimeType && item.mimeType.startsWith('video/');
+      if (isVideo) {
+        result = buildShowcaseHtml({ ...input, posterOnly: true });
+        window.alert('This clip is large, so the shared file omits the video (poster-only) to keep the size reasonable.');
+      } else {
+        window.alert('This render is very large (over 50 MB); the shared file will be large too.');
+      }
     }
     downloadText(result.html, `${base}.showcase.html`);
   };
