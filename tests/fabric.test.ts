@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { sanitizeAppSettings } from '../src/state/appSettings';
 import { ENCODINGS, unregisteredLayers, registeredLayers } from '../src/components/graph/graph3d/encodings';
-import { packWells, fabricDisplacement, MAX_WELLS, createFabric } from '../src/components/graph/graph3d/fabric';
+import { packWells, fabricDisplacement, fabricWave, MAX_WELLS, createFabric } from '../src/components/graph/graph3d/fabric';
 import type { WorkflowNode } from '../src/core/types';
 
 function sampler(id: string, cfg: number): WorkflowNode {
@@ -9,8 +9,8 @@ function sampler(id: string, cfg: number): WorkflowNode {
 }
 
 describe('appSettings graph3dEffects', () => {
-  it('accepts the four valid effect levels', () => {
-    for (const v of ['off', 'minimal', 'standard', 'rich'] as const) {
+  it('accepts the five valid effect levels', () => {
+    for (const v of ['off', 'minimal', 'standard', 'rich', 'cinematic'] as const) {
       expect(sanitizeAppSettings({ graph3dEffects: v }).graph3dEffects).toBe(v);
     }
   });
@@ -43,6 +43,21 @@ describe('encoding registry (hard rule: no layer without a datum)', () => {
     expect(registeredLayers().has('fabric')).toBe(true);
     expect(registeredLayers().has('anomaly')).toBe(true);
     expect(registeredLayers().has('luminosity')).toBe(true);
+  });
+
+  it('registers the volumetric-overhaul layers with their data sources', () => {
+    // Every layer the view can render must clear the registry check.
+    expect(unregisteredLayers(['particles', 'energyFlow', 'environment'])).toEqual([]);
+    const dust = ENCODINGS.find((e) => e.id === 'gravity-dust');
+    expect(dust?.layer).toBe('particles');
+    expect(dust?.datum).toContain('packWells');
+    const energy = ENCODINGS.find((e) => e.id === 'dust-energy');
+    expect(energy?.layer).toBe('particles');
+    expect(energy?.datum).toContain('energy');
+    const flow = ENCODINGS.find((e) => e.id === 'workflow-energy');
+    expect(flow?.layer).toBe('energyFlow');
+    expect(flow?.datum).toContain('edges');
+    expect(flow?.datum).toContain('health');
   });
 
   it('flags an active layer with no registry entry', () => {
@@ -108,6 +123,25 @@ describe('fabricDisplacement (CPU mirror of the vertex shader)', () => {
     const narrow = fabricDisplacement(150, 0, [{ x: 0, z: 0, depth: 100, sigma: 100 }]);
     const wide = fabricDisplacement(150, 0, [{ x: 0, z: 0, depth: 100, sigma: 300 }]);
     expect(wide).toBeGreaterThan(narrow);
+  });
+});
+
+describe('fabricWave (CPU mirror of the ambient micro-wave term)', () => {
+  it('amplitude 0 is a perfectly static sheet (lower tiers + reduced motion)', () => {
+    expect(fabricWave(100, 200, 5, 0)).toBe(0);
+  });
+
+  it('is bounded by 1.5× the amplitude (two octaves at ±1 and ±0.5)', () => {
+    for (let i = 0; i < 200; i++) {
+      const w = fabricWave(i * 37.3, i * -19.1, i * 0.21, 6);
+      expect(Math.abs(w)).toBeLessThanOrEqual(9 + 1e-9);
+    }
+  });
+
+  it('varies with time (the swell actually moves)', () => {
+    const a = fabricWave(100, 100, 0, 6);
+    const b = fabricWave(100, 100, 2, 6);
+    expect(a).not.toBeCloseTo(b, 6);
   });
 });
 

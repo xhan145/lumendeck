@@ -24,7 +24,7 @@ const SIGMA_MIN = 130;
 const SIGMA_MAX = 340;
 
 /** Vertex-shader plane densities per quality tier (mid = the slice default). */
-export const FABRIC_SEGMENTS = { minimal: 64, standard: 128, rich: 192 } as const;
+export const FABRIC_SEGMENTS = { minimal: 64, standard: 128, rich: 192, cinematic: 256 } as const;
 export type FabricTier = keyof typeof FABRIC_SEGMENTS;
 
 /** The geometry of one gravity well — what the displacement math needs. */
@@ -79,6 +79,23 @@ export function fabricDisplacement(x: number, z: number, wells: readonly WellSha
     disp += w.depth * Math.exp(-r2 / (2 * sigma * sigma));
   }
   return disp;
+}
+
+// ---- Ambient micro-waves (higher tiers only; slow, low, non-signaling) -----
+
+/**
+ * CPU mirror of the vertex-shader ambient-wave term: a small multi-scale swell
+ * (world units) at world (x, z) at time `tSec`. Amplitude 0 = perfectly static
+ * (the lower tiers and reduced motion). Deliberately SLOW and LOW — idle motion
+ * must read as a liquid at rest, never as a signal; project events (ripples)
+ * stay the only strong disturbances. Exact same math the shader runs.
+ */
+export function fabricWave(x: number, z: number, tSec: number, amp: number): number {
+  if (amp <= 0) return 0;
+  return amp * (
+    Math.sin(x * 0.011 + tSec * 0.7) * Math.sin(z * 0.013 - tSec * 0.55) +
+    0.5 * Math.sin((x + z) * 0.021 + tSec * 1.13)
+  );
 }
 
 // ---- Event ripples (transient waves fired by events, e.g. a new anomaly) ---
@@ -156,6 +173,8 @@ const FABRIC_VERTEX_SHADER = /* glsl */ `
   uniform float uRippleSpeed;
   uniform float uRippleTau;
   uniform float uRippleWidth;
+  uniform float uTime;      // ambient-wave clock (seconds); frozen while idle
+  uniform float uWaveAmp;   // ambient micro-wave amplitude (0 = static sheet)
   out float vDisp;
   out vec2 vWorldXZ;
   out vec3 vViewPos;
@@ -184,6 +203,15 @@ const FABRIC_VERTEX_SHADER = /* glsl */ `
       float r = sqrt(rx * rx + rz * rz);
       float ring = r - uRippleSpeed * age;
       lift += rp.w * exp(-age / uRippleTau) * exp(-(ring * ring) / (2.0 * uRippleWidth * uRippleWidth));
+    }
+    // Ambient micro-waves (multi-scale, slow, LOW amplitude — mirrors
+    // fabricWave on the CPU). Data channels are untouched: vDisp below stays
+    // the pure well displacement, so contour lines never wobble with the swell.
+    if (uWaveAmp > 0.0) {
+      lift += uWaveAmp * (
+        sin(p.x * 0.011 + uTime * 0.7) * sin(p.z * 0.013 - uTime * 0.55) +
+        0.5 * sin((p.x + p.z) * 0.021 + uTime * 1.13)
+      );
     }
     p.y -= disp;
     p.y += lift;
@@ -274,6 +302,8 @@ export interface FabricHandle {
   tickRipples(now: number): boolean;
   /** True if any ripple is still alive at `now` (ms), without mutating the queue. */
   ripplesAlive(now: number): boolean;
+  /** Advance the ambient-wave clock (seconds). No-op visual when waveAmp = 0. */
+  setTime(tSec: number): void;
   /** Remove from parent + dispose geometry/material (idempotent). */
   dispose(): void;
 }
@@ -284,7 +314,7 @@ export interface FabricHandle {
  * pinned per the redteam spec: fog:false, depthWrite:false, renderOrder:-1,
  * straight-alpha fade — correct over the alpha:true canvas, never stomps wires.
  */
-export function createFabric(tier: FabricTier, shallow: string, deep: string): FabricHandle {
+export function createFabric(tier: FabricTier, shallow: string, deep: string, waveAmp = 0): FabricHandle {
   const segments = FABRIC_SEGMENTS[tier];
   const geometry = new THREE.PlaneGeometry(FABRIC_EXTENT, FABRIC_EXTENT, segments, segments);
   geometry.rotateX(-Math.PI / 2); // XY plane → XZ ground plane (normal +y)
@@ -316,6 +346,8 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
       uRippleSpeed: { value: RIPPLE_SPEED },
       uRippleTau: { value: RIPPLE_TAU },
       uRippleWidth: { value: RIPPLE_WIDTH },
+      uTime: { value: 0 },
+      uWaveAmp: { value: Math.max(0, waveAmp) },
     },
   });
 
@@ -370,6 +402,9 @@ export function createFabric(tier: FabricTier, shallow: string, deep: string): F
     },
     ripplesAlive(now) {
       return ripples.some((rp) => rippleAlive(rp, now));
+    },
+    setTime(tSec) {
+      material.uniforms.uTime.value = tSec;
     },
     dispose() {
       group.parent?.remove(group);

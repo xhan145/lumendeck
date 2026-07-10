@@ -40,11 +40,22 @@ import {
 import { createFlushScheduler, type FlushScheduler } from './graph3d/flushScheduler';
 import { advancePlayback, createPlaybackDriver, type PlaybackDriver } from './graph3d/playbackClock';
 import { createFrameStats, type FrameStatsAccumulator } from './graph3d/frameStats';
-import { createFabric, packWells, MAX_WELLS, FABRIC_EXTENT, type FabricHandle, type FabricTier } from './graph3d/fabric';
+import { createFabric, packWells, MAX_WELLS, FABRIC_EXTENT, type FabricHandle } from './graph3d/fabric';
 import { nodeAnomaly, makeAnomalyRing } from './graph3d/anomaly';
 import { settleShouldRun } from './graph3d/settle';
 import { createFlashLimiter, type FlashLimiter } from './graph3d/flashLimiter';
 import { createParticleField, type ParticleField } from './graph3d/particles';
+import {
+  createAdaptiveQuality,
+  featuresFor,
+  minLevel,
+  motionPolicy,
+  type AdaptiveQuality,
+  type EffectsLevel,
+} from './graph3d/quality';
+import { createEnergyFlow, type EnergyFlow, type FlowEdge } from './graph3d/energyFlow';
+import { createStarfield, createBackdrop, type EnvironmentHandle } from './graph3d/environment';
+import { createPostPipeline, type PostPipeline } from './graph3d/postprocessing';
 import { sampleClip, trackKey } from '../../core/motion/interpolate';
 import { motionOffset } from '../../core/motion/orbMotion';
 import type { MotionClip } from '../../core/motion/types';
@@ -59,8 +70,10 @@ import {
   makeWireLine,
   resolveCssColor,
   setOrbEmissive,
+  setOrbTime,
   updateOrbMaterial,
   updateWireLine,
+  wireControl,
 } from './graph3d/scene';
 import { emissiveFor } from '../../state/nodeMeta';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../../core/controlnet';
@@ -349,10 +362,37 @@ export function Graph3DView({ onContextFailed }: Props) {
   const prevErrorNodesRef = useRef<Set<string>>(new Set());
   /** Seed the error set on the first health pass so pre-existing errors don't burst. */
   const healthSeededRef = useRef(false);
-  /** Ambient gravity-dust field (rich tier only); its existence == "particles active". */
+  /** Ambient gravity-dust field (standard tier and up); existence == "particles active". */
   const particleFieldRef = useRef<ParticleField | null>(null);
+  /** Directed workflow-energy pulses (standard tier and up, motion allowing). */
+  const energyFlowRef = useRef<EnergyFlow | null>(null);
+  /** Warn once when the pulse capacity drops edges (no silent caps). */
+  const flowDropWarnedRef = useRef(false);
+  /** Distant starfield (rich+) and opaque cinematic backdrop dome. */
+  const starfieldRef = useRef<EnvironmentHandle | null>(null);
+  const backdropRef = useRef<EnvironmentHandle | null>(null);
+  /** Bloom/tone-mapping composer (cinematic tier only); null renders direct. */
+  const postRef = useRef<PostPipeline | null>(null);
+  /** Measured-performance ceiling for the expensive ambient layers. */
+  const adaptiveRef = useRef<AdaptiveQuality | null>(null);
+  if (!adaptiveRef.current) adaptiveRef.current = createAdaptiveQuality();
 
   const [ready, setReady] = useState(false);
+  /**
+   * The adaptive cap lives in React state so tier transitions re-run the layer
+   * lifecycles. Transitions are rare by construction (hysteresis + slow
+   * recovery in quality.ts), so this never becomes a per-frame state churn.
+   */
+  const [adaptiveCap, setAdaptiveCap] = useState<EffectsLevel>(adaptiveRef.current.cap());
+  /**
+   * Effective level for the EXPENSIVE layers (particles, pulses, bloom,
+   * starfield, fabric density/waves): user intent capped by measured frame
+   * performance. DATA encodings (wells, anomaly rings, luminosity) key off the
+   * raw user setting — degradation must never remove information.
+   */
+  const effectsLevel = minLevel(graph3dEffects as EffectsLevel, adaptiveCap);
+  const effectsLevelRef = useRef(effectsLevel);
+  effectsLevelRef.current = effectsLevel;
   const [wire, setWire] = useState<WireDraft | null>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<'all' | CapsuleCategory>('all');
@@ -390,22 +430,48 @@ export function Graph3DView({ onContextFailed }: Props) {
     const now = performance.now();
     const prev = lastFrameTsRef.current;
     lastFrameTsRef.current = now;
-    if (prev > 0) fs.sample(now - prev);
+    if (prev > 0) {
+      const dt = now - prev;
+      fs.sample(dt);
+      // Adaptive quality: sustained slow frames lower the expensive-layer cap
+      // one hysteresis-guarded step at a time; recovery is deliberately slow.
+      // (Idle dirty-flag gaps are ignored inside the controller.) Hidden-tab
+      // frames are NEVER fed: the starvation-proof playback driver ticks at a
+      // deliberate ~30ms there, which would read as sustained slowness and
+      // wrongly strip quality while the user isn't even looking.
+      const hidden = typeof document !== 'undefined' && document.hidden;
+      if (!hidden && adaptiveRef.current?.feed(dt, now)) setAdaptiveCap(adaptiveRef.current.cap());
+    }
     fs.setDrawCalls(t.renderer.info.render.calls);
     if (statsElRef.current && now - lastStatsPublishRef.current > 500) {
       lastStatsPublishRef.current = now;
       const s = fs.read();
-      statsElRef.current.textContent = `${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)}ms · worst ${s.worstMs.toFixed(1)}ms · ${s.drawCalls} draws`;
+      const cap = adaptiveRef.current?.cap();
+      const tier = `${effectsLevelRef.current}${cap && cap !== 'cinematic' ? ' (auto-capped)' : ''}`;
+      statsElRef.current.textContent = `${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)}ms · worst ${s.worstMs.toFixed(1)}ms · ${s.drawCalls} draws · ${tier}`;
     }
+  }, []);
+
+  /**
+   * Render ONE frame of the WebGL scene + the CSS3D DOM layer. The single
+   * chokepoint every loop and flush uses: when the cinematic post pipeline is
+   * live it composes the high-threshold bloom; otherwise it is the plain
+   * direct render. CSS3D always renders after (the DOM layer sits above the
+   * canvas and is never post-processed — controls stay crisp by construction).
+   */
+  const renderScene = useCallback(() => {
+    const t = threeRef.current;
+    if (!t) return;
+    if (postRef.current) postRef.current.render();
+    else t.renderer.render(t.scene, t.camera);
+    t.cssRenderer.render(t.scene, t.camera);
   }, []);
 
   if (!flushRef.current) {
     flushRef.current = createFlushScheduler(
       () => {
-        const t = threeRef.current;
-        if (!t) return;
-        t.renderer.render(t.scene, t.camera);
-        t.cssRenderer.render(t.scene, t.camera);
+        if (!threeRef.current) return;
+        renderScene();
         recordFrame();
       },
       {
@@ -432,8 +498,14 @@ export function Graph3DView({ onContextFailed }: Props) {
     const s = useStudio.getState();
     const off = (s.appSettings.graph3dEffects ?? 'off') === 'off';
     const now = Date.now();
+    // Shimmer clock only advances here — i.e. only while some loop is already
+    // animating — so an idle scene's orb surfaces stay perfectly still.
+    const tSec = performance.now() / 1000;
     const meta = s.nodeMeta;
-    for (const [id, entry] of orbsRef.current) setOrbEmissive(entry.material, off ? 0 : emissiveFor(meta[id], now));
+    for (const [id, entry] of orbsRef.current) {
+      setOrbTime(entry.material, tSec);
+      setOrbEmissive(entry.material, off ? 0 : emissiveFor(meta[id], now));
+    }
   }, []);
 
   /**
@@ -448,7 +520,10 @@ export function Graph3DView({ onContextFailed }: Props) {
   const wakeSettle = useCallback(() => {
     if (settleDriverRef.current?.running()) return;
     const s = useStudio.getState();
-    const decayActive = particleFieldRef.current != null || (fabricRef.current?.ripplesAlive(performance.now()) ?? false);
+    const decayActive =
+      particleFieldRef.current != null ||
+      (energyFlowRef.current?.active() ?? false) ||
+      (fabricRef.current?.ripplesAlive(performance.now()) ?? false);
     if (!settleShouldRun({ decayActive, playing: s.transport.playing, audioRunning: s.audio.running })) return;
     let last = performance.now();
     settleDriverRef.current = createPlaybackDriver(
@@ -459,19 +534,23 @@ export function Graph3DView({ onContextFailed }: Props) {
         const dt = (now - last) / 1000;
         last = now;
         const pf = particleFieldRef.current;
+        const flow = energyFlowRef.current;
+        const flowActive = flow?.active() ?? false;
         const fab = fabricRef.current;
         // Hidden tab: stay armed only if something still needs animating, but skip
         // the GPU draw entirely (R4 — no rendering into an invisible window).
         if (typeof document !== 'undefined' && document.hidden) {
-          return pf != null || (fab ? fab.ripplesAlive(now) : false);
+          return pf != null || flowActive || (fab ? fab.ripplesAlive(now) : false);
         }
         if (pf) pf.advance(dt);
+        if (flow) flow.advance(dt);
         const rAlive = fab ? fab.tickRipples(now) : false;
+        fab?.setTime(now / 1000); // ambient micro-waves (amp 0 at lower tiers)
         updateEmissive();
-        t.renderer.render(t.scene, t.camera);
-        t.cssRenderer.render(t.scene, t.camera);
+        renderScene();
         recordFrame();
-        return pf != null || rAlive; // ambient dust keeps it alive; else stop when ripples die
+        // Ambient dust/pulses keep it alive; else stop when the ripples die.
+        return pf != null || flowActive || rAlive;
       },
       {
         requestFrame: (cb) => requestAnimationFrame(cb),
@@ -480,7 +559,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         clearTimer: (id) => clearTimeout(id),
       },
     );
-  }, [recordFrame, updateEmissive]);
+  }, [recordFrame, updateEmissive, renderScene]);
 
   const applyCamera = useCallback(() => {
     const t = threeRef.current;
@@ -661,6 +740,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         if (w < 1 || h < 1) return;
         renderer.setSize(w, h);
         cssRenderer!.setSize(w, h);
+        postRef.current?.setSize(w, h);
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
         requestRender();
@@ -705,6 +785,15 @@ export function Graph3DView({ onContextFailed }: Props) {
         settleDriverRef.current = null;
         particleFieldRef.current?.dispose();
         particleFieldRef.current = null;
+        energyFlowRef.current?.dispose();
+        energyFlowRef.current = null;
+        starfieldRef.current?.dispose();
+        starfieldRef.current = null;
+        backdropRef.current?.dispose();
+        backdropRef.current = null;
+        // Restores the renderer's tone mapping BEFORE renderer.dispose below.
+        postRef.current?.dispose();
+        postRef.current = null;
         orbsRef.current.clear();
         // Ghost/anchor overlays are disposed by the scene traversal below (their
         // geometries/materials live under the scene); just drop the id maps.
@@ -884,12 +973,14 @@ export function Graph3DView({ onContextFailed }: Props) {
     settleDriverRef.current = null;
     fabricRef.current?.dispose();
     fabricRef.current = null;
-    if (graph3dEffects === 'off') { requestRender(); return; }
+    const features = featuresFor(effectsLevel);
+    if (!features.fabricTier) { requestRender(); return; }
     const host = viewportRef.current ?? document.documentElement;
     const shallow = resolveCssColor('var(--ld-cyan)', host);
     const deep = resolveCssColor('var(--ld-violet)', host);
-    const tier: FabricTier = graph3dEffects === 'minimal' ? 'minimal' : graph3dEffects === 'rich' ? 'rich' : 'standard';
-    const fabric = createFabric(tier, shallow, deep);
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const waveAmp = motionPolicy(reduced).fabricWaves ? features.fabricWaveAmp : 0;
+    const fabric = createFabric(features.fabricTier, shallow, deep, waveAmp);
     fabric.update(useStudio.getState().workflow.nodes);
     t.scene.add(fabric.group);
     fabricRef.current = fabric;
@@ -902,11 +993,11 @@ export function Graph3DView({ onContextFailed }: Props) {
       fabricRef.current = null;
       requestRender();
     };
-  }, [ready, graph3dEffects, requestRender]);
+  }, [ready, effectsLevel, requestRender]);
 
-  // ---- ambient gravity dust (Phase 3): particles fall toward mass wells --------
-  // Heaviest layer → RICH tier only, and never under reduced motion. When present
-  // it drives a continuous idle loop (the deliberate trade for ambient particles),
+  // ---- volumetric gravity dust: particles orbit + plunge into mass wells ------
+  // Standard tier and up, never under reduced motion. When present it drives a
+  // continuous idle loop (the deliberate trade for ambient particles),
   // visibility-gated so a hidden tab draws nothing. Disposed on tier/flag change.
   useEffect(() => {
     if (!ready) return;
@@ -914,11 +1005,17 @@ export function Graph3DView({ onContextFailed }: Props) {
     if (!t) return;
     particleFieldRef.current?.dispose();
     particleFieldRef.current = null;
+    const features = featuresFor(effectsLevel);
     const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (graph3dEffects !== 'rich' || reduced) { requestRender(); return; }
-    // Warm stardust — pops against the cool cyan/violet liquid metal so the dust
-    // reads as stars streaming into the gravity wells rather than blending in.
-    const field = createParticleField(1600, FABRIC_EXTENT, '#FFE7B8');
+    if (features.particleCount === 0 || !motionPolicy(reduced).particles) { requestRender(); return; }
+    const host = viewportRef.current ?? document.documentElement;
+    // Cool dust rides the brand cyan; the field derives its warm high-energy
+    // tint internally — kinetic + gravitational energy burn it toward starlight.
+    const field = createParticleField(
+      features.particleCount,
+      FABRIC_EXTENT,
+      resolveCssColor('var(--ld-cyan)', host),
+    );
     field.setWells(packWells(useStudio.getState().workflow.nodes).wells);
     t.scene.add(field.points);
     particleFieldRef.current = field;
@@ -929,7 +1026,83 @@ export function Graph3DView({ onContextFailed }: Props) {
       particleFieldRef.current = null;
       requestRender();
     };
-  }, [ready, graph3dEffects, requestRender, wakeSettle]);
+  }, [ready, effectsLevel, requestRender, wakeSettle]);
+
+  // ---- directed workflow energy: pulses travel each wire source → dest --------
+  // Standard tier and up, never under reduced motion. Edge assignments are
+  // populated by the wire-sync effect below (same endpoints as the drawn wires);
+  // live rerouting during playback/audio goes through routeWiresLive.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    energyFlowRef.current?.dispose();
+    energyFlowRef.current = null;
+    const features = featuresFor(effectsLevel);
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (features.pulsesPerEdge === 0 || !motionPolicy(reduced).pulses) { requestRender(); return; }
+    const flow = createEnergyFlow();
+    t.scene.add(flow.points);
+    energyFlowRef.current = flow;
+    requestRender();
+    return () => {
+      energyFlowRef.current?.dispose();
+      energyFlowRef.current = null;
+      requestRender();
+    };
+  }, [ready, effectsLevel, requestRender]);
+
+  // ---- environment (starfield + cinematic backdrop) + bloom pipeline ----------
+  // The starfield is the static parallax anchor (rich+). The opaque backdrop
+  // dome exists ONLY alongside the bloom composer (cinematic): UnrealBloomPass
+  // cannot preserve canvas alpha, so cinematic frames must be opaque. Both are
+  // zero-cost per frame; the composer is created/disposed with the tier.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    starfieldRef.current?.dispose();
+    starfieldRef.current = null;
+    backdropRef.current?.dispose();
+    backdropRef.current = null;
+    postRef.current?.dispose();
+    postRef.current = null;
+    const features = featuresFor(effectsLevel);
+    const host = viewportRef.current ?? document.documentElement;
+    if (features.starfield > 0) {
+      const stars = createStarfield(
+        features.starfield,
+        7000,
+        11000,
+        resolveCssColor('var(--ld-cyan)', host),
+        '#f4ead8',
+      );
+      t.scene.add(stars.object);
+      starfieldRef.current = stars;
+    }
+    if (features.bloom) {
+      // Dome gradient mirrors the .graph3d-wrap CSS backdrop (no visual jump).
+      const dome = createBackdrop(12000, '#0b1220', '#071426');
+      t.scene.add(dome.object);
+      backdropRef.current = dome;
+      postRef.current = createPostPipeline(t.renderer, t.scene, t.camera, {
+        strength: features.bloomStrength,
+      });
+      const w = viewportRef.current?.clientWidth ?? 0;
+      const h = viewportRef.current?.clientHeight ?? 0;
+      if (w > 0 && h > 0) postRef.current.setSize(w, h);
+    }
+    requestRender();
+    return () => {
+      starfieldRef.current?.dispose();
+      starfieldRef.current = null;
+      backdropRef.current?.dispose();
+      backdropRef.current = null;
+      postRef.current?.dispose();
+      postRef.current = null;
+      requestRender();
+    };
+  }, [ready, effectsLevel, requestRender]);
 
   // ---- event ripples: a fabric wave when a node NEWLY errors (Phase 2C) ------
   // Diffs the node-attributed ERROR set across health commits; each newly-errored
@@ -963,12 +1136,16 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, [ready, health, workflow, graph3dEffects, wakeSettle]);
 
   // Playback/audio own the frame → stop the settle driver (double-render safety).
-  // Returning to idle with a ripple still alive → resume settling it.
+  // Returning to idle with dust/pulses/a live ripple → resume the ambient loop.
   useEffect(() => {
     if (transportPlaying || audioRunning) {
       settleDriverRef.current?.stop();
       settleDriverRef.current = null;
-    } else if (particleFieldRef.current != null || fabricRef.current?.ripplesAlive(performance.now())) {
+    } else if (
+      particleFieldRef.current != null ||
+      energyFlowRef.current?.active() ||
+      fabricRef.current?.ripplesAlive(performance.now())
+    ) {
       wakeSettle();
     }
   }, [transportPlaying, audioRunning, wakeSettle]);
@@ -1130,6 +1307,9 @@ export function Graph3DView({ onContextFailed }: Props) {
       if (typeof child.userData.edgeId === 'string') existing.set(child.userData.edgeId as string, child as THREE.Line);
     }
     const seen = new Set<string>();
+    const flow = energyFlowRef.current;
+    const flowEdges: FlowEdge[] = [];
+    const activityNow = Date.now();
     for (const edge of workflow.edges) {
       const fromNode = workflow.nodes.find((n) => n.id === edge.from.node);
       const toNode = workflow.nodes.find((n) => n.id === edge.to.node);
@@ -1144,24 +1324,50 @@ export function Graph3DView({ onContextFailed }: Props) {
         : socketWorldPoint(toNode, edge.to.socket, 'in', toNode.id === selectedNodeId);
       const a = isOrbNode(fromNode) ? orbSurfacePoint(aAnchor, bAnchor, ORB_RADIUS) : aAnchor;
       const b = isOrbNode(toNode) ? orbSurfacePoint(bAnchor, aAnchor, ORB_RADIUS) : bAnchor;
+      const type = CAPSULES[fromNode.kind].outputs.find((s) => s.id === edge.from.socket)?.type ?? 'image';
       const line = existing.get(edge.id);
       if (line) {
         updateWireLine(line, a, b); // an edge's socket (and thus color) never changes
       } else {
-        const type = CAPSULES[fromNode.kind].outputs.find((s) => s.id === edge.from.socket)?.type ?? 'image';
         const created = makeWireLine(a, b, wireColor(type));
         created.userData.edgeId = edge.id;
         t.wireGroup.add(created);
       }
       seen.add(edge.id);
+      if (flow) {
+        // The pulse rides the EXACT curve the wire renders (same control math).
+        const c = wireControl(a, b);
+        flowEdges.push({
+          id: edge.id,
+          ax: a.x, ay: a.y, az: a.z,
+          cx: c.x, cy: c.y, cz: c.z,
+          bx: b.x, by: b.y, bz: b.z,
+          color: wireColor(type),
+          activity: Math.max(
+            emissiveFor(nodeMeta[edge.from.node], activityNow),
+            emissiveFor(nodeMeta[edge.to.node], activityNow),
+          ),
+          blocked:
+            nodeAnomaly(edge.from.node, health) === 'error' ||
+            nodeAnomaly(edge.to.node, health) === 'error',
+        });
+      }
     }
     for (const [id, line] of existing) {
       if (seen.has(id)) continue;
       t.wireGroup.remove(line);
       disposeObject3D(line);
     }
+    if (flow) {
+      const dropped = flow.setEdges(flowEdges, featuresFor(effectsLevel).pulsesPerEdge);
+      if (dropped > 0 && !flowDropWarnedRef.current) {
+        console.warn(`LumenDeck: pulse capacity reached — ${dropped} wire(s) animate without energy pulses.`);
+        flowDropWarnedRef.current = true;
+      }
+      if (flow.active()) wakeSettle();
+    }
     requestRender();
-  }, [ready, workflow, selectedNodeId, isOrbNode, wireColor, requestRender]);
+  }, [ready, workflow, selectedNodeId, isOrbNode, wireColor, requestRender, health, nodeMeta, effectsLevel, wakeSettle]);
 
   // ---- in-progress (draft) wire, dashed -----------------------------------
   useEffect(() => {
@@ -1235,6 +1441,12 @@ export function Graph3DView({ onContextFailed }: Props) {
       const a = fromOrb ? orbSurfacePoint(aAnchor, bAnchor, ORB_RADIUS) : aAnchor;
       const b = toOrb ? orbSurfacePoint(bAnchor, aAnchor, ORB_RADIUS) : bAnchor;
       updateWireLine(child as THREE.Line, a, b);
+      // Energy pulses follow the rerouted wire (same curve, same control math).
+      const flow = energyFlowRef.current;
+      if (flow) {
+        const c = wireControl(a, b);
+        flow.updateGeometry(edgeId, a.x, a.y, a.z, c.x, c.y, c.z, b.x, b.y, b.z);
+      }
     }
     // Fabric depressions follow the live orbs (playback/audio move orbs via
     // direct scene mutation, no store commit) so wells never detach. On restore,
@@ -1380,10 +1592,11 @@ export function Graph3DView({ onContextFailed }: Props) {
       localT = nextT;
       applyPlaybackFrame(active, localT);
       fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
+      fabricRef.current?.setTime(now / 1000);
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the playback frame too
+      energyFlowRef.current?.advance(dt); // wire pulses keep flowing during playback
       updateEmissive(); // luminosity fades smoothly during playback
-      t.renderer.render(t.scene, t.camera);
-      t.cssRenderer.render(t.scene, t.camera);
+      renderScene();
       recordFrame();
       if (ended) {
         // Non-looping clip reached the end: settle the playhead AT the end (so
@@ -1422,7 +1635,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       if (!tr.playing && tr.t !== 0 && tr.t !== localT) tr.seek(localT);
       restoreStaticOrbs();
     };
-  }, [ready, transportPlaying, activeClipId, applyPlaybackFrame, restoreStaticOrbs]);
+  }, [ready, transportPlaying, activeClipId, applyPlaybackFrame, restoreStaticOrbs, renderScene]);
 
   // ---- scrub preview (paused): seeking updates orbs live -------------------
   // A transient store subscription (NOT a React subscription) so scrubbing the
@@ -1440,12 +1653,11 @@ export function Graph3DView({ onContextFailed }: Props) {
       const t = threeRef.current;
       if (!clip || !t) return;
       applyPlaybackFrame(clip, s.transport.t);
-      t.renderer.render(t.scene, t.camera);
-      t.cssRenderer.render(t.scene, t.camera);
+      renderScene();
       recordFrame();
     });
     return unsub;
-  }, [ready, applyPlaybackFrame]);
+  }, [ready, applyPlaybackFrame, renderScene]);
 
   // ---- audio reactive overlay ----------------------------------------------
   // While audio.running, each rAF frame maps the engine's live bands into the
@@ -1514,10 +1726,11 @@ export function Graph3DView({ onContextFailed }: Props) {
       const reaction = applyAudio(bands, s.audio.mapping);
       applyAudioFrame(reaction);
       fabricRef.current?.tickRipples(nowT); // ripples animate on the audio frame
+      fabricRef.current?.setTime(nowT / 1000);
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the audio frame too
+      energyFlowRef.current?.advance(dt); // wire pulses keep flowing during audio
       updateEmissive(); // luminosity fades smoothly during audio
-      t.renderer.render(t.scene, t.camera);
-      t.cssRenderer.render(t.scene, t.camera);
+      renderScene();
       recordFrame();
       raf = requestAnimationFrame(tick);
     };
@@ -1527,7 +1740,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       // Settle the orbs back to their static positions/values (one idle flush).
       restoreStaticOrbs();
     };
-  }, [ready, audioRunning, applyAudioFrame, restoreStaticOrbs]);
+  }, [ready, audioRunning, applyAudioFrame, restoreStaticOrbs, renderScene]);
 
   // ---- camera actions ------------------------------------------------------
   const resetCamera = () => {
@@ -1967,15 +2180,28 @@ export function Graph3DView({ onContextFailed }: Props) {
           type="button"
           aria-pressed={graph3dEffects !== 'off'}
           onClick={() => updateAppSettings({
-            graph3dEffects: graph3dEffects === 'off' ? 'standard' : graph3dEffects === 'rich' ? 'off' : 'rich',
+            graph3dEffects:
+              graph3dEffects === 'off' ? 'standard'
+              : graph3dEffects === 'minimal' ? 'standard'
+              : graph3dEffects === 'standard' ? 'rich'
+              : graph3dEffects === 'rich' ? 'cinematic'
+              : 'off',
           })}
           title={graph3dEffects === 'off'
-            ? 'Spacetime off — click for the liquid-metal fabric (mass warps it)'
-            : graph3dEffects === 'rich'
-              ? 'Spacetime + gravity dust on — click to turn off'
-              : 'Liquid-metal fabric on — click to add gravity dust'}
+            ? 'Spacetime off — click for the liquid-metal fabric + energy flow'
+            : graph3dEffects === 'minimal'
+              ? 'Fabric only — click for gravity dust + energy pulses'
+              : graph3dEffects === 'standard'
+                ? 'Fabric + dust + pulses on — click for dense dust and stars'
+                : graph3dEffects === 'rich'
+                  ? 'Rich spacetime on — click for the cinematic bloom pipeline'
+                  : 'Cinematic pipeline on — click to turn everything off'}
         >
-          Spacetime {graph3dEffects === 'off' ? 'Off' : graph3dEffects === 'rich' ? 'Rich' : 'On'}
+          Spacetime {graph3dEffects === 'off' ? 'Off'
+            : graph3dEffects === 'minimal' ? 'Low'
+            : graph3dEffects === 'standard' ? 'On'
+            : graph3dEffects === 'rich' ? 'Rich'
+            : 'Cinematic'}
         </button>
         <button className="btn" type="button" disabled={!selectedNode} onClick={() => selectedNode && duplicateCapsule(selectedNode.id)} title="Duplicate selected node">
           Duplicate
