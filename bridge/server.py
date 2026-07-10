@@ -43,7 +43,7 @@ except Exception:
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/model-folder", "/generate", "/render-motion", "/evolve-step", "/diffusers", "/progress", "/civitai", "/controlnet")
+API_PREFIXES = ("/health", "/models", "/svd-models", "/model-folder", "/generate", "/render-motion", "/animate-svd", "/evolve-step", "/diffusers", "/progress", "/civitai", "/controlnet")
 
 
 def _civitai_dest(file_name: str, asset_type: str) -> str:
@@ -413,6 +413,14 @@ def build_response(method: str, path: str, body: bytes):
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(_shelf_with_real()).encode()
 
+    if method == "GET" and path == "/svd-models":
+        headers["Content-Type"] = "application/json"
+        try:
+            models = diffusers_backend.find_svd_models(discover_model_dir())
+            return 200, headers, json.dumps({"models": models}).encode()
+        except Exception as exc:
+            return 200, headers, json.dumps({"models": [], "error": str(exc)}).encode()
+
     if method == "GET" and path == "/model-folder":
         headers["Content-Type"] = "application/json"
         return 200, headers, json.dumps(model_dir_status()).encode()
@@ -664,6 +672,35 @@ def build_response(method: str, path: str, body: bytes):
         if track:
             _write_progress(job_id, {"phase": "done"})
         return 200, headers, json.dumps(result).encode()
+
+    if method == "POST" and path == "/animate-svd":
+        headers["Content-Type"] = "application/json"
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        if not payload.get("image"):
+            return 400, headers, json.dumps({"error": "image is required"}).encode()
+        if not _diffusers_available():
+            return 200, headers, json.dumps({"error": "Real diffusion isn't ready on the bridge (torch/model not installed)."}).encode()
+        job_id = str(payload.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        if track:
+            _prune_progress_files()
+            payload["progressPath"] = _progress_path(job_id)
+            _write_progress(job_id, {"phase": "loading"})
+        try:
+            result = diffusers_backend.animate_svd(payload)
+            if track:
+                _write_progress(job_id, {"phase": "done"})
+            return 200, headers, json.dumps(result).encode()
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            if track:
+                _write_progress(job_id, {"phase": "done"})
+            # SVD has NO honest procedural equivalent - surface the error, never a fake clip.
+            return 200, headers, json.dumps({"error": str(exc)}).encode()
 
     if method == "POST" and path == "/evolve-step":
         headers["Content-Type"] = "application/json"
