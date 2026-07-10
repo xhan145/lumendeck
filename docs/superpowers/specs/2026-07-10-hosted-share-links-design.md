@@ -14,23 +14,31 @@ The Showcase (v0.21) produces a self-contained `.html` file the user sends via
 their own channels. There is no one-click way to get a **link** — the more
 "modern share" for showing work.
 
-## Backend (already provisioned)
+## Backend (provisioned + hardened)
 
 Supabase project **"The Collective"** (`qfzguujtjloskyxcdbon`) — the shared project
-`lumendeck-site` already reuses. A new bucket:
+`lumendeck-site` already reuses.
 
-- `lumendeck-showcases` — **public**, `file_size_limit = 26214400` (25 MB),
-  `allowed_mime_types = ['text/html']`.
-- RLS: an INSERT policy `to anon, authenticated with check (bucket_id =
-  'lumendeck-showcases')`. Public read is via the public-bucket URL. Verified live:
-  anon upload → 200, public fetch → 200, non-HTML → 415.
+- Bucket `lumendeck-showcases` — **public-read**, `file_size_limit = 26214400`
+  (25 MB), `allowed_mime_types = ['text/html']`. **No anon-INSERT policy** —
+  direct anonymous writes are blocked (403).
+- **`publish-showcase` Edge Function** (`verify_jwt` on) is the ONLY write path: it
+  validates the body is HTML ≤ 25 MB, rate-limits per client IP (≤ 20/hour via the
+  `lumendeck_publish_events` table, RLS-locked to the service role), then uploads
+  with the **service key** to a `<slug>-<uuid>.html` path and returns the public
+  URL. Verified live: valid HTML → 200 + fetchable URL; non-HTML → 415; missing JWT
+  → 401; direct anon storage write → 403.
 
-**Security model (honest):** anonymous public sharing. The anon key is public by
-design (guarded by RLS); the bucket is bounded to HTML ≤ 25 MB; object paths carry
-a random UUID so links are unguessable. Anyone with a link can view the render +
-embedded `.lumen` — this is the accepted trade-off of a public link (documented in
-the UI). No auth, so anyone with the anon key could upload HTML ≤ 25 MB; the MIME +
-size caps bound abuse.
+**Security model (honest).** The original design (open anon-INSERT bucket) was an
+anonymous arbitrary-HTML-hosting primitive on the shared production project — an
+adversarial review flagged that abuse could get the whole Collective project
+suspended. Hardened per the user's choice ("Edge Function gateway, keep the
+project"): the baked anon key can only *invoke* the validated, rate-limited
+function, never write storage directly. Residual, accepted trade-offs: the function
+is still publicly invokable (bounded by the per-IP rate limit + HTML/size caps);
+published links are public-by-URL (unguessable UUID) and stay up until the project
+owner removes them (no self-service unpublish yet); it still shares the Collective
+project (rate limit contains, but does not eliminate, abuse pressure).
 
 ## Architecture
 
