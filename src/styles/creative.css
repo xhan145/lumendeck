@@ -624,3 +624,19 @@
 .craft-suggestion { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line, rgba(255,255,255,0.08)); border-radius: 10px; }
 .craft-suggestion-text { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .craft-suggestion-meta { opacity: 0.55; font-size: 12px; }
+
+/* Prompt Lab — lineage tab */
+.craft-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.lineage-list { display: flex; flex-direction: column; gap: 12px; }
+.lineage-strip { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0; }
+.lineage-thumb { display: flex; flex-direction: column; gap: 4px; align-items: center; flex: 0 0 auto; width: 96px; }
+.lineage-thumb > button { padding: 0; border: 2px solid transparent; border-radius: 8px; background: none; cursor: pointer; }
+.lineage-thumb.sel > button { border-color: var(--accent, #7aa2ff); }
+.lineage-thumb img { width: 92px; height: 92px; object-fit: cover; border-radius: 6px; display: block; }
+.lineage-stepdiff { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }
+.lineage-diff { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.lineage-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lineage-compare-grid img { width: 100%; border-radius: 8px; }
+.lineage-compare-grid figcaption { font-size: 11px; opacity: 0.7; }
+.chip.diff-add { color: #6ee7a8; }
+.chip.diff-rem { color: #ff9b9b; }
