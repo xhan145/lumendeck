@@ -22,11 +22,14 @@ export interface CoachSuggestion {
   recipeId?: string;
 }
 
-/** Append-only apply: comma-join `tokens` onto `current`, trimmed; seeds a blank prompt. */
+/** Append-only apply: comma-join `tokens` onto `current`; strips trailing whitespace AND
+ * commas so an in-progress "a, b, " never becomes a doubled "a, b,, c". Seeds a blank prompt. */
 export function appendTokens(current: string, tokens: string[]): string {
   const added = tokens.join(', ');
   if (!added) return current;
-  const base = current.trim();
+  // Strip leading whitespace AND any trailing whitespace/commas so an in-progress
+  // "a, b, " never becomes a doubled "a, b,, c" and a leading space never survives.
+  const base = current.replace(/^\s+/, '').replace(/[\s,]+$/, '');
   return base ? `${base}, ${added}` : added;
 }
 
@@ -55,14 +58,19 @@ export function coach(currentPrompt: string, craftReport: CraftReport, lineages:
     out.push({ kind: 'apply-line', label: head, reason: `looks like your "${head}" line`, tokens: bestLine.missing });
   }
 
-  // apply-recipe: the best-overlapping recipe.
-  let bestRecipe: { r: CreativeRecipe; score: number } | null = null;
+  // apply-recipe: the best-overlapping recipe with >= 1 of its prompt tokens missing.
+  // APPEND-ONLY: we borrow the recipe's missing prompt tokens (never its canvas/model/
+  // negative, and never navigate) — the full recipe apply lives in the Recipes view.
+  let bestRecipe: { r: CreativeRecipe; score: number; missing: string[] } | null = null;
   for (const r of recipes) {
-    const score = tokenJaccard(currentTokens, new Set(tokenizePrompt(r.promptTemplate)));
-    if (score >= COACH_SIM && (!bestRecipe || score > bestRecipe.score)) bestRecipe = { r, score };
+    const rtokens = tokenizePrompt(r.promptTemplate);
+    const score = tokenJaccard(currentTokens, new Set(rtokens));
+    if (score < COACH_SIM) continue;
+    const missing = rtokens.filter((t) => !currentTokens.has(t));
+    if (missing.length > 0 && (!bestRecipe || score > bestRecipe.score)) bestRecipe = { r, score, missing };
   }
   if (bestRecipe) {
-    out.push({ kind: 'apply-recipe', label: bestRecipe.r.name, reason: 'a recipe that matches this prompt', tokens: [], recipeId: bestRecipe.r.id });
+    out.push({ kind: 'apply-recipe', label: bestRecipe.r.name, reason: `from your "${bestRecipe.r.name}" recipe`, tokens: bestRecipe.missing, recipeId: bestRecipe.r.id });
   }
 
   return out;

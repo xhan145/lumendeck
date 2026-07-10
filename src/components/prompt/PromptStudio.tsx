@@ -78,7 +78,6 @@ export function PromptStudio() {
 function CoachTab() {
   const workflow = useStudio((s) => s.workflow);
   const updateParam = useStudio((s) => s.updateParam);
-  const applyCreativeRecipe = useStudio((s) => s.applyCreativeRecipe);
   const gallery = useStudio((s) => s.gallery);
   const brains = useStudio((s) => s.creative.brains);
   const recipes = useStudio((s) => s.creative.recipes);
@@ -92,11 +91,10 @@ function CoachTab() {
     return coach(positive, analyzeCraft(renders, recipes, new Date()), buildLineages(renders), recipes);
   }, [positive, gallery, brains, shelf, recipes]);
 
+  // Every suggestion is append-only: it only ever adds tokens to the positive prompt
+  // (recipe suggestions borrow the recipe's missing prompt tokens — never its canvas/
+  // model/negative, and never navigate). The tooltip's "never overwrites" holds for all.
   const apply = (s: CoachSuggestion) => {
-    if (s.kind === 'apply-recipe' && s.recipeId) {
-      applyCreativeRecipe(s.recipeId, positive);
-      return;
-    }
     if (!promptNode || s.tokens.length === 0) return;
     updateParam(promptNode.id, 'positive', appendTokens(positive, s.tokens));
   };

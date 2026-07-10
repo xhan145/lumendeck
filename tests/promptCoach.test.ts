@@ -26,6 +26,11 @@ describe('appendTokens', () => {
     expect(appendTokens('', ['city'])).toBe('city');
     expect(appendTokens('neon glow', [])).toBe('neon glow');
   });
+  it('strips a trailing comma so an in-progress prompt does not get a double comma', () => {
+    expect(appendTokens('masterpiece, best quality, ', ['city'])).toBe('masterpiece, best quality, city');
+    expect(appendTokens('masterpiece,', ['city'])).toBe('masterpiece, city');
+    expect(appendTokens(',  , ', ['city'])).toBe('city'); // all-comma current collapses to blank
+  });
 });
 
 describe('coach', () => {
@@ -53,12 +58,18 @@ describe('coach', () => {
     expect(out.some((s) => s.kind === 'apply-line')).toBe(false);
   });
 
-  it('apply-recipe: best overlapping recipe, sets recipeId', () => {
+  it('apply-recipe: best overlapping recipe appends its MISSING prompt tokens (append-only)', () => {
     const out = coach('neon glow', report([]), [], [recipe('r1', 'Neon Nights', 'neon glow, city')]);
     const rc = out.find((s) => s.kind === 'apply-recipe')!;
     expect(rc).toBeTruthy();
     expect(rc.recipeId).toBe('r1');
     expect(rc.label).toBe('Neon Nights');
+    expect(rc.tokens).toEqual(['city']); // append the recipe's missing token, never a full destructive apply
+  });
+
+  it('does not suggest a recipe whose prompt tokens are all already present', () => {
+    const out = coach('neon glow, city', report([]), [], [recipe('r1', 'Neon Nights', 'neon glow, city')]);
+    expect(out.some((s) => s.kind === 'apply-recipe')).toBe(false);
   });
 
   it('each source self-gates; empty everything -> []; determinism', () => {
