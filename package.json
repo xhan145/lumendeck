@@ -1,7 +1,7 @@
 {
   "name": "lumendeck",
   "private": true,
-  "version": "0.24.0",
+  "version": "0.27.0",
   "description": "LumenDeck — local-first, node-native generative image studio",
   "license": "Apache-2.0",
   "type": "module",
