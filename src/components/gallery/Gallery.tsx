@@ -3,6 +3,7 @@ import { downloadDataUrl, downloadJson, downloadText, slugify } from '../../brid
 import type { ExportManifest } from '../../core/manifest';
 import { buildShowcaseHtml } from '../../core/share/showcase';
 import { showcaseInputFromRenders } from '../../core/share/showcaseInput';
+import { publishShowcase, isPublishConfigured } from '../../bridge/publish';
 import { fallbackReasonFor, isFallbackRender, renderBackendLabel, renderModeLabel } from '../../core/renderHonesty';
 import { allTags, collectionCounts, filterGallery } from '../../core/gallery/filter';
 import type { TurboForgeManifestData } from '../../turboForge/types';
@@ -97,6 +98,28 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const fallback = isFallbackRender(item);
   const fallbackReason = fallbackReasonFor(item);
 
+  const [publishState, setPublishState] = useState<
+    { k: 'idle' } | { k: 'busy' } | { k: 'done'; url: string } | { k: 'err'; msg: string }
+  >({ k: 'idle' });
+
+  // Build the self-contained Showcase HTML for this render (shared by share + publish).
+  const buildShareHtml = (): string => {
+    const source = {
+      dataUrl: item.dataUrl,
+      mediaType: item.mediaType ?? ('image' as const),
+      mimeType: item.mimeType,
+      manifest: item.manifest,
+    };
+    const title = m.prompt ? m.prompt.slice(0, 60) : 'LumenDeck render';
+    const input = showcaseInputFromRenders(title, [source], new Date());
+    let result = buildShowcaseHtml(input);
+    if (result.oversized) {
+      const isVideo = !!item.mimeType && item.mimeType.startsWith('video/');
+      if (isVideo) result = buildShowcaseHtml({ ...input, posterOnly: true });
+    }
+    return result.html;
+  };
+
   // Export a single self-contained Showcase HTML file for this render.
   const shareShowcase = () => {
     const source = {
@@ -109,8 +132,6 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
     const input = showcaseInputFromRenders(title, [source], new Date());
     let result = buildShowcaseHtml(input);
     if (result.oversized) {
-      // Poster-only can only shrink a real video; for a large still there is nothing
-      // to drop, so warn honestly rather than claim a video was omitted.
       const isVideo = !!item.mimeType && item.mimeType.startsWith('video/');
       if (isVideo) {
         result = buildShowcaseHtml({ ...input, posterOnly: true });
@@ -120,6 +141,18 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
       }
     }
     downloadText(result.html, `${base}.showcase.html`);
+  };
+
+  // Publish the showcase to a public URL and copy the link.
+  const publishShare = async () => {
+    setPublishState({ k: 'busy' });
+    try {
+      const { url } = await publishShowcase(buildShareHtml(), base);
+      try { await navigator.clipboard?.writeText(url); } catch { /* clipboard optional */ }
+      setPublishState({ k: 'done', url });
+    } catch (err) {
+      setPublishState({ k: 'err', msg: err instanceof Error ? err.message : String(err) });
+    }
   };
 
   useEffect(() => {
@@ -156,10 +189,24 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
             <button className="btn" type="button" onClick={shareShowcase} title="Export a self-contained showcase page (opens in any browser; embeds the .lumen for remix)">
               {Icon.link()} Share showcase
             </button>
+            {isPublishConfigured() ? (
+              <button className="btn" type="button" onClick={() => void publishShare()} disabled={publishState.k === 'busy'} title="Upload the showcase and get a public link (anyone with the link can view)">
+                {Icon.link()} {publishState.k === 'busy' ? 'Publishing…' : 'Publish → link'}
+              </button>
+            ) : null}
             <button className="btn primary" type="button" onClick={() => { restoreSnapshot(item); onClose(); }}>
               {Icon.restore()} Restore graph
             </button>
           </div>
+          {publishState.k === 'done' ? (
+            <div className="publish-result" role="status">
+              <span className="publish-ok">{Icon.ok({ size: 13 })} Public link copied</span>
+              <a className="publish-url mono" href={publishState.url} target="_blank" rel="noopener noreferrer">{publishState.url}</a>
+              <span className="publish-note">Anyone with this link can view the render.</span>
+            </div>
+          ) : publishState.k === 'err' ? (
+            <div className="publish-result error" role="alert">{Icon.error({ size: 13 })} Publish failed: {publishState.msg}</div>
+          ) : null}
           <dl className="detail-grid">
             <DetailRow label="Prompt">{m.prompt || '—'}</DetailRow>
             {m.negativePrompt ? <DetailRow label="Negative">{m.negativePrompt}</DetailRow> : null}
