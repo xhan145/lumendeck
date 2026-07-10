@@ -9,6 +9,7 @@ import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { RecipeView } from './components/recipe/RecipeView';
 import { MissionControl } from './components/creative/MissionControl';
+import { StudioOverview } from './components/creative/StudioOverview';
 import { ProjectsView } from './components/creative/ProjectsView';
 import { RecipesView } from './components/creative/RecipesView';
 import { EntropyView } from './components/creative/EntropyView';
@@ -24,6 +25,7 @@ import './styles/app.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
   mission: 'Mission Control',
+  overview: 'Studio Overview',
   projects: 'Projects',
   recipes: 'Creative Recipes',
   entropy: 'Entropy Mode',
@@ -76,6 +78,7 @@ export function App() {
 
   const page =
     view === 'mission' ? <MissionControl />
+      : view === 'overview' ? <StudioOverview />
       : view === 'projects' ? <ProjectsView />
       : view === 'recipes' ? <RecipesView />
       : view === 'entropy' ? <EntropyView />

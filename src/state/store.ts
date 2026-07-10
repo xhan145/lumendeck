@@ -125,6 +125,7 @@ import {
   updateRecipe as updateRecipePure,
 } from '../core/creative/recipes';
 import { buildReleasePack, packExportRecord, type ReleasePack } from '../core/creative/releasePack';
+import { analyzePortfolio, type PortfolioReport } from '../core/creative/portfolio';
 import { generateSocialCaptions } from '../core/creative/generate';
 import { creativeId } from '../core/creative/brain';
 import type { AnalysisContext } from '../core/creative/context';
@@ -139,6 +140,7 @@ export type { CreativeState } from './creative';
 
 export type ViewId =
   | 'mission'
+  | 'overview'
   | 'projects'
   | 'recipes'
   | 'entropy'
@@ -518,6 +520,8 @@ interface StudioState {
   creative: CreativeState;
   /** Live analysis context projected from gallery + brains + shelf. */
   analysisContext(): AnalysisContext;
+  /** Cross-project portfolio analysis for the Studio Overview. */
+  portfolioReport(): PortfolioReport;
   createProject(name: string, type: ProjectType): string;
   updateProjectBrain(id: string, mutate: (b: ProjectBrain) => ProjectBrain): void;
   deleteProject(id: string): void;
@@ -2337,6 +2341,13 @@ export const useStudio = create<StudioState>((set, get) => {
 
     /* ------------------------------------------------ Creative OS actions */
     analysisContext: () => buildAnalysisContext(get().gallery, get().creative.brains, get().shelf),
+    portfolioReport: () =>
+      analyzePortfolio(
+        get().creative.brains,
+        get().creative.recipes,
+        buildAnalysisContext(get().gallery, get().creative.brains, get().shelf),
+        new Date(),
+      ),
 
     createProject: (name, type) => {
       const brain = createBrain(name, type, new Date());
