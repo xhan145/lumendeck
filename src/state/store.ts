@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { buildRenderJob, isArchiveResult, normalizeProgress, type BackendAdapter, type RenderProgressCallback } from '../bridge/adapter';
+import { buildRenderJob, isArchiveResult, normalizeProgress, type BackendAdapter, type RenderProgressCallback, type SvdModelInfo, type AnimateStillOptions } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -393,6 +393,12 @@ interface StudioState {
     opts: { frames: number; fps: number; format: 'mp4' | 'gif' | 'webm' | 'frames' },
     onProgress?: RenderProgressCallback,
   ): Promise<{ fallbackReason: string | null; archive?: boolean }>;
+
+  /* -------------------------------------------------- SVD "Animate this render" */
+  svdModels: SvdModelInfo[];
+  refreshSvdModels(): Promise<void>;
+  /** Animate a gallery still into a coherent SVD clip; lands the clip in the gallery. */
+  animateStill(galleryId: string, opts: Omit<AnimateStillOptions, 'jobId'>, onProgress?: RenderProgressCallback): Promise<{ ok: boolean; error?: string }>;
 
   // Render-Space Ghost Controller — spatial parameter control + path recording.
   /** The curated field profile for a node (empty {} when it has no numeric params). */
@@ -938,6 +944,7 @@ export const useStudio = create<StudioState>((set, get) => {
     bridgeModelFolderBusy: false,
     bridgeModelFolderError: null,
     backendSettings: initialBackendSettings,
+    svdModels: [],
     appSettings: initialAppSettings,
     queuePaused: false,
     controlStatus: null,
@@ -1312,6 +1319,67 @@ export const useStudio = create<StudioState>((set, get) => {
           : `Rendered motion clip "${clip.name}" (${frames} frames) into the Gallery.`,
       });
       return { fallbackReason };
+    },
+
+    // ---- SVD "Animate this render" -----------------------------------------
+    refreshSvdModels: async () => {
+      try {
+        const models = await activeAdapter(get().backendSettings).listSvdModels();
+        set({ svdModels: models });
+      } catch {
+        set({ svdModels: [] });
+      }
+    },
+    animateStill: async (galleryId, opts, onProgress) => {
+      if (!opts.modelPath) return { ok: false, error: 'No SVD model — put a Stable Video Diffusion model in your models folder.' };
+      const source = get().gallery.find((g) => g.id === galleryId);
+      if (!source) return { ok: false, error: 'That render is no longer in the gallery.' };
+      const comma = source.dataUrl.indexOf(',');
+      const imageBase64 = comma >= 0 ? source.dataUrl.slice(comma + 1) : source.dataUrl;
+      const { backendSettings } = get();
+      try {
+        const result = await activeAdapter(backendSettings).animateStill(imageBase64, { ...opts, jobId: uid('svd') }, onProgress);
+        const createdAt = new Date().toISOString();
+        const fallbackReason = result.fallback ? (result.fallbackReason ?? 'Backend returned a placeholder clip.') : undefined;
+        const mode: 'fallback' | 'mock' | 'real' = result.fallback ? 'fallback' : backendSettings.selectedBackend === 'mock' ? 'mock' : 'real';
+        const actualBackend = result.fallback ? 'procedural' : backendSettings.selectedBackend;
+        const manifest = {
+          ...source.manifest,
+          createdAt,
+          seed: typeof result.seed === 'number' ? result.seed : Number(result.seed) || 0,
+          media: { type: 'video' as const, format: result.extension, frameCount: opts.frames, fps: opts.fps },
+          svdSource: galleryId,
+          render: {
+            selectedBackend: backendSettings.selectedBackend,
+            actualBackend,
+            mode,
+            fallback: Boolean(result.fallback),
+            fallbackReason,
+            bridgeRenderer: backendSettings.bridgeRenderer,
+          },
+        };
+        const item: GalleryItem = {
+          id: uid('render'),
+          dataUrl: result.dataUrl,
+          mediaType: 'video',
+          mimeType: result.mimeType,
+          extension: result.extension,
+          createdAt,
+          manifest,
+          selectedBackend: backendSettings.selectedBackend,
+          actualBackend,
+          renderMode: mode,
+          fallback: Boolean(result.fallback),
+          fallbackReason,
+          collectionId: null,
+          tags: ['SVD animate'],
+        };
+        const nextGallery = await addRenderOp(galleryStore, get().gallery, item);
+        set({ gallery: nextGallery });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
 
     // ---- Auto-Evolve --------------------------------------------------------

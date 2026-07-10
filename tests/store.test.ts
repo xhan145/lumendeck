@@ -74,3 +74,21 @@ describe('studio store — recipe/graph single-object invariant', () => {
     expect(useStudio.getState().rackPresets.find((p) => p.id === preset.id)).toBeUndefined();
   });
 });
+
+describe('studio store — animateStill (SVD)', () => {
+  it('refreshSvdModels populates svdModels from the adapter (array)', async () => {
+    await useStudio.getState().refreshSvdModels();
+    expect(Array.isArray(useStudio.getState().svdModels)).toBe(true);
+  });
+
+  it('animateStill errors clearly when no model path is given', async () => {
+    const r = await useStudio.getState().animateStill('nope', { frames: 14, fps: 7, motion: 127, seed: 0, modelPath: '' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/model/i);
+  });
+
+  it('animateStill returns ok:false for an unknown gallery id', async () => {
+    const r = await useStudio.getState().animateStill('does-not-exist', { frames: 14, fps: 7, motion: 127, seed: 0, modelPath: '/m/svd' });
+    expect(r.ok).toBe(false);
+  });
+});
