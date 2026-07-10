@@ -11,9 +11,9 @@ import { detectMissing } from '../../core/creative/missing';
 import { scoreReadiness } from '../../core/creative/readiness';
 import { nextAction } from '../../core/creative/nextAction';
 import { parseProjectFile } from '../../core/creative/brain';
-import { buildShowcaseHtml } from '../../core/share/showcase';
+import { buildShowcaseHtml, type ShowcaseInput } from '../../core/share/showcase';
 import { showcaseInputFromRenders } from '../../core/share/showcaseInput';
-import { publishShowcase, isPublishConfigured } from '../../bridge/publish';
+import { publishShowcase, isPublishConfigured, PUBLISH_MAX_BYTES } from '../../bridge/publish';
 import { downloadText, slugify } from '../../bridge/exporter';
 import type { ProjectBrain, ProjectStatus, ProjectType } from '../../core/creative/types';
 import '../../styles/creative.css';
@@ -51,6 +51,7 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
   const readiness = useMemo(() => scoreReadiness(brain, ctx).score, [brain, ctx]);
   const action = useMemo(() => nextAction(brain, ctx), [brain, ctx]);
   const [packNote, setPackNote] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
   const [promptDraft, setPromptDraft] = useState('');
 
   const patch = (fn: (b: ProjectBrain) => ProjectBrain) => update(brain.id, fn);
@@ -63,8 +64,8 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
   const linkable = gallery.filter((g) => !linkedIds.has(g.id)).slice(0, 12);
   const renderById = new Map(gallery.map((g) => [g.id, g]));
 
-  // Build the multi-render project Showcase HTML (up to 8 linked renders), or null.
-  const buildProjectShowcase = (): { html: string; name: string; count: number } | null => {
+  // Build the project's showcase INPUT (up to 8 linked renders), or null.
+  const buildProjectShowcaseInput = (): { input: ShowcaseInput; name: string; count: number } | null => {
     const sources = brain.renders
       .map((id) => renderById.get(id))
       .filter((g): g is NonNullable<typeof g> => Boolean(g))
@@ -72,34 +73,48 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
       .map((g) => ({ dataUrl: g.dataUrl, mediaType: g.mediaType ?? ('image' as const), mimeType: g.mimeType, manifest: g.manifest }));
     if (sources.length === 0) return null;
     const input = showcaseInputFromRenders(brain.name || 'LumenDeck project', sources, new Date());
-    let result = buildShowcaseHtml(input);
-    if (result.oversized) result = buildShowcaseHtml({ ...input, posterOnly: true });
-    return { html: result.html, name: slugify(brain.name, 'project'), count: sources.length };
+    return { input, name: slugify(brain.name, 'project'), count: sources.length };
   };
 
   const shareProjectShowcase = () => {
-    const built = buildProjectShowcase();
+    const built = buildProjectShowcaseInput();
     if (!built) {
       setPackNote('Link at least one render to this project before sharing a showcase.');
       return;
     }
-    downloadText(built.html, `${built.name}.showcase.html`);
+    let result = buildShowcaseHtml(built.input);
+    if (result.oversized) result = buildShowcaseHtml({ ...built.input, posterOnly: true });
+    downloadText(result.html, `${built.name}.showcase.html`);
     setPackNote(`Exported showcase (${built.count} render${built.count > 1 ? 's' : ''}) → ${built.name}.showcase.html`);
   };
 
   const publishProjectShowcase = async () => {
-    const built = buildProjectShowcase();
+    if (publishing) return;
+    const built = buildProjectShowcaseInput();
     if (!built) {
       setPackNote('Link at least one render to this project before publishing a showcase.');
       return;
     }
+    let result = buildShowcaseHtml(built.input);
+    if (result.bytes > PUBLISH_MAX_BYTES) {
+      const poster = buildShowcaseHtml({ ...built.input, posterOnly: true });
+      if (poster.bytes > PUBLISH_MAX_BYTES) {
+        setPackNote('Too large to publish (over 25 MB) even without video — use "Share showcase" to save a file instead.');
+        return;
+      }
+      result = poster;
+    }
+    setPublishing(true);
     setPackNote('Publishing…');
     try {
-      const { url } = await publishShowcase(built.html, built.name);
-      try { await navigator.clipboard?.writeText(url); } catch { /* clipboard optional */ }
-      setPackNote(`Published — public link copied: ${url}`);
+      const { url } = await publishShowcase(result.html, built.name);
+      let copied = false;
+      try { await navigator.clipboard?.writeText(url); copied = true; } catch { /* clipboard optional */ }
+      setPackNote(`${copied ? 'Published — link copied' : 'Published'}: ${url}`);
     } catch (err) {
       setPackNote(`Publish failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -124,7 +139,7 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
           </button>
           <button className="btn" type="button" onClick={shareProjectShowcase} title="Export a self-contained showcase page (opens in any browser; embeds the .lumen for remix)">{Icon.link({ size: 14 })} Share showcase</button>
           {isPublishConfigured() ? (
-            <button className="btn" type="button" onClick={() => void publishProjectShowcase()} title="Upload the showcase and get a public link (anyone with the link can view)">{Icon.link({ size: 14 })} Publish → link</button>
+            <button className="btn" type="button" onClick={() => void publishProjectShowcase()} disabled={publishing} title="Upload the showcase and get a public link (anyone with the link can view)">{Icon.link({ size: 14 })} {publishing ? 'Publishing…' : 'Publish → link'}</button>
           ) : null}
           <button className="btn" type="button" onClick={() => genCaptions(brain.id)}>{Icon.edit({ size: 14 })} Captions</button>
           <button className="btn" type="button" onClick={() => markShipped(brain.id)}>{Icon.trophy({ size: 14 })} Ship</button>

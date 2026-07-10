@@ -1,42 +1,41 @@
 import { describe, expect, it, vi } from 'vitest';
-import { publishShowcase, isPublishConfigured, SUPABASE_URL, BUCKET } from '../src/bridge/publish';
+import { publishShowcase, isPublishConfigured, PUBLISH_ENDPOINT, PUBLISH_MAX_BYTES } from '../src/bridge/publish';
 
 describe('publishShowcase', () => {
-  it('POSTs the HTML to the storage bucket with auth headers and returns the public URL', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ Key: 'x' }), { status: 200 }));
-    const res = await publishShowcase('<h1>hi</h1>', 'neon-cat', { fetchImpl: fetchMock, randomId: () => 'FIXEDID' });
-    expect(res.url).toBe(`${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/neon-cat-FIXEDID.html`);
+  it('POSTs {html,slug} to the Edge Function with the anon bearer and returns its url', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ url: 'https://x.supabase.co/storage/v1/object/public/lumendeck-showcases/neon-cat-UUID.html' }), { status: 200 }),
+    );
+    const res = await publishShowcase('<!doctype html><h1>hi</h1>', 'neon-cat', { fetchImpl: fetchMock });
+    expect(res.url).toContain('/object/public/lumendeck-showcases/neon-cat-');
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
-    expect(url).toBe(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/neon-cat-FIXEDID.html`);
+    expect(url).toBe(PUBLISH_ENDPOINT);
     expect(init.method).toBe('POST');
-    expect(init.headers['Content-Type']).toBe('text/html');
-    expect(init.headers.apikey).toBeTruthy();
     expect(init.headers.Authorization).toMatch(/^Bearer /);
-    expect(init.body).toBe('<h1>hi</h1>');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(String(init.body))).toEqual({ html: '<!doctype html><h1>hi</h1>', slug: 'neon-cat' });
   });
 
-  it('throws loudly on a non-OK response (never a silent success)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('too big', { status: 413 }));
-    await expect(publishShowcase('<h1>x</h1>', 'p', { fetchImpl: fetchMock })).rejects.toThrow(/Publish failed \(413\)/);
+  it('defaults an empty slug so the body always carries one', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'https://x/y.html' }), { status: 200 }));
+    await publishShowcase('<html></html>', '', { fetchImpl: fetchMock });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body)).slug).toBe('showcase');
   });
 
-  it('randomizes the object path per call (unguessable links)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
-    let n = 0;
-    await publishShowcase('a', 's', { fetchImpl: fetchMock, randomId: () => `id${n++}` });
-    await publishShowcase('a', 's', { fetchImpl: fetchMock, randomId: () => `id${n++}` });
-    expect(String(fetchMock.mock.calls[0][0])).not.toBe(String(fetchMock.mock.calls[1][0]));
+  it('throws loudly with the server error message on a non-OK response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'Rate limit exceeded — please try again later.' }), { status: 429 }));
+    await expect(publishShowcase('<html></html>', 'p', { fetchImpl: fetchMock })).rejects.toThrow(/Publish failed \(429\): Rate limit exceeded/);
   });
 
-  it('slug-prefixes the object path', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
-    await publishShowcase('a', 'my-slug', { fetchImpl: fetchMock, randomId: () => 'Z' });
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/my-slug-Z.html');
+  it('throws when the response omits a url (no silent success)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+    await expect(publishShowcase('<html></html>', 'p', { fetchImpl: fetchMock })).rejects.toThrow(/did not include a URL/);
   });
 });
 
-describe('isPublishConfigured', () => {
-  it('is true when the URL + key constants are set', () => {
+describe('config', () => {
+  it('isPublishConfigured is true and the size cap is 25MB', () => {
     expect(isPublishConfigured()).toBe(true);
+    expect(PUBLISH_MAX_BYTES).toBe(25 * 1024 * 1024);
   });
 });

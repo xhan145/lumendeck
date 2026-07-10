@@ -1,20 +1,24 @@
 /**
- * Hosted share-links: upload a self-contained Showcase HTML to a PUBLIC Supabase
- * Storage bucket and return a public URL. Plain `fetch` against the Storage REST
- * API — no `supabase-js` dependency.
+ * Hosted share-links: publish a self-contained Showcase HTML and get a public URL.
  *
- * The bucket `lumendeck-showcases` (project "The Collective") is public-read,
- * HTML-only, 25MB-capped, with an anon INSERT policy. The anon key below is
- * PUBLIC BY DESIGN (a Supabase anon/publishable key, guarded by RLS + the bucket's
- * MIME/size limits) — it is safe to commit to the public repo. Object paths carry
- * a random UUID so links are unguessable.
+ * Uploads go through the `publish-showcase` Supabase Edge Function (NOT a direct
+ * storage write — the bucket has no anon-insert policy). The function validates
+ * (HTML-only, ≤ 25MB), rate-limits per IP, and uploads with the service key, so the
+ * baked anon key below can only INVOKE that gated function. The anon key is public
+ * by design (guarded by the function + RLS). Object paths get a server-side random
+ * UUID, so links are unguessable.
  */
 
 export const SUPABASE_URL = 'https://qfzguujtjloskyxcdbon.supabase.co';
-// Legacy anon JWT (role=anon) — verified working for the storage upload path.
+// Anon JWT (role=anon) — public by design; only lets the app invoke the
+// publish-showcase Edge Function (which does the validated, rate-limited upload).
 export const SUPABASE_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmemd1dWp0amxvc2t5eGNkYm9uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMTg3NTAsImV4cCI6MjA5NjU5NDc1MH0.kSoDgs4QRtBVvOzDM4e9tfhNi8hVRlMPkFx8A0PVY54';
 export const BUCKET = 'lumendeck-showcases';
+export const PUBLISH_ENDPOINT = `${SUPABASE_URL}/functions/v1/publish-showcase`;
+
+/** The bucket/function reject showcases larger than this — check before uploading. */
+export const PUBLISH_MAX_BYTES = 25 * 1024 * 1024;
 
 export interface PublishResult {
   url: string;
@@ -23,43 +27,33 @@ export interface PublishResult {
 export interface PublishOptions {
   /** injectable for tests */
   fetchImpl?: typeof fetch;
-  /** injectable unguessable id generator for tests */
-  randomId?: () => string;
 }
 
 /** True when the publish endpoint is configured (guards the UI in stripped builds). */
 export function isPublishConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && BUCKET);
-}
-
-function defaultRandomId(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-  return `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 }
 
 /**
- * Upload `html` as `<slug>-<uuid>.html` to the public bucket and return its public
- * URL. Throws loudly (status + body) on any non-OK response — never a silent
- * success. A 413 means the showcase exceeded the 25MB bucket cap; a 415 means a
- * non-HTML body slipped through.
+ * Publish `html` via the Edge Function and return its public URL. Throws loudly
+ * (status + server error message) on any non-OK response — never a silent success.
+ * A 413 means the showcase exceeded the 25MB cap; a 429 is the per-IP rate limit.
  */
 export async function publishShowcase(html: string, slug: string, opts: PublishOptions = {}): Promise<PublishResult> {
   const f = opts.fetchImpl ?? fetch;
-  const id = (opts.randomId ?? defaultRandomId)();
-  const path = `${slug || 'showcase'}-${id}.html`;
-  const res = await f(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
+  const res = await f(PUBLISH_ENDPOINT, {
     method: 'POST',
     headers: {
-      apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'text/html',
-      'x-upsert': 'false',
+      apikey: SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
     },
-    body: html,
+    body: JSON.stringify({ html, slug: slug || 'showcase' }),
   });
+  const data = (await res.json().catch(() => null)) as { url?: string; error?: string } | null;
   if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Publish failed (${res.status}): ${detail.slice(0, 200) || res.statusText}`);
+    throw new Error(`Publish failed (${res.status}): ${data?.error ?? res.statusText}`);
   }
-  return { url: `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}` };
+  if (!data?.url) throw new Error('Publish response did not include a URL.');
+  return { url: data.url };
 }
