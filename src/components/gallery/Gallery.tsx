@@ -3,6 +3,7 @@ import { downloadDataUrl, downloadJson, downloadText, slugify } from '../../brid
 import type { ExportManifest } from '../../core/manifest';
 import { buildShowcaseHtml } from '../../core/share/showcase';
 import { showcaseInputFromRenders } from '../../core/share/showcaseInput';
+import { publishShowcase, isPublishConfigured, PUBLISH_MAX_BYTES } from '../../bridge/publish';
 import { fallbackReasonFor, isFallbackRender, renderBackendLabel, renderModeLabel } from '../../core/renderHonesty';
 import { allTags, collectionCounts, filterGallery } from '../../core/gallery/filter';
 import type { TurboForgeManifestData } from '../../turboForge/types';
@@ -97,6 +98,10 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const fallback = isFallbackRender(item);
   const fallbackReason = fallbackReasonFor(item);
 
+  const [publishState, setPublishState] = useState<
+    { k: 'idle' } | { k: 'busy' } | { k: 'done'; url: string; copied: boolean } | { k: 'err'; msg: string }
+  >({ k: 'idle' });
+
   // Export a single self-contained Showcase HTML file for this render.
   const shareShowcase = () => {
     const source = {
@@ -109,8 +114,6 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
     const input = showcaseInputFromRenders(title, [source], new Date());
     let result = buildShowcaseHtml(input);
     if (result.oversized) {
-      // Poster-only can only shrink a real video; for a large still there is nothing
-      // to drop, so warn honestly rather than claim a video was omitted.
       const isVideo = !!item.mimeType && item.mimeType.startsWith('video/');
       if (isVideo) {
         result = buildShowcaseHtml({ ...input, posterOnly: true });
@@ -120,6 +123,32 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
       }
     }
     downloadText(result.html, `${base}.showcase.html`);
+  };
+
+  // Publish the showcase to a public URL and copy the link. Poster-only if the
+  // showcase would exceed the 25MB publish cap; honest about the clipboard result.
+  const publishShare = async () => {
+    setPublishState({ k: 'busy' });
+    try {
+      const source = { dataUrl: item.dataUrl, mediaType: item.mediaType ?? ('image' as const), mimeType: item.mimeType, manifest: item.manifest };
+      const title = m.prompt ? m.prompt.slice(0, 60) : 'LumenDeck render';
+      const input = showcaseInputFromRenders(title, [source], new Date());
+      let result = buildShowcaseHtml(input);
+      if (result.bytes > PUBLISH_MAX_BYTES) {
+        const poster = buildShowcaseHtml({ ...input, posterOnly: true });
+        if (poster.bytes > PUBLISH_MAX_BYTES) {
+          setPublishState({ k: 'err', msg: 'Too large to publish (over 25 MB) even without the video — use "Share showcase" to save a file instead.' });
+          return;
+        }
+        result = poster;
+      }
+      const { url } = await publishShowcase(result.html, base);
+      let copied = false;
+      try { await navigator.clipboard?.writeText(url); copied = true; } catch { /* clipboard optional */ }
+      setPublishState({ k: 'done', url, copied });
+    } catch (err) {
+      setPublishState({ k: 'err', msg: err instanceof Error ? err.message : String(err) });
+    }
   };
 
   useEffect(() => {
@@ -156,10 +185,24 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
             <button className="btn" type="button" onClick={shareShowcase} title="Export a self-contained showcase page (opens in any browser; embeds the .lumen for remix)">
               {Icon.link()} Share showcase
             </button>
+            {isPublishConfigured() ? (
+              <button className="btn" type="button" onClick={() => void publishShare()} disabled={publishState.k === 'busy'} title="Upload the showcase and get a public link (anyone with the link can view)">
+                {Icon.link()} {publishState.k === 'busy' ? 'Publishing…' : 'Publish → link'}
+              </button>
+            ) : null}
             <button className="btn primary" type="button" onClick={() => { restoreSnapshot(item); onClose(); }}>
               {Icon.restore()} Restore graph
             </button>
           </div>
+          {publishState.k === 'done' ? (
+            <div className="publish-result" role="status">
+              <span className="publish-ok">{Icon.ok({ size: 13 })} {publishState.copied ? 'Public link copied' : 'Public link ready'}</span>
+              <a className="publish-url mono" href={publishState.url} target="_blank" rel="noopener noreferrer">{publishState.url}</a>
+              <span className="publish-note">Anyone with this link can view the render. Published links stay up until removed by the project owner.</span>
+            </div>
+          ) : publishState.k === 'err' ? (
+            <div className="publish-result error" role="alert">{Icon.error({ size: 13 })} Publish failed: {publishState.msg}</div>
+          ) : null}
           <dl className="detail-grid">
             <DetailRow label="Prompt">{m.prompt || '—'}</DetailRow>
             {m.negativePrompt ? <DetailRow label="Negative">{m.negativePrompt}</DetailRow> : null}

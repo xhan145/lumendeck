@@ -1450,3 +1450,15 @@
 .civitai-meta { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-3); }
 .civitai-meta h4 { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .civitai-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* ---- Hosted share-links: published-link result in the gallery drawer ---- */
+.publish-result {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 10px 0 0; padding: 10px 12px;
+  background: var(--ld-surface-2); border: 1px solid var(--ld-border); border-radius: 10px;
+  font-size: 12px;
+}
+.publish-result.error { color: var(--ld-danger); border-color: var(--ld-danger); }
+.publish-ok { display: inline-flex; align-items: center; gap: 6px; color: var(--ld-ok); font-weight: 600; }
+.publish-url { word-break: break-all; color: var(--ld-cyan); }
+.publish-note { color: var(--ld-text-dim); }
