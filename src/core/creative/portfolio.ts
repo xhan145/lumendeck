@@ -78,9 +78,13 @@ function daysSince(iso: string, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - t) / DAY_MS));
 }
 
-/** Earliest transition INTO 'shipped' (for velocity), or null. */
+/** Earliest transition INTO 'shipped' with a VALID timestamp (for velocity), or
+ * null. Filtering invalid `at` first keeps the result order-independent — a blank
+ * `at` would otherwise win the `<= NaN` comparison and silently drop the ship. */
 function shippedAt(brain: ProjectBrain): string | null {
-  const entries = (brain.statusHistory ?? []).filter((h) => h.to === 'shipped');
+  const entries = (brain.statusHistory ?? []).filter(
+    (h) => h.to === 'shipped' && Number.isFinite(new Date(h.at).getTime()),
+  );
   if (entries.length === 0) return null;
   return entries.reduce((a, b) => (new Date(a.at).getTime() <= new Date(b.at).getTime() ? a : b)).at;
 }

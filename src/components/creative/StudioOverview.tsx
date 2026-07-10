@@ -1,4 +1,7 @@
+import { useMemo } from 'react';
 import { useStudio } from '../../state/store';
+import { analyzePortfolio } from '../../core/creative/portfolio';
+import { buildAnalysisContext } from '../../state/creative';
 import { Icon } from '../icons';
 import { ReadinessRing } from './ReadinessRing';
 import type { ProjectStatus } from '../../core/creative/types';
@@ -14,15 +17,23 @@ const STATUS_ORDER: ProjectStatus[] = [
 ];
 
 export function StudioOverview() {
-  // Select the getter REFERENCE (stable), then call it in the body. Calling
-  // s.portfolioReport() inside the selector returns a fresh object every render →
-  // Zustand's "getSnapshot should be cached" infinite loop (caught in preview).
-  const portfolioReport = useStudio((s) => s.portfolioReport);
-  const report = portfolioReport();
+  // Subscribe to the reactive slices (so the view re-renders when projects change —
+  // e.g. the empty-state "Load demo" must repopulate it) and derive the report with
+  // useMemo. NOTE: never `useStudio((s) => s.portfolioReport())` — calling the getter
+  // inside the selector returns a fresh object each render → Zustand's "getSnapshot
+  // should be cached" infinite-loop crash.
+  const brains = useStudio((s) => s.creative.brains);
+  const recipes = useStudio((s) => s.creative.recipes);
+  const gallery = useStudio((s) => s.gallery);
+  const shelf = useStudio((s) => s.shelf);
   const setView = useStudio((s) => s.setView);
   const setActiveProject = useStudio((s) => s.setActiveProject);
   const openProject = useStudio((s) => s.openProject);
   const seedDemo = useStudio((s) => s.seedCreativeDemo);
+  const report = useMemo(
+    () => analyzePortfolio(brains, recipes, buildAnalysisContext(gallery, brains, shelf), new Date()),
+    [brains, recipes, gallery, shelf],
+  );
 
   const { triage, top, funnel, stall, stale, strengths, velocity } = report;
 
@@ -49,7 +60,9 @@ export function StudioOverview() {
     setActiveProject(top.brainId);
     setView(top.action.targetView);
   };
-  const rest = triage.filter((t) => t.brainId !== top?.brainId);
+  // Only projects that actually need attention (attention > 0 excludes shipped/
+  // archived, which the engine keeps in triage at score 0) and not the hero.
+  const rest = triage.filter((t) => t.attention > 0 && t.brainId !== top?.brainId);
   const maxVelocity = Math.max(1, ...velocity.weeks.map((w) => Math.max(w.started, w.shipped)));
 
   return (

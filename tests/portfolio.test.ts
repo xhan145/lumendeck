@@ -93,6 +93,20 @@ describe('analyzePortfolio', () => {
     expect(r.strengths.strongestType).toBeNull();
   });
 
+  it('velocity ignores a blank statusHistory.at and still counts the valid ship (order-independent)', () => {
+    const withBlankFirst = brain({
+      id: 'vb',
+      createdAt: ISO('2026-07-06'),
+      status: 'shipped',
+      statusHistory: [
+        { at: '', from: 'release-ready', to: 'shipped' },
+        { at: ISO('2026-07-07'), from: 'release-ready', to: 'shipped' },
+      ],
+    });
+    const r = analyzePortfolio([withBlankFirst], [], emptyContext(), NOW);
+    expect(r.velocity.weeks.reduce((a, w) => a + w.shipped, 0)).toBe(1);
+  });
+
   it('velocity buckets started (createdAt) and shipped (statusHistory->shipped) into 8 weeks', () => {
     const b = brain({
       id: 'v',
