@@ -54,3 +54,20 @@ def test_find_svd_models(tmp_path):
     assert "svd-img2vid" in paths and "svd.safetensors" in paths
     assert all("id" in m and "name" in m and m["kind"] in ("folder", "file") for m in found)
     assert db.find_svd_models(str(tmp_path / "missing")) == []
+
+
+def test_worker_source_defines_svd_helpers():
+    # The code that ACTUALLY runs SVD lives inside the _WORKER_SOURCE string; exec it in
+    # an isolated namespace and check the helpers exist + clamp identically to the
+    # module-level copy (the two must stay in sync).
+    ns = {}
+    exec(compile(db._WORKER_SOURCE, "<worker>", "exec"), ns)
+    assert "_animate_svd" in ns and callable(ns["_animate_svd"])
+    assert ns["_svd_target_size"](800, 1200) == (576, 1024)
+    assert ns["_svd_target_size"](1200, 800) == (1024, 576)
+    got = ns["_clamp_svd"]({"num_frames": 999, "fps": 0})
+    assert got["num_frames"] == 25 and got["fps"] == 1 and got["motion_bucket_id"] == 127
+
+
+def test_module_forwarder_animate_svd_exists():
+    assert hasattr(db, "animate_svd") and callable(db.animate_svd)
