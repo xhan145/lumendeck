@@ -14,7 +14,11 @@ const STATUS_ORDER: ProjectStatus[] = [
 ];
 
 export function StudioOverview() {
-  const report = useStudio((s) => s.portfolioReport());
+  // Select the getter REFERENCE (stable), then call it in the body. Calling
+  // s.portfolioReport() inside the selector returns a fresh object every render →
+  // Zustand's "getSnapshot should be cached" infinite loop (caught in preview).
+  const portfolioReport = useStudio((s) => s.portfolioReport);
+  const report = portfolioReport();
   const setView = useStudio((s) => s.setView);
   const setActiveProject = useStudio((s) => s.setActiveProject);
   const openProject = useStudio((s) => s.openProject);
