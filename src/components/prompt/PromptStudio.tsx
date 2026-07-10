@@ -5,15 +5,20 @@ import { search as searchHistory } from '../../core/prompt/history';
 import { defaultAssistant, mergeNegatives, type EnhanceResult } from '../../core/prompt/enhance';
 import { findNode, uid } from '../../core/workflow';
 import { useStudio } from '../../state/store';
+import { buildAnalysisContext } from '../../state/creative';
+import { analyzeCraft } from '../../core/creative/craftBrain';
+import { buildLineages } from '../../core/creative/promptLineage';
+import { coach, appendTokens, type CoachSuggestion } from '../../core/creative/promptCoach';
 import { Icon } from '../icons';
 
-type Tab = 'library' | 'wildcards' | 'history' | 'enhance';
+type Tab = 'library' | 'wildcards' | 'history' | 'enhance' | 'coach';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'library', label: 'Library' },
   { id: 'wildcards', label: 'Wildcards' },
   { id: 'history', label: 'History' },
   { id: 'enhance', label: 'Enhance' },
+  { id: 'coach', label: 'Coach' },
 ];
 
 /**
@@ -61,10 +66,54 @@ export function PromptStudio() {
             {tab === 'wildcards' ? <WildcardsTab /> : null}
             {tab === 'history' ? <HistoryTab /> : null}
             {tab === 'enhance' ? <EnhanceTab /> : null}
+            {tab === 'coach' ? <CoachTab /> : null}
           </div>
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** Prompt Coach: append-only suggestions from the user's own craft history. */
+function CoachTab() {
+  const workflow = useStudio((s) => s.workflow);
+  const updateParam = useStudio((s) => s.updateParam);
+  const applyCreativeRecipe = useStudio((s) => s.applyCreativeRecipe);
+  const gallery = useStudio((s) => s.gallery);
+  const brains = useStudio((s) => s.creative.brains);
+  const recipes = useStudio((s) => s.creative.recipes);
+  const shelf = useStudio((s) => s.shelf);
+
+  const promptNode = findNode(workflow, 'prompt');
+  const positive = String(promptNode?.params.positive ?? '');
+
+  const suggestions = useMemo(() => {
+    const renders = buildAnalysisContext(gallery, brains, shelf).renders;
+    return coach(positive, analyzeCraft(renders, recipes, new Date()), buildLineages(renders), recipes);
+  }, [positive, gallery, brains, shelf, recipes]);
+
+  const apply = (s: CoachSuggestion) => {
+    if (s.kind === 'apply-recipe' && s.recipeId) {
+      applyCreativeRecipe(s.recipeId, positive);
+      return;
+    }
+    if (!promptNode || s.tokens.length === 0) return;
+    updateParam(promptNode.id, 'positive', appendTokens(positive, s.tokens));
+  };
+
+  if (suggestions.length === 0) {
+    return <p className="field-help">Keep creating — suggestions appear here as your craft history grows.</p>;
+  }
+  return (
+    <div className="ps-coach" role="list">
+      {suggestions.map((s, i) => (
+        <button key={`${s.kind}:${s.label}:${i}`} type="button" role="listitem" className={`ps-coach-item ${s.kind}`} onClick={() => apply(s)} title="Append to your prompt (never overwrites)">
+          <span className="ps-coach-glyph" aria-hidden="true">{s.kind === 'add-token' ? '+' : s.kind === 'apply-line' ? '≈' : '▸'}</span>
+          <span className="ps-coach-label">{s.label}</span>
+          <span className="ps-coach-reason">{s.reason}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
