@@ -38,3 +38,32 @@ describe('shares slice', () => {
     expect(removeShare([sample], 'zzz')).toEqual([sample]);
   });
 });
+
+import { persistedProjection } from '../src/state/persistence';
+import { useStudio } from '../src/state/store';
+
+describe('shares — store + persistence integration', () => {
+  it('recordPublishedShare adds a row; removePublishedShare drops it', () => {
+    const store = useStudio.getState();
+    const before = store.publishedShares.length;
+    store.recordPublishedShare({ title: 'Rec', url: 'https://x/r.html', path: 'r.html', token: 'tk', kind: 'gallery', sourceId: 'g9' });
+    const added = useStudio.getState().publishedShares;
+    expect(added.length).toBe(before + 1);
+    expect(added[0]).toMatchObject({ title: 'Rec', path: 'r.html', kind: 'gallery' });
+    expect(typeof added[0].id).toBe('string');
+    expect(added[0].id.length).toBeGreaterThan(0);
+
+    useStudio.getState().removePublishedShare(added[0].id);
+    expect(useStudio.getState().publishedShares.find((s) => s.id === added[0].id)).toBeUndefined();
+  });
+
+  it('persistedProjection round-trips publishedShares under `shares`', () => {
+    const proj = persistedProjection({
+      // minimal shape — only publishedShares matters here; the projection reads the rest
+      // straight through from the live store state passed by the subscription.
+      ...useStudio.getState(),
+      publishedShares: [{ id: 'p1', title: 'T', url: 'https://x/p.html', path: 'p.html', token: 'k', kind: 'project', publishedAt: 5 }],
+    } as Parameters<typeof persistedProjection>[0]);
+    expect(proj.shares).toEqual([{ id: 'p1', title: 'T', url: 'https://x/p.html', path: 'p.html', token: 'k', kind: 'project', publishedAt: 5 }]);
+  });
+});
