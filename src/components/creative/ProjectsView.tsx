@@ -45,6 +45,7 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
   const addPrompt = useStudio((s) => s.addPromptToProject);
   const addAsset = useStudio((s) => s.addAssetToProject);
   const addLink = useStudio((s) => s.addPublishedLink);
+  const recordPublishedShare = useStudio((s) => s.recordPublishedShare);
 
   const ctx = analysisContext();
   const missing = useMemo(() => detectMissing(brain, ctx), [brain, ctx]);
@@ -107,7 +108,8 @@ function ProjectDetail({ brain }: { brain: ProjectBrain }) {
     setPublishing(true);
     setPackNote('Publishing…');
     try {
-      const { url } = await publishShowcase(result.html, built.name);
+      const { url, path, token } = await publishShowcase(result.html, built.name);
+      recordPublishedShare({ title: built.name, url, path, token, kind: 'project', sourceId: brain.id });
       let copied = false;
       try { await navigator.clipboard?.writeText(url); copied = true; } catch { /* clipboard optional */ }
       setPackNote(`${copied ? 'Published — link copied' : 'Published'}: ${url}`);

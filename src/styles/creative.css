@@ -599,3 +599,13 @@
 .overview-teaser-head { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ld-accent); white-space: nowrap; }
 .overview-teaser-body { flex: 1; min-width: 0; color: var(--ld-text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overview-teaser-meta { display: inline-flex; align-items: center; gap: 4px; color: var(--ld-text-dim); font-size: 12px; white-space: nowrap; }
+
+/* Published links manager (Studio Overview) */
+.published-links .published-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.published-row { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line, rgba(255,255,255,0.08)); border-radius: 10px; }
+.published-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.published-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.published-url { font-size: 11px; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.published-meta { font-size: 11px; opacity: 0.55; text-transform: capitalize; }
+.published-actions { display: flex; gap: 6px; align-items: center; }
+.published-error { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--danger, #ff6b6b); }
