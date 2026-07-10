@@ -590,3 +590,12 @@
 .ov-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; margin-left: var(--sp-2); }
 .ov-dot.started { background: var(--ld-accent); }
 .ov-dot.shipped { background: var(--ld-ok); }
+
+.overview-teaser {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; text-align: left;
+  cursor: pointer; border: 1px solid var(--ld-border);
+}
+.overview-teaser:hover { border-color: var(--ld-accent); }
+.overview-teaser-head { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ld-accent); white-space: nowrap; }
+.overview-teaser-body { flex: 1; min-width: 0; color: var(--ld-text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-teaser-meta { display: inline-flex; align-items: center; gap: 4px; color: var(--ld-text-dim); font-size: 12px; white-space: nowrap; }
