@@ -98,6 +98,11 @@
   color: var(--ld-text-faint);
   white-space: nowrap;
 }
+.mt-inline-hint {
+  font-size: 11px;
+  color: var(--ld-text-dim);
+  flex-basis: 100%;
+}
 .mt-inline-val {
   min-width: 2.4ch;
   text-align: right;

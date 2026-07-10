@@ -6,7 +6,7 @@ import {
   type MotionParamPatch,
 } from '../src/core/motion/renderPlan';
 import { HttpAdapter } from '../src/bridge/httpAdapter';
-import type { RenderJob } from '../src/bridge/adapter';
+import { isArchiveResult, type RenderJob } from '../src/bridge/adapter';
 import { buildManifest } from '../src/core/manifest';
 import { createDefaultWorkflow, findNode } from '../src/core/workflow';
 import { DEMO_SHELF } from '../src/data/demoShelf';
@@ -141,6 +141,17 @@ describe('buildMotionRenderJobs', () => {
 // ---------------------------------------------------------------------------
 // HttpAdapter.renderMotion — result mapping + fallback passthrough
 // ---------------------------------------------------------------------------
+describe('isArchiveResult (frames→download routing guard)', () => {
+  it('is true for a zip archive, false for gallery media', () => {
+    expect(isArchiveResult({ mediaType: 'archive', extension: 'zip' })).toBe(true);
+    expect(isArchiveResult({ mediaType: 'video', extension: 'zip' })).toBe(true); // extension alone
+    expect(isArchiveResult({ mediaType: 'archive', extension: 'mp4' })).toBe(true); // mediaType alone
+    expect(isArchiveResult({ mediaType: 'video', extension: 'mp4' })).toBe(false);
+    expect(isArchiveResult({ mediaType: 'video', extension: 'webm' })).toBe(false);
+    expect(isArchiveResult({ mediaType: 'image', extension: 'png' })).toBe(false);
+  });
+});
+
 describe('HttpAdapter.renderMotion', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -185,6 +196,43 @@ describe('HttpAdapter.renderMotion', () => {
     expect(body.format).toBe('mp4');
     expect(body.jobId).toBe('jid');
     expect(body.jobs).toHaveLength(2);
+  });
+
+  it('maps a webm response to a video/webm dataUrl', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ video_base64: 'V0VC', mediaType: 'video', mimeType: 'video/webm', extension: 'webm', seed: 9 }),
+        { status: 200 },
+      ),
+    ));
+    const result = await new HttpAdapter('http://bridge.local').renderMotion(jobsOf(), { fps: 12, format: 'webm', jobId: 'jw' });
+    expect(result.mediaType).toBe('video');
+    expect(result.mimeType).toBe('video/webm');
+    expect(result.extension).toBe('webm');
+    expect(result.dataUrl).toBe('data:video/webm;base64,V0VC');
+  });
+
+  it('maps a frame-sequence response to an application/zip archive', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ video_base64: 'UEsFBg==', mediaType: 'archive', mimeType: 'application/zip', extension: 'zip', seed: 3 }),
+        { status: 200 },
+      ),
+    ));
+    const result = await new HttpAdapter('http://bridge.local').renderMotion(jobsOf(), { fps: 8, format: 'frames', jobId: 'jf' });
+    expect(result.mediaType).toBe('archive');
+    expect(result.mimeType).toBe('application/zip');
+    expect(result.extension).toBe('zip');
+    expect(result.dataUrl).toBe('data:application/zip;base64,UEsFBg==');
+  });
+
+  it('falls back to format-derived mime when the response omits it (webm/frames)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ video_base64: 'ZZ', seed: 1 }), { status: 200 }),
+    ));
+    const r = await new HttpAdapter('http://bridge.local').renderMotion(jobsOf(), { fps: 8, format: 'webm', jobId: 'jwm' });
+    expect(r.mimeType).toBe('video/webm');
+    expect(r.extension).toBe('webm');
   });
 
   it('passes the fallback flag + reason through (never silent)', async () => {

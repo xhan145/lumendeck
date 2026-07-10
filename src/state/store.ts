@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { buildRenderJob, normalizeProgress, type BackendAdapter, type RenderProgressCallback } from '../bridge/adapter';
+import { buildRenderJob, isArchiveResult, normalizeProgress, type BackendAdapter, type RenderProgressCallback } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -101,7 +101,7 @@ import {
   hydrateCreative,
   type CreativeState,
 } from './creative';
-import { downloadJson } from '../bridge/exporter';
+import { downloadJson, downloadBase64, slugify } from '../bridge/exporter';
 import type {
   CreativeRecipe,
   EntropyAction,
@@ -390,9 +390,9 @@ interface StudioState {
    * a hard failure (surfaced by the caller). Never lands a silent placeholder.
    */
   renderActiveMotionClip(
-    opts: { frames: number; fps: number; format: 'mp4' | 'gif' },
+    opts: { frames: number; fps: number; format: 'mp4' | 'gif' | 'webm' | 'frames' },
     onProgress?: RenderProgressCallback,
-  ): Promise<{ fallbackReason: string | null }>;
+  ): Promise<{ fallbackReason: string | null; archive?: boolean }>;
 
   // Render-Space Ghost Controller — spatial parameter control + path recording.
   /** The curated field profile for a node (empty {} when it has no numeric params). */
@@ -1253,6 +1253,17 @@ export const useStudio = create<StudioState>((set, get) => {
         { fps: opts.fps, format: opts.format },
         onProgress,
       );
+      // Frame-sequence export is an ARCHIVE (a ZIP of PNGs), not gallery media —
+      // download it straight to disk and stop; it never enters the gallery.
+      if (isArchiveResult(result)) {
+        const slug = slugify(clip.name, 'frames');
+        const b64 = result.dataUrl.slice(result.dataUrl.indexOf(',') + 1);
+        downloadBase64(b64, `${slug}.frames.zip`, 'application/zip');
+        set({
+          controlStatus: `Exported ${frames} frame${frames === 1 ? '' : 's'} of "${clip.name}" → ${slug}.frames.zip`,
+        });
+        return { fallbackReason: null, archive: true };
+      }
       // Reproducible motion manifest: base workflow + the animated clip fields.
       const durationSec = frameTimes.length > 0 ? frameTimes[frameTimes.length - 1] : clip.duration;
       const manifest = buildManifest(
@@ -1280,7 +1291,7 @@ export const useStudio = create<StudioState>((set, get) => {
       const item: GalleryItem = {
         id: uid('render'),
         dataUrl: result.dataUrl,
-        mediaType: result.mediaType,
+        mediaType: result.mediaType as 'image' | 'video', // archive never reaches the gallery (downloaded earlier)
         mimeType: result.mimeType,
         extension: result.extension,
         createdAt: manifest.createdAt,
@@ -2197,7 +2208,7 @@ export const useStudio = create<StudioState>((set, get) => {
         const item: GalleryItem = {
           id: uid('render'),
           dataUrl: result.dataUrl,
-          mediaType: result.mediaType,
+          mediaType: result.mediaType as 'image' | 'video', // archive never reaches the gallery (downloaded earlier)
           mimeType: result.mimeType,
           extension: result.extension,
           createdAt: manifest.createdAt,
