@@ -215,7 +215,7 @@ export function MotionTimeline() {
     setRenderError(null);
     setRenderNotice(null);
     try {
-      const { fallbackReason } = await renderActiveMotionClip(
+      const { fallbackReason, archive } = await renderActiveMotionClip(
         { frames, fps, format: renderFormat },
         (update) => {
           const p = typeof update === 'number' ? { progress: update } : update;
@@ -226,9 +226,11 @@ export function MotionTimeline() {
       setRenderPct(100);
       setRenderPhase('done');
       setRenderNotice(
-        fallbackReason
-          ? `Placeholder render added to the Gallery — ${fallbackReason}`
-          : 'Rendered clip added to the Gallery.',
+        archive
+          ? 'Frame-sequence ZIP downloaded (not saved to the Gallery).'
+          : fallbackReason
+            ? `Placeholder render added to the Gallery — ${fallbackReason}`
+            : 'Rendered clip added to the Gallery.',
       );
     } catch (err) {
       setRenderError(err instanceof Error ? err.message : String(err));

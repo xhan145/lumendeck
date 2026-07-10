@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { buildRenderJob, normalizeProgress, type BackendAdapter, type RenderProgressCallback } from '../bridge/adapter';
+import { buildRenderJob, isArchiveResult, normalizeProgress, type BackendAdapter, type RenderProgressCallback } from '../bridge/adapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -101,7 +101,7 @@ import {
   hydrateCreative,
   type CreativeState,
 } from './creative';
-import { downloadJson, downloadDataUrl, slugify } from '../bridge/exporter';
+import { downloadJson, downloadBase64, slugify } from '../bridge/exporter';
 import type {
   CreativeRecipe,
   EntropyAction,
@@ -392,7 +392,7 @@ interface StudioState {
   renderActiveMotionClip(
     opts: { frames: number; fps: number; format: 'mp4' | 'gif' | 'webm' | 'frames' },
     onProgress?: RenderProgressCallback,
-  ): Promise<{ fallbackReason: string | null }>;
+  ): Promise<{ fallbackReason: string | null; archive?: boolean }>;
 
   // Render-Space Ghost Controller — spatial parameter control + path recording.
   /** The curated field profile for a node (empty {} when it has no numeric params). */
@@ -1255,13 +1255,14 @@ export const useStudio = create<StudioState>((set, get) => {
       );
       // Frame-sequence export is an ARCHIVE (a ZIP of PNGs), not gallery media —
       // download it straight to disk and stop; it never enters the gallery.
-      if (result.mediaType === 'archive' || result.extension === 'zip') {
+      if (isArchiveResult(result)) {
         const slug = slugify(clip.name, 'frames');
-        downloadDataUrl(result.dataUrl, `${slug}.frames.zip`);
+        const b64 = result.dataUrl.slice(result.dataUrl.indexOf(',') + 1);
+        downloadBase64(b64, `${slug}.frames.zip`, 'application/zip');
         set({
           controlStatus: `Exported ${frames} frame${frames === 1 ? '' : 's'} of "${clip.name}" → ${slug}.frames.zip`,
         });
-        return { fallbackReason: null };
+        return { fallbackReason: null, archive: true };
       }
       // Reproducible motion manifest: base workflow + the animated clip fields.
       const durationSec = frameTimes.length > 0 ? frameTimes[frameTimes.length - 1] : clip.duration;

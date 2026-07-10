@@ -69,6 +69,16 @@ export interface RenderProgress {
   previewDataUrl?: string;
 }
 
+/**
+ * True when a render result is a downloadable ARCHIVE (a frame-sequence ZIP) rather
+ * than gallery media. The store uses this to route the result to a file download
+ * instead of the gallery — weakening it would drop a `application/zip` data URL into
+ * the gallery as an unplayable `<video>`, so it is unit-tested.
+ */
+export function isArchiveResult(r: Pick<RenderResult, 'mediaType' | 'extension'>): boolean {
+  return r.mediaType === 'archive' || r.extension === 'zip';
+}
+
 export type RenderProgressUpdate = number | RenderProgress;
 export type RenderProgressCallback = (update: RenderProgressUpdate) => void;
 

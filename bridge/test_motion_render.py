@@ -269,6 +269,38 @@ def test_encode_sequence_single_frame_still_encodes():
     assert base64.b64decode(out["video_base64"]).startswith(b"GIF89a")
 
 
+def _worker_encode_sequence():
+    """The _encode_sequence that ACTUALLY runs — extracted from the _WORKER_SOURCE
+    string (the persistent render subprocess), NOT the module-level mirror. Guards
+    against the two hand-synced copies drifting (e.g. an unaliased io/base64)."""
+    ns = {}
+    exec(compile(db._WORKER_SOURCE, "diffusers_worker.py", "exec"), ns)
+    return ns["_encode_sequence"]
+
+
+def test_worker_source_encode_sequence_frames_and_gif_match_the_mirror():
+    enc = _worker_encode_sequence()
+    frames = _solid_frames(3, size=(16, 16))
+    fr = enc(frames, 8, "frames")
+    assert fr["mediaType"] == "archive" and fr["mimeType"] == "application/zip" and fr["extension"] == "zip"
+    import io as _io
+    import zipfile as _zip
+    zf = _zip.ZipFile(_io.BytesIO(base64.b64decode(fr["video_base64"])))
+    assert zf.namelist() == ["frame_0001.png", "frame_0002.png", "frame_0003.png"]
+    g = enc(frames, 8, "gif")
+    assert g["extension"] == "gif" and base64.b64decode(g["video_base64"]).startswith(b"GIF89a")
+
+
+def test_worker_source_encode_sequence_webm():
+    import importlib.util
+    if importlib.util.find_spec("imageio_ffmpeg") is None:
+        import pytest
+        pytest.skip("imageio-ffmpeg not installed in this test environment")
+    out = _worker_encode_sequence()(_solid_frames(4, size=(64, 64)), 8, "webm")
+    assert out["extension"] == "webm"
+    assert base64.b64decode(out["video_base64"])[:4] == b"\x1a\x45\xdf\xa3"
+
+
 def test_encode_sequence_frames_returns_a_zip_of_numbered_pngs():
     out = db._encode_sequence(_solid_frames(3, size=(16, 16)), fps=8, fmt="frames")
     assert out["mimeType"] == "application/zip" and out["extension"] == "zip"

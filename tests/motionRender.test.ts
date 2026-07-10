@@ -6,7 +6,7 @@ import {
   type MotionParamPatch,
 } from '../src/core/motion/renderPlan';
 import { HttpAdapter } from '../src/bridge/httpAdapter';
-import type { RenderJob } from '../src/bridge/adapter';
+import { isArchiveResult, type RenderJob } from '../src/bridge/adapter';
 import { buildManifest } from '../src/core/manifest';
 import { createDefaultWorkflow, findNode } from '../src/core/workflow';
 import { DEMO_SHELF } from '../src/data/demoShelf';
@@ -141,6 +141,17 @@ describe('buildMotionRenderJobs', () => {
 // ---------------------------------------------------------------------------
 // HttpAdapter.renderMotion — result mapping + fallback passthrough
 // ---------------------------------------------------------------------------
+describe('isArchiveResult (frames→download routing guard)', () => {
+  it('is true for a zip archive, false for gallery media', () => {
+    expect(isArchiveResult({ mediaType: 'archive', extension: 'zip' })).toBe(true);
+    expect(isArchiveResult({ mediaType: 'video', extension: 'zip' })).toBe(true); // extension alone
+    expect(isArchiveResult({ mediaType: 'archive', extension: 'mp4' })).toBe(true); // mediaType alone
+    expect(isArchiveResult({ mediaType: 'video', extension: 'mp4' })).toBe(false);
+    expect(isArchiveResult({ mediaType: 'video', extension: 'webm' })).toBe(false);
+    expect(isArchiveResult({ mediaType: 'image', extension: 'png' })).toBe(false);
+  });
+});
+
 describe('HttpAdapter.renderMotion', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
