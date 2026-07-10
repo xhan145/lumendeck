@@ -192,7 +192,7 @@ export function MotionTimeline() {
   // ---- render clip -------------------------------------------------------
   const [renderFrames, setRenderFrames] = useState(RENDER_FRAMES_DEFAULT);
   const [renderFps, setRenderFps] = useState(RENDER_FPS_DEFAULT);
-  const [renderFormat, setRenderFormat] = useState<'mp4' | 'gif'>('mp4');
+  const [renderFormat, setRenderFormat] = useState<'mp4' | 'gif' | 'webm' | 'frames'>('mp4');
   const [rendering, setRendering] = useState(false);
   const [renderPct, setRenderPct] = useState(0);
   const [renderPhase, setRenderPhase] = useState('');
@@ -438,12 +438,17 @@ export function MotionTimeline() {
                   aria-label="Render format"
                   value={renderFormat}
                   disabled={rendering}
-                  onChange={(e) => setRenderFormat(e.target.value as 'mp4' | 'gif')}
+                  onChange={(e) => setRenderFormat(e.target.value as 'mp4' | 'gif' | 'webm' | 'frames')}
                 >
-                  <option value="mp4">MP4</option>
+                  <option value="mp4">MP4 (H.264)</option>
+                  <option value="webm">WebM (VP9)</option>
                   <option value="gif">GIF</option>
+                  <option value="frames">Frames (ZIP)</option>
                 </select>
               </label>
+              {renderFormat === 'frames' ? (
+                <span className="mt-inline-hint">Downloads a ZIP of PNG frames (not saved to the gallery).</span>
+              ) : null}
               <button
                 className="btn primary mt-render-go"
                 type="button"
