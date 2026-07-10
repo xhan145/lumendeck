@@ -85,7 +85,7 @@ export function CraftInsights() {
 
             <section className="card creative-card">
               <div className="creative-card-head"><h3>{Icon.trophy({ size: 15 })} What&apos;s working</h3></div>
-              {report.ready ? (
+              {report.ready && report.working.length > 0 ? (
                 <>
                   <p className="craft-note">Correlates with the renders you kept — a signal, not proof.</p>
                   <ul className="craft-working">
@@ -99,6 +99,10 @@ export function CraftInsights() {
                     ))}
                   </ul>
                 </>
+              ) : report.ready ? (
+                <p className="creative-empty">
+                  Nothing stands out yet — your kept renders track your overall style rather than any single token or setting.
+                </p>
               ) : (
                 <p className="creative-empty">
                   Not enough signal yet — keep creating and curating (link renders to projects, tag them). Insights unlock at ~{MIN_CORPUS} renders / {MIN_KEPT} kept.

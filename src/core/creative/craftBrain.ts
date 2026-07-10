@@ -30,8 +30,10 @@ export function tokenizePrompt(prompt: string): string[] {
         .replace(/\s+/g, ' ')
         .trim(),
     )
-    .filter((seg) => seg.length >= 2 && !STOPWORDS.has(seg));
+    .filter((seg) => seg.length >= 2 && /[a-z0-9]/.test(seg) && !STOPWORDS.has(seg));
 }
+
+const TIER_RANK: Record<CraftInsight['confidence'], number> = { high: 2, medium: 1, low: 0 };
 
 export const MIN_CORPUS = 24;
 export const MIN_KEPT = 8;
@@ -165,19 +167,28 @@ export function analyzeCraft(renders: RenderInfo[], recipes: CreativeRecipe[], n
     aspect: topN(settingsMaps[4].all, SETTINGS_TOP),
   };
 
-  let working: CraftInsight[] = [];
-  let suggestions: CraftSuggestion[] = [];
+  const working: CraftInsight[] = [];
+  const suggestions: CraftSuggestion[] = [];
   if (ready) {
-    working = [
+    const ranked = [
       ...liftItems('token', allTok, keptTok, corpusN, keptN),
       ...settingsMaps.flatMap((s) => liftItems(s.kind, s.all, s.keptM, corpusN, keptN)),
     ]
-      .sort((a, b) => b.lift - a.lift || b.keptCount - a.keptCount || a.label.localeCompare(b.label))
+      // Rank by confidence tier FIRST so a small-sample saturated-lift item (e.g. a token
+      // in 3/3 kept -> maximal lift) can never outrank a well-supported finding.
+      .sort(
+        (a, b) =>
+          TIER_RANK[b.confidence] - TIER_RANK[a.confidence] ||
+          b.lift - a.lift ||
+          b.keptCount - a.keptCount ||
+          a.label.localeCompare(b.label),
+      )
       .slice(0, WORKING_TOP);
+    working.push(...ranked);
 
     const workingTokens = working.filter((w) => w.kind === 'token').map((w) => w.label);
+    const recipeTokenSets = recipes.map((r) => new Set(tokenizePrompt(r.promptTemplate)));
     const used = new Set<string>();
-    const raw: CraftSuggestion[] = [];
     for (const seed of workingTokens) {
       if (used.has(seed)) continue;
       const group = [seed];
@@ -190,13 +201,14 @@ export function analyzeCraft(renders: RenderInfo[], recipes: CreativeRecipe[], n
         const keptCount = keptTokenSets.filter((s) => group.every((g) => s.has(g))).length;
         if (keptCount >= CO_OCCUR_MIN) {
           group.forEach((g) => used.add(g));
-          raw.push({ tokens: group, promptText: group.join(', '), keptCount });
+          // Cap on DELIVERED suggestions (after recipe-dedup), so a recipe-covered
+          // cluster never consumes a slot a fresh, uncovered pattern could fill.
+          const covered = recipeTokenSets.some((rs) => group.every((t) => rs.has(t)));
+          if (!covered) suggestions.push({ tokens: group, promptText: group.join(', '), keptCount });
         }
       }
-      if (raw.length >= MAX_SUGGESTIONS) break;
+      if (suggestions.length >= MAX_SUGGESTIONS) break;
     }
-    const recipeTokenSets = recipes.map((r) => new Set(tokenizePrompt(r.promptTemplate)));
-    suggestions = raw.filter((s) => !recipeTokenSets.some((rs) => s.tokens.every((t) => rs.has(t))));
   }
 
   return { ready, totals: { corpus: corpusN, kept: keptN }, palette, settings, working, suggestions };

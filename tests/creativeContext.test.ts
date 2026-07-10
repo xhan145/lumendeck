@@ -46,4 +46,15 @@ describe('buildAnalysisContext — craft enrichment', () => {
     expect(byId.fb.kept).toBe(false); // untouched
     expect(byId.fb.fallback).toBe(true);
   });
+
+  it('excludes mock and procedural renders from the corpus (the mock backend is the default)', () => {
+    const mock = item({ id: 'mk', render: { mode: 'mock' } });
+    const proc = item({ id: 'pr', render: { mode: 'procedural' } });
+    const real = item({ id: 'rl' });
+    const ctx = buildAnalysisContext([mock, proc, real], [], []);
+    const byId = Object.fromEntries(ctx.renders.map((r) => [r.id, r]));
+    expect(byId.mk.fallback).toBe(true);
+    expect(byId.pr.fallback).toBe(true);
+    expect(byId.rl.fallback).toBe(false);
+  });
 });

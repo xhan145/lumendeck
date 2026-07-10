@@ -10,7 +10,7 @@ import type { CreativeRecipe, ProjectBrain } from '../core/creative/types';
 import { sanitizeBrain } from '../core/creative/brain';
 import { sanitizeRecipe } from '../core/creative/recipes';
 import { classifyAspect, type AnalysisContext, type RenderInfo } from '../core/creative/context';
-import { isFallbackRender } from '../core/renderHonesty';
+import { isSyntheticRender } from '../core/renderHonesty';
 
 export interface CreativeState {
   brains: ProjectBrain[];
@@ -80,7 +80,7 @@ export function buildAnalysisContext(
       steps: g.manifest?.sampler?.steps ?? 0,
       cfg: g.manifest?.sampler?.cfg ?? 0,
       negativePrompt: g.manifest?.negativePrompt ?? '',
-      fallback: isFallbackRender(g),
+      fallback: isSyntheticRender(g),
       kept: linkedToProject || labeled,
     };
   });

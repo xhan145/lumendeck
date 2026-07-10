@@ -17,6 +17,10 @@ describe('tokenizePrompt', () => {
     expect(tokenizePrompt('')).toEqual([]);
     expect(tokenizePrompt('  ,  , ')).toEqual([]);
   });
+  it('drops punctuation-only +/- segments (no junk chips)', () => {
+    expect(tokenizePrompt('masterpiece, --, detailed')).toEqual(['masterpiece', 'detailed']);
+    expect(tokenizePrompt('++, -')).toEqual([]);
+  });
 });
 
 function mk(id: number, prompt: string, kept: boolean, over: Partial<RenderInfo> = {}): RenderInfo {
@@ -93,5 +97,43 @@ describe('analyzeCraft — what works', () => {
     const withRecipe = analyzeCraft(readyCorpus(), [covered], new Date());
     expect(withRecipe.suggestions.every((s) => !(s.tokens.includes('neon glow') && s.tokens.includes('rain')))).toBe(true);
     expect(withRecipe.suggestions.length).toBe(none.suggestions.length - 1);
+  });
+
+  it('ranks high-confidence findings above small-sample saturated-lift ones', () => {
+    // 24 renders, 8 kept. 'staple' is well-supported (6 kept / 8 all -> lift 2.25, high);
+    // 'niche' is a 3-only-kept artifact (3/3 -> lift 3.0, but low confidence).
+    const rs: RenderInfo[] = [];
+    let id = 0;
+    for (let i = 0; i < 3; i++) rs.push(mk(id++, 'staple, niche', true));
+    for (let i = 0; i < 3; i++) rs.push(mk(id++, 'staple', true));
+    for (let i = 0; i < 2; i++) rs.push(mk(id++, 'filler', true));
+    for (let i = 0; i < 2; i++) rs.push(mk(id++, 'staple', false));
+    for (let i = 0; i < 14; i++) rs.push(mk(id++, 'city', false));
+    const rep = analyzeCraft(rs, [], new Date());
+    expect(rep.ready).toBe(true);
+    const staple = rep.working.find((w) => w.label === 'staple')!;
+    const niche = rep.working.find((w) => w.label === 'niche')!;
+    expect(staple?.confidence).toBe('high');
+    expect(niche?.confidence).toBe('low');
+    expect(niche.lift).toBeGreaterThan(staple.lift); // niche has the bigger raw multiplier...
+    const iStaple = rep.working.findIndex((w) => w.label === 'staple');
+    const iNiche = rep.working.findIndex((w) => w.label === 'niche');
+    expect(iStaple).toBeLessThan(iNiche); // ...but the well-supported one ranks first
+  });
+
+  it('fills MAX_SUGGESTIONS with fresh clusters even when a recipe covers an early cluster', () => {
+    // four disjoint co-occurring pairs; a recipe covers the first ('a1, a2').
+    const rs: RenderInfo[] = [];
+    let id = 0;
+    const pairs = [['a1', 'a2'], ['b1', 'b2'], ['c1', 'c2'], ['d1', 'd2']];
+    for (const [x, y] of pairs) for (let i = 0; i < 3; i++) rs.push(mk(id++, `${x}, ${y}`, true)); // 12 kept
+    for (let i = 0; i < 12; i++) rs.push(mk(id++, 'city', false)); // 12 unkept -> corpus 24
+    const recipe: CreativeRecipe = { id: 'r', name: 'n', promptTemplate: 'a1, a2', negativePrompt: '' } as CreativeRecipe;
+    const rep = analyzeCraft(rs, [recipe], new Date());
+    expect(rep.ready).toBe(true);
+    // the 'a' cluster is recipe-covered, but the cap applies AFTER dedup, so 3 fresh land
+    expect(rep.suggestions.length).toBe(3);
+    expect(rep.suggestions.some((s) => s.tokens.includes('a1'))).toBe(false);
+    expect(rep.suggestions.some((s) => s.tokens.includes('d1') && s.tokens.includes('d2'))).toBe(true);
   });
 });
