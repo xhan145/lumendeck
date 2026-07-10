@@ -1162,6 +1162,78 @@ def model_id() -> str:
     return _MODEL_ID
 
 
+def svd_target_size(width, height):
+    """SVD is trained only at 1024x576 (landscape) and 576x1024 (portrait). Snap by
+    orientation; square/degenerate defaults to landscape."""
+    try:
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        return (1024, 576)
+    if w <= 0 or h <= 0:
+        return (1024, 576)
+    return (576, 1024) if h > w else (1024, 576)
+
+
+def clamp_svd_params(job):
+    """Clamp SVD params to safe ranges with conservative 8GB-friendly defaults."""
+    def _i(key, default, lo, hi):
+        try:
+            v = int(job.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        return max(lo, min(hi, v))
+    try:
+        naug = float(job.get("noise_aug_strength", 0.02))
+    except (TypeError, ValueError):
+        naug = 0.02
+    naug = max(0.0, min(1.0, naug))
+    return {
+        "num_frames": _i("num_frames", 14, 8, 25),
+        "fps": _i("fps", 7, 1, 30),
+        "motion_bucket_id": _i("motion_bucket_id", 127, 1, 255),
+        "noise_aug_strength": naug,
+        "decode_chunk_size": _i("decode_chunk_size", 2, 1, 8),
+        "seed": _i("seed", 0, 0, 2**31 - 1),
+    }
+
+
+def is_svd_model(path):
+    """True for an SVD diffusers folder (model_index.json class) or an svd*.safetensors."""
+    try:
+        if os.path.isdir(path):
+            idx = os.path.join(path, "model_index.json")
+            if os.path.isfile(idx):
+                with open(idx, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                return data.get("_class_name") == "StableVideoDiffusionPipeline"
+            return False
+        name = os.path.basename(path).lower()
+        if not name.endswith(".safetensors"):
+            return False
+        return name.startswith("svd") or ("svd" in name and "img2vid" in name)
+    except (OSError, ValueError):
+        return False
+
+
+def find_svd_models(models_dir):
+    """Discover SVD models one level under models_dir (folders) + top-level files."""
+    out = []
+    try:
+        entries = sorted(os.listdir(models_dir))
+    except OSError:
+        return out
+    for name in entries:
+        full = os.path.join(models_dir, name)
+        if is_svd_model(full):
+            out.append({
+                "id": name,
+                "name": name,
+                "path": full,
+                "kind": "folder" if os.path.isdir(full) else "file",
+            })
+    return out
+
+
 def _encode_sequence(frames, fps, fmt="mp4", loop=True):
     """Encode a list of PIL RGB frames into a base64 video (module-level, testable).
 
