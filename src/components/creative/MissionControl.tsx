@@ -29,6 +29,7 @@ export function MissionControl() {
   const seedDemo = useStudio((s) => s.seedCreativeDemo);
   const seeded = useStudio((s) => s.creative.seeded);
   const analysisContext = useStudio((s) => s.analysisContext);
+  const portfolioReport = useStudio((s) => s.portfolioReport);
 
   const ctx = analysisContext();
   const activeBrains = useMemo(() => brains.filter((b) => b.status !== 'archived'), [brains]);
@@ -95,6 +96,21 @@ export function MissionControl() {
             <NextActionCard action={topAction} />
           </div>
         ) : null}
+
+        {(() => {
+          const portfolio = portfolioReport();
+          return (
+            <button type="button" className="card creative-card overview-teaser" onClick={() => setView('overview')}>
+              <span className="overview-teaser-head">{Icon.target({ size: 15 })} Studio Overview</span>
+              <span className="overview-teaser-body">
+                {portfolio.top
+                  ? <>Work on next: <b>{portfolio.top.name}</b> — {portfolio.top.action.title}</>
+                  : 'Portfolio clear — nothing needs attention.'}
+              </span>
+              <span className="overview-teaser-meta">{portfolio.funnel.shipped}/{portfolio.funnel.total} shipped {Icon.play({ size: 12 })}</span>
+            </button>
+          );
+        })()}
 
         <div className="mission-grid">
           <section className="card creative-card mission-radar">
