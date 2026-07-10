@@ -3,28 +3,29 @@ import type { WellShape } from './fabric';
 import { GRID_Y } from './scene';
 
 /**
- * Gravity dust for the constellation: a Points layer whose particles drift along
- * the gravity field toward the mass wells, dipping into them as they ride the
- * liquid-metal surface. Makes the "mass warps spacetime" story kinetic.
+ * Volumetric gravity dust for the constellation. Particles drift, orbit, and
+ * plunge through the analytic gravity field instead of reading as a flat sheet.
+ * Their sprite size, temperature, opacity, and halo encode motion and depth.
  *
- * Cost is kept O(1) per particle (the redteam budget): the analytic gradient of
- * up to 64 wells is baked ONCE into a coarse grid whenever the wells change, and
- * each particle bilinear-samples that grid per frame instead of summing 64 wells.
- * The grid build + sampling are PURE and unit-tested; only createParticleField
- * touches three.
+ * Cost remains O(1) per particle: the analytic gradient of up to 64 wells is
+ * baked into a coarse grid whenever wells change, then bilinear-sampled per frame.
  */
 
 /** Coarse gravity-grid resolution (cells per side). Rebuilt only when wells change. */
 export const GRAVITY_GRID_N = 48;
 
-const PARTICLE_ACCEL = 620; // gravity-gradient → velocity gain
-const PARTICLE_DAMP = 0.94; // per-step velocity damping (keeps orbits from flinging out)
-const PARTICLE_HOVER = 42; // world units above the fabric surface (floats visibly in space)
-const PARTICLE_LIFETIME = 8; // seconds before a particle recycles (keeps fresh dust falling)
+const PARTICLE_ACCEL = 620;
+const PARTICLE_DAMP = 0.94;
+const PARTICLE_HOVER = 42;
+const PARTICLE_LIFETIME = 10;
+const VERTICAL_SPRING = 2.6;
+const VERTICAL_DAMP = 0.92;
+const ORBIT_STRENGTH = 0.16;
+const TURBULENCE = 16;
 
 /**
  * Build the coarse gravity field from the wells: at each cell, the gradient of
- * the well-height field (points TOWARD wells) plus the height itself. Pure.
+ * the well-height field plus the height itself. Pure and unit-testable.
  * Layout: grid[(iz*N + ix)*3 + {0: gradX, 1: gradZ, 2: height}].
  */
 export function buildGravityGrid(wells: readonly WellShape[], gridN: number, extent: number): Float32Array {
@@ -43,7 +44,7 @@ export function buildGravityGrid(wells: readonly WellShape[], gridN: number, ext
         const s2 = Math.max(w.sigma * w.sigma, 1);
         const g = w.depth * Math.exp(-(dx * dx + dz * dz) / (2 * s2));
         h += g;
-        gx += (g * (w.x - x)) / s2; // ∇height: from the cell toward the well
+        gx += (g * (w.x - x)) / s2;
         gz += (g * (w.z - z)) / s2;
       }
       const o = (iz * gridN + ix) * 3;
@@ -82,51 +83,79 @@ export function sampleGravityGrid(
 }
 
 export interface ParticleField {
-  /** The Points object to add to the scene (above the fabric, with the orbs). */
   readonly points: THREE.Points;
-  /** Rebuild the gravity grid from the current wells (call when wells change). */
   setWells(wells: readonly WellShape[]): void;
-  /** Euler-integrate all particles along the gravity field by `dt` seconds. */
   advance(dt: number): void;
-  /** Remove from parent + dispose geometry/material (idempotent). */
   dispose(): void;
 }
 
 const POINT_VERTEX_SHADER = /* glsl */ `
   uniform float uSize;
+  uniform float uTime;
+  in float aEnergy;
+  in float aSeed;
+  out float vEnergy;
+  out float vSeed;
+  out float vDepthFade;
+
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = uSize * (320.0 / max(-mv.z, 1.0)); // perspective size attenuation
+    float perspective = 360.0 / max(-mv.z, 1.0);
+    float twinkle = 0.84 + 0.16 * sin(uTime * (1.8 + aSeed * 2.2) + aSeed * 31.0);
+    gl_PointSize = clamp(uSize * (0.65 + aEnergy * 1.7) * perspective * twinkle, 1.2, 34.0);
     gl_Position = projectionMatrix * mv;
+    vEnergy = aEnergy;
+    vSeed = aSeed;
+    vDepthFade = smoothstep(7000.0, 600.0, -mv.z);
   }
 `;
 
 const POINT_FRAGMENT_SHADER = /* glsl */ `
-  uniform vec3 uColor;
+  uniform vec3 uCool;
+  uniform vec3 uHot;
+  in float vEnergy;
+  in float vSeed;
+  in float vDepthFade;
   out vec4 fragColor;
+
   void main() {
-    float d = length(gl_PointCoord - 0.5);
-    if (d > 0.5) discard;                 // round soft dust, not a square
-    fragColor = vec4(uColor, smoothstep(0.5, 0.0, d) * 0.75);
+    vec2 uv = gl_PointCoord - 0.5;
+    float r = length(uv) * 2.0;
+    if (r > 1.0) discard;
+
+    float core = exp(-r * r * 18.0);
+    float halo = exp(-r * r * 3.2);
+    float spark = pow(max(0.0, 1.0 - r), 7.0);
+    float energy = clamp(vEnergy, 0.0, 1.0);
+    vec3 color = mix(uCool, uHot, smoothstep(0.18, 0.9, energy));
+    color += vec3(1.0, 0.86, 0.62) * core * (0.35 + energy * 0.9);
+
+    float alpha = (halo * 0.34 + core * 0.82 + spark * 0.45) * vDepthFade;
+    alpha *= 0.72 + fract(vSeed * 91.7) * 0.28;
+    fragColor = vec4(color * (0.72 + core * 1.45), alpha);
   }
 `;
 
 /**
- * Build a gravity-dust field of `count` particles over a square of `extent`
- * world units, glowing in `color`. Deterministic scatter/respawn (seeded PRNG,
- * no Math.random) so `advance` is reproducible in tests.
+ * Build a volumetric gravity-dust field. The public shape remains unchanged so
+ * Graph3DView and existing tests do not need to know about the richer simulation.
  */
 export function createParticleField(count: number, extent: number, color: string): ParticleField {
   const half = extent / 2;
   const positions = new Float32Array(count * 3);
+  const energies = new Float32Array(count);
+  const seeds = new Float32Array(count);
   const px = new Float32Array(count);
+  const py = new Float32Array(count);
   const pz = new Float32Array(count);
   const vx = new Float32Array(count);
+  const vy = new Float32Array(count);
   const vz = new Float32Array(count);
   const age = new Float32Array(count);
+  const layer = new Float32Array(count);
+  let elapsed = 0;
   let grid = new Float32Array(GRAVITY_GRID_N * GRAVITY_GRID_N * 3);
 
-  // mulberry32 — deterministic scatter without Math.random (keeps advance testable).
   let seed = 0x9e3779b9 >>> 0;
   const rand = () => {
     seed = (seed + 0x6d2b79f5) >>> 0;
@@ -135,40 +164,60 @@ export function createParticleField(count: number, extent: number, color: string
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+
   const scatter = (i: number) => {
-    px[i] = (rand() * 2 - 1) * half;
-    pz[i] = (rand() * 2 - 1) * half;
-    vx[i] = 0;
-    vz[i] = 0;
+    const radius = Math.sqrt(rand()) * half;
+    const angle = rand() * Math.PI * 2;
+    px[i] = Math.cos(angle) * radius;
+    pz[i] = Math.sin(angle) * radius;
+    layer[i] = 24 + rand() * 260;
+    py[i] = GRID_Y + layer[i] + (rand() - 0.5) * 180;
+    const orbital = 12 + rand() * 34;
+    vx[i] = -Math.sin(angle) * orbital;
+    vz[i] = Math.cos(angle) * orbital;
+    vy[i] = (rand() - 0.5) * 18;
     age[i] = 0;
+    seeds[i] = rand();
+    energies[i] = 0.12 + rand() * 0.22;
   };
+
   for (let i = 0; i < count; i++) {
     scatter(i);
-    age[i] = rand() * PARTICLE_LIFETIME; // stagger initial ages so respawns don't pulse
+    age[i] = rand() * PARTICLE_LIFETIME;
   }
 
   const geometry = new THREE.BufferGeometry();
-  const attr = new THREE.BufferAttribute(positions, 3);
-  attr.setUsage(THREE.DynamicDrawUsage);
-  geometry.setAttribute('position', attr);
+  const positionAttr = new THREE.BufferAttribute(positions, 3);
+  const energyAttr = new THREE.BufferAttribute(energies, 1);
+  positionAttr.setUsage(THREE.DynamicDrawUsage);
+  energyAttr.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('position', positionAttr);
+  geometry.setAttribute('aEnergy', energyAttr);
+  geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
 
+  const cool = new THREE.Color(color);
+  const hot = cool.clone().lerp(new THREE.Color('#ffd7a8'), 0.72);
   const material = new THREE.ShaderMaterial({
     vertexShader: POINT_VERTEX_SHADER,
     fragmentShader: POINT_FRAGMENT_SHADER,
     glslVersion: THREE.GLSL3,
     transparent: true,
     depthWrite: false,
+    depthTest: true,
     blending: THREE.AdditiveBlending,
     fog: false,
+    toneMapped: false,
     uniforms: {
-      uSize: { value: 11 },
-      uColor: { value: new THREE.Color(color) },
+      uSize: { value: 13 },
+      uTime: { value: 0 },
+      uCool: { value: cool },
+      uHot: { value: hot },
     },
   });
 
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
-  points.renderOrder = 0; // above the fabric (renderOrder -1)
+  points.renderOrder = 0;
 
   return {
     points,
@@ -176,20 +225,39 @@ export function createParticleField(count: number, extent: number, color: string
       grid = buildGravityGrid(wells, GRAVITY_GRID_N, extent);
     },
     advance(dt) {
-      const d = Math.min(Math.max(dt, 0), 0.05); // clamp (tab refocus can't fling dust away)
+      const d = Math.min(Math.max(dt, 0), 0.05);
+      elapsed += d;
+      material.uniforms.uTime.value = elapsed;
+
       for (let i = 0; i < count; i++) {
         const s = sampleGravityGrid(grid, GRAVITY_GRID_N, extent, px[i], pz[i]);
-        vx[i] = (vx[i] + s.gx * PARTICLE_ACCEL * d) * PARTICLE_DAMP;
-        vz[i] = (vz[i] + s.gz * PARTICLE_ACCEL * d) * PARTICLE_DAMP;
+        const gravityMagnitude = Math.min(1, Math.hypot(s.gx, s.gz) * 24);
+        const inv = 1 / Math.max(Math.hypot(s.gx, s.gz), 0.0001);
+        const tx = -s.gz * inv;
+        const tz = s.gx * inv;
+        const noise = Math.sin(elapsed * (0.8 + seeds[i]) + seeds[i] * 43.0);
+
+        vx[i] = (vx[i] + (s.gx * PARTICLE_ACCEL + tx * ORBIT_STRENGTH * s.h + noise * TURBULENCE) * d) * PARTICLE_DAMP;
+        vz[i] = (vz[i] + (s.gz * PARTICLE_ACCEL + tz * ORBIT_STRENGTH * s.h - noise * TURBULENCE) * d) * PARTICLE_DAMP;
+
+        const targetY = GRID_Y - s.h + PARTICLE_HOVER + layer[i];
+        vy[i] = (vy[i] + (targetY - py[i]) * VERTICAL_SPRING * d) * VERTICAL_DAMP;
+        py[i] += vy[i] * d;
         px[i] += vx[i] * d;
         pz[i] += vz[i] * d;
         age[i] += d;
+
         if (age[i] > PARTICLE_LIFETIME || Math.abs(px[i]) > half || Math.abs(pz[i]) > half) scatter(i);
+
+        const speed = Math.min(1, Math.hypot(vx[i], vy[i], vz[i]) / 180);
+        energies[i] = Math.min(1, 0.1 + gravityMagnitude * 0.62 + speed * 0.48);
         positions[i * 3] = px[i];
-        positions[i * 3 + 1] = GRID_Y - s.h + PARTICLE_HOVER; // ride the dipped liquid surface
+        positions[i * 3 + 1] = py[i];
         positions[i * 3 + 2] = pz[i];
       }
-      attr.needsUpdate = true;
+
+      positionAttr.needsUpdate = true;
+      energyAttr.needsUpdate = true;
     },
     dispose() {
       points.parent?.remove(points);
