@@ -48,7 +48,8 @@ export interface RenderJob {
 
 export interface RenderResult {
   dataUrl: string;
-  mediaType: 'image' | 'video';
+  /** 'archive' = a frame-sequence ZIP (downloaded, not gallery media). */
+  mediaType: 'image' | 'video' | 'archive';
   mimeType: string;
   extension: string;
   /** actual seed used (resolved when job seed is -1) */
@@ -78,7 +79,8 @@ export function normalizeProgress(update: RenderProgressUpdate): RenderProgress 
 /** Options for a motion-clip render: encode target for the assembled sequence. */
 export interface RenderMotionOptions {
   fps: number;
-  format: 'mp4' | 'gif';
+  /** 'webm' = VP9 video; 'frames' = a ZIP of numbered PNGs (downloaded, not gallery). */
+  format: 'mp4' | 'gif' | 'webm' | 'frames';
   /** stable id for progress polling; adapters mint one when omitted. */
   jobId?: string;
 }

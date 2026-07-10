@@ -350,7 +350,7 @@ export class HttpAdapter implements BackendAdapter {
       }
       const data = (await res.json()) as {
         video_base64?: string;
-        mediaType?: 'image' | 'video';
+        mediaType?: 'image' | 'video' | 'archive';
         mimeType?: string;
         extension?: string;
         seed: number | string;
@@ -360,9 +360,17 @@ export class HttpAdapter implements BackendAdapter {
         fallbackReason?: string;
       };
       if (!data.video_base64) throw new Error('Bridge /render-motion response did not include video data.');
-      const mediaType = data.mediaType ?? 'video';
-      const mimeType = data.mimeType ?? (opts.format === 'gif' ? 'image/gif' : 'video/mp4');
-      const extension = data.extension ?? (mimeType === 'image/gif' ? 'gif' : 'mp4');
+      // The bridge sets mediaType/mimeType/extension per format; these fallbacks
+      // only guard an old/partial response.
+      const FALLBACK_MIME: Record<string, string> = {
+        gif: 'image/gif',
+        webm: 'video/webm',
+        frames: 'application/zip',
+        mp4: 'video/mp4',
+      };
+      const mediaType = data.mediaType ?? (opts.format === 'frames' ? 'archive' : 'video');
+      const mimeType = data.mimeType ?? (FALLBACK_MIME[opts.format] ?? 'video/mp4');
+      const extension = data.extension ?? (opts.format === 'gif' ? 'gif' : opts.format);
       const dataUrl = `data:${mimeType};base64,${data.video_base64}`;
       onProgress?.({ progress: 1, phase: 'done', previewDataUrl: dataUrl });
       return {
