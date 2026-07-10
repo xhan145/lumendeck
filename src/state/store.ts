@@ -1343,8 +1343,13 @@ export const useStudio = create<StudioState>((set, get) => {
         const fallbackReason = result.fallback ? (result.fallbackReason ?? 'Backend returned a placeholder clip.') : undefined;
         const mode: 'fallback' | 'mock' | 'real' = result.fallback ? 'fallback' : backendSettings.selectedBackend === 'mock' ? 'mock' : 'real';
         const actualBackend = result.fallback ? 'procedural' : backendSettings.selectedBackend;
+        // Carry lineage (prompt/graph/model) but DROP the source still's own render
+        // provenance (turboForge/evolve/motion) so the SVD clip isn't mislabeled.
+        const { turboForge: _tf, evolve: _ev, motion: _mo, ...baseManifest } =
+          source.manifest as ExportManifest & { turboForge?: unknown; evolve?: unknown; motion?: unknown };
+        void _tf; void _ev; void _mo;
         const manifest = {
-          ...source.manifest,
+          ...baseManifest,
           createdAt,
           seed: typeof result.seed === 'number' ? result.seed : Number(result.seed) || 0,
           media: { type: 'video' as const, format: result.extension, frameCount: opts.frames, fps: opts.fps },

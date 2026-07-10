@@ -106,6 +106,7 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const svdModels = useStudio((s) => s.svdModels);
   const refreshSvdModels = useStudio((s) => s.refreshSvdModels);
   const animateStill = useStudio((s) => s.animateStill);
+  const svdBackend = useStudio((s) => s.backendSettings.selectedBackend);
   const isImage = !item.mimeType?.startsWith('video/') && (item.mediaType ?? 'image') !== 'video';
   const [svdState, setSvdState] = useState<{ k: 'idle' } | { k: 'busy'; detail: string } | { k: 'err'; msg: string } | { k: 'done' }>({ k: 'idle' });
   const [motion, setMotion] = useState(127);
@@ -229,7 +230,11 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
           {isImage ? (
             <div className="svd-panel">
               {svdModels.length === 0 ? (
-                <p className="publish-note">{Icon.warning({ size: 13 })} No Stable Video Diffusion model found. Put an SVD model in your models folder, then reopen this render to animate it.</p>
+                svdBackend !== 'bridge' ? (
+                  <p className="publish-note">{Icon.warning({ size: 13 })} Animating stills needs the local Diffusers bridge backend. Switch to it in Settings, then add a Stable Video Diffusion model to your models folder.</p>
+                ) : (
+                  <p className="publish-note">{Icon.warning({ size: 13 })} No Stable Video Diffusion model found. Put an SVD model in your models folder, then reopen this render to animate it.</p>
+                )
               ) : (
                 <>
                   <p className="publish-note">{Icon.play({ size: 13 })} Animate this still into a short coherent clip (SVD). On an 8GB GPU this can take a few minutes.</p>

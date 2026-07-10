@@ -305,11 +305,13 @@ def _animate(job, state, report):
     key = "anim:" + _ref_key(model_ref)
     if state.get("anim_key") != key or state.get("anim_pipe") is None:
         report({"phase": "loading"})
-        # Free the still-image pipe (and any old animate pipe) to conserve VRAM.
+        # Free the still-image pipe (and any old animate/SVD pipe) to conserve VRAM.
         state["pipe"] = None
         state["key"] = None
         state["controlnets"] = {}
         state["anim_pipe"] = None
+        state["svd_pipe"] = None
+        state["svd_key"] = None
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -395,6 +397,7 @@ def _clamp_svd(job):
         "motion_bucket_id": _i("motion_bucket_id", 127, 1, 255),
         "noise_aug_strength": max(0.0, min(1.0, naug)),
         "decode_chunk_size": _i("decode_chunk_size", 2, 1, 8),
+        "num_inference_steps": _i("num_inference_steps", 25, 1, 50),
         "seed": _i("seed", 0, 0, 2**31 - 1),
     }
 
@@ -472,15 +475,22 @@ def _animate_svd(job, state, report):
     p = _clamp_svd(job)
     gen_device = "cuda" if torch.cuda.is_available() else "cpu"
     generator = torch.Generator(device=gen_device).manual_seed(p["seed"])
-    report({"phase": "rendering", "step": 0, "steps": p["num_frames"]})
+    # Progress is per DENOISING step (num_inference_steps), not per output frame.
+    steps = p["num_inference_steps"]
+    report({"phase": "rendering", "step": 0, "steps": steps})
 
     def on_step(_pipe, step, _timestep, callback_kwargs):
-        report({"phase": "rendering", "step": int(step) + 1, "steps": p["num_frames"]})
+        report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
         return callback_kwargs
 
     kwargs = dict(
         image=image,
+        # Pass the cropped target size so the OUTPUT orientation matches the still —
+        # SVD defaults to 1024x576 and would otherwise stretch portrait inputs to landscape.
+        height=th,
+        width=tw,
         num_frames=p["num_frames"],
+        num_inference_steps=steps,
         motion_bucket_id=p["motion_bucket_id"],
         noise_aug_strength=p["noise_aug_strength"],
         decode_chunk_size=p["decode_chunk_size"],
@@ -626,6 +636,16 @@ def _render_one_image(job, state, report):
             state["pipe"] = None
             state["lora_key"] = None
             state["controlnets"] = {}
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        # Switching back to still renders from SVD: evict the resident SVD pipe too
+        # (it holds several GB and would otherwise leak on an 8GB card).
+        if state.get("svd_pipe") is not None:
+            state["svd_pipe"] = None
+            state["svd_key"] = None
             try:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -1346,6 +1366,7 @@ def clamp_svd_params(job):
         "motion_bucket_id": _i("motion_bucket_id", 127, 1, 255),
         "noise_aug_strength": naug,
         "decode_chunk_size": _i("decode_chunk_size", 2, 1, 8),
+        "num_inference_steps": _i("num_inference_steps", 25, 1, 50),
         "seed": _i("seed", 0, 0, 2**31 - 1),
     }
 
@@ -1358,32 +1379,43 @@ def is_svd_model(path):
             if os.path.isfile(idx):
                 with open(idx, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
-                return data.get("_class_name") == "StableVideoDiffusionPipeline"
+                # A malformed model_index.json can parse to a non-dict; never crash the scan.
+                return isinstance(data, dict) and data.get("_class_name") == "StableVideoDiffusionPipeline"
             return False
         name = os.path.basename(path).lower()
         if not name.endswith(".safetensors"):
             return False
         return name.startswith("svd") or ("svd" in name and "img2vid" in name)
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError, TypeError):
         return False
 
 
 def find_svd_models(models_dir):
-    """Discover SVD models one level under models_dir (folders) + top-level files."""
+    """Discover SVD models under models_dir: any diffusers folder (model_index.json ==
+    SVD) or any svd*.safetensors, RECURSIVELY (matches how discover_model_dir walks, so
+    the common ComfyUI/Fooocus `models/checkpoints/svd_xt.safetensors` layout is found).
+    Tolerant of None / a missing dir (returns [])."""
     out = []
-    try:
-        entries = sorted(os.listdir(models_dir))
-    except OSError:
+    if not models_dir:
         return out
-    for name in entries:
-        full = os.path.join(models_dir, name)
-        if is_svd_model(full):
-            out.append({
-                "id": name,
-                "name": name,
-                "path": full,
-                "kind": "folder" if os.path.isdir(full) else "file",
-            })
+    seen = set()
+    try:
+        walker = os.walk(models_dir)
+    except (OSError, TypeError):
+        return out
+    for root, dirs, files in walker:
+        # A diffusers SVD folder is identified by its own model_index.json.
+        if is_svd_model(root) and root not in seen:
+            seen.add(root)
+            out.append({"id": os.path.basename(root) or root, "name": os.path.basename(root) or root, "path": root, "kind": "folder"})
+            dirs[:] = []  # don't descend into a matched diffusers folder
+            continue
+        for name in files:
+            full = os.path.join(root, name)
+            if is_svd_model(full) and full not in seen:
+                seen.add(full)
+                out.append({"id": name, "name": name, "path": full, "kind": "file"})
+    out.sort(key=lambda m: m["path"])
     return out
 
 

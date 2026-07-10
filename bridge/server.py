@@ -683,6 +683,17 @@ def build_response(method: str, path: str, body: bytes):
             return 400, headers, json.dumps({"error": "image is required"}).encode()
         if not _diffusers_available():
             return 200, headers, json.dumps({"error": "Real diffusion isn't ready on the bridge (torch/model not installed)."}).encode()
+        # Containment: only load an SVD model that is a real SVD under the models dir —
+        # never an arbitrary client-supplied path (mirrors the /generate id->vetted-path model).
+        model_path = str(payload.get("modelPath") or "")
+        try:
+            root = os.path.realpath(discover_model_dir())
+            rp = os.path.realpath(model_path) if model_path else ""
+        except Exception:
+            rp, root = "", ""
+        if not rp or not root or not (rp == root or rp.startswith(root + os.sep)) or not diffusers_backend.is_svd_model(rp):
+            return 200, headers, json.dumps({"error": "SVD model path is not an allowed local model. Put a Stable Video Diffusion model in your models folder."}).encode()
+        payload["modelPath"] = rp
         job_id = str(payload.get("jobId", ""))
         track = bool(_JOB_ID.match(job_id))
         if track:

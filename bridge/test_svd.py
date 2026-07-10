@@ -16,7 +16,8 @@ def test_svd_target_size_orientation():
 def test_clamp_svd_params_defaults_and_bounds():
     d = db.clamp_svd_params({})
     assert d["num_frames"] == 14 and d["fps"] == 7 and d["motion_bucket_id"] == 127
-    assert d["decode_chunk_size"] == 2 and d["seed"] == 0
+    assert d["decode_chunk_size"] == 2 and d["seed"] == 0 and d["num_inference_steps"] == 25
+    assert db.clamp_svd_params({"num_inference_steps": 999})["num_inference_steps"] == 50
     hi = db.clamp_svd_params({"num_frames": 999, "fps": 999, "motion_bucket_id": 999, "decode_chunk_size": 999, "seed": -5})
     assert hi["num_frames"] == 25 and hi["fps"] == 30 and hi["motion_bucket_id"] == 255
     assert hi["decode_chunk_size"] == 8 and hi["seed"] == 0
@@ -54,6 +55,31 @@ def test_find_svd_models(tmp_path):
     assert "svd-img2vid" in paths and "svd.safetensors" in paths
     assert all("id" in m and "name" in m and m["kind"] in ("folder", "file") for m in found)
     assert db.find_svd_models(str(tmp_path / "missing")) == []
+
+
+def test_find_svd_models_recursive_and_nested(tmp_path):
+    # The common ComfyUI/Fooocus layout: models/checkpoints/svd_xt.safetensors (nested).
+    ckpt = tmp_path / "checkpoints"
+    ckpt.mkdir()
+    (ckpt / "svd_xt.safetensors").write_bytes(b"x")
+    # A nested diffusers SVD folder (InvokeAI-ish).
+    nested = tmp_path / "video" / "svd-img2vid"
+    nested.mkdir(parents=True)
+    (nested / "model_index.json").write_text(json.dumps({"_class_name": "StableVideoDiffusionPipeline"}))
+    found = db.find_svd_models(str(tmp_path))
+    bases = {os.path.basename(m["path"]) for m in found}
+    assert "svd_xt.safetensors" in bases and "svd-img2vid" in bases
+
+
+def test_find_svd_models_none_is_empty():
+    assert db.find_svd_models(None) == []
+
+
+def test_is_svd_model_tolerates_nonobject_index(tmp_path):
+    d = tmp_path / "weird"
+    d.mkdir()
+    (d / "model_index.json").write_text(json.dumps(["not", "an", "object"]))
+    assert db.is_svd_model(str(d)) is False  # no crash
 
 
 def test_worker_source_defines_svd_helpers():
