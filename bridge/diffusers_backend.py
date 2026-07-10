@@ -782,7 +782,73 @@ def _encode_sequence(frames, fps, fmt, loop=True):
         except Exception as exc:
             print(f"[render_sequence] h264 mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
 
-    # GIF path (explicit request, or mp4 fallback): AnimateDiff's proven save_all loop.
+    if fmt == "webm":
+        try:
+            import tempfile as _tempfile
+
+            import imageio.v2 as _imageio
+            import numpy as np
+
+            width, height = frames[0].size
+            pad_w = width + (width % 2)
+            pad_h = height + (height % 2)
+            arrays = []
+            for frame in frames:
+                arr = np.asarray(frame.convert("RGB"))
+                if pad_h != height or pad_w != width:
+                    arr = np.pad(arr, ((0, pad_h - height), (0, pad_w - width), (0, 0)), mode="edge")
+                arrays.append(arr)
+            tmp = _tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                writer = _imageio.get_writer(
+                    tmp_path, format="FFMPEG", mode="I", fps=float(fps),
+                    codec="libvpx-vp9", pixelformat="yuv420p", macro_block_size=1,
+                    ffmpeg_params=["-b:v", "0", "-crf", "32", "-movflags", "+faststart"],
+                )
+                try:
+                    for arr in arrays:
+                        writer.append_data(arr)
+                finally:
+                    writer.close()
+                with open(tmp_path, "rb") as fh:
+                    data = fh.read()
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            if not data:
+                raise RuntimeError("ffmpeg produced an empty webm")
+            return {
+                "video_base64": base64.b64encode(data).decode("ascii"),
+                "mediaType": "video",
+                "mimeType": "video/webm",
+                "extension": "webm",
+            }
+        except Exception as exc:
+            print(f"[render_sequence] vp9 webm encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+
+    if fmt == "frames":
+        # A frame-sequence export: a ZIP of numbered PNGs, built with the stdlib
+        # (no ffmpeg). Not gallery media — the caller downloads it as an archive.
+        import zipfile as _zip
+
+        zbuf = io.BytesIO()
+        with _zip.ZipFile(zbuf, "w", _zip.ZIP_DEFLATED) as zf:
+            for index, frame in enumerate(frames):
+                fbuf = io.BytesIO()
+                frame.convert("RGB").save(fbuf, format="PNG")
+                zf.writestr("frame_%04d.png" % (index + 1), fbuf.getvalue())
+        return {
+            "video_base64": base64.b64encode(zbuf.getvalue()).decode("ascii"),
+            "mediaType": "archive",
+            "mimeType": "application/zip",
+            "extension": "zip",
+        }
+
+    # GIF path (explicit request, or mp4/webm fallback): AnimateDiff's proven save_all loop.
     buf = io.BytesIO()
     frames[0].save(
         buf, format="GIF", save_all=True, append_images=frames[1:],
@@ -1173,6 +1239,68 @@ def _encode_sequence(frames, fps, fmt="mp4", loop=True):
             }
         except Exception as exc:
             print(f"[render_sequence] h264 mp4 encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+
+    if fmt == "webm":
+        try:
+            import imageio.v2 as _imageio
+            import numpy as np
+
+            width, height = frames[0].size
+            pad_w = width + (width % 2)
+            pad_h = height + (height % 2)
+            arrays = []
+            for frame in frames:
+                arr = np.asarray(frame.convert("RGB"))
+                if pad_h != height or pad_w != width:
+                    arr = np.pad(arr, ((0, pad_h - height), (0, pad_w - width), (0, 0)), mode="edge")
+                arrays.append(arr)
+            tmp = _tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                writer = _imageio.get_writer(
+                    tmp_path, format="FFMPEG", mode="I", fps=float(fps),
+                    codec="libvpx-vp9", pixelformat="yuv420p", macro_block_size=1,
+                    ffmpeg_params=["-b:v", "0", "-crf", "32", "-movflags", "+faststart"],
+                )
+                try:
+                    for arr in arrays:
+                        writer.append_data(arr)
+                finally:
+                    writer.close()
+                with open(tmp_path, "rb") as fh:
+                    data = fh.read()
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            if not data:
+                raise RuntimeError("ffmpeg produced an empty webm")
+            return {
+                "video_base64": _base64.b64encode(data).decode("ascii"),
+                "mediaType": "video",
+                "mimeType": "video/webm",
+                "extension": "webm",
+            }
+        except Exception as exc:
+            print(f"[render_sequence] vp9 webm encode failed, falling back to gif: {exc}", file=sys.stderr, flush=True)
+
+    if fmt == "frames":
+        import zipfile as _zip
+
+        zbuf = _io.BytesIO()
+        with _zip.ZipFile(zbuf, "w", _zip.ZIP_DEFLATED) as zf:
+            for index, frame in enumerate(frames):
+                fbuf = _io.BytesIO()
+                frame.convert("RGB").save(fbuf, format="PNG")
+                zf.writestr("frame_%04d.png" % (index + 1), fbuf.getvalue())
+        return {
+            "video_base64": _base64.b64encode(zbuf.getvalue()).decode("ascii"),
+            "mediaType": "archive",
+            "mimeType": "application/zip",
+            "extension": "zip",
+        }
 
     buf = _io.BytesIO()
     frames[0].save(
