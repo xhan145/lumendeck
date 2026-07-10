@@ -1,6 +1,6 @@
 [package]
 name = "lumendeck"
-version = "0.24.0"
+version = "0.25.0"
 description = "LumenDeck — local-first, node-native generative image studio"
 authors = ["LumenDeck"]
 edition = "2021"
