@@ -200,6 +200,7 @@ export function MotionTimeline() {
   const [renderNotice, setRenderNotice] = useState<string | null>(null);
 
   const isMockBackend = adapterId === 'mock';
+  const isCloudBackend = adapterId === 'cloud';
   const hasTracks = (clip?.tracks.length ?? 0) > 0;
 
   const doRenderClip = async () => {
@@ -454,14 +455,16 @@ export function MotionTimeline() {
               <button
                 className="btn primary mt-render-go"
                 type="button"
-                disabled={rendering || isMockBackend || !hasTracks}
-                aria-disabled={rendering || isMockBackend || !hasTracks}
+                disabled={rendering || isMockBackend || isCloudBackend || !hasTracks}
+                aria-disabled={rendering || isMockBackend || isCloudBackend || !hasTracks}
                 title={
                   isMockBackend
                     ? 'Switch to the local Diffusers bridge to render a real motion clip (the Mock backend only produces a placeholder).'
-                    : !hasTracks
-                      ? 'Add at least one track (bind a numeric param) before rendering.'
-                      : 'Render the animated clip into a video in the Gallery'
+                    : isCloudBackend
+                      ? 'Motion clips render frame-by-frame on the local Diffusers bridge — the Cloud backend generates single stills/videos only.'
+                      : !hasTracks
+                        ? 'Add at least one track (bind a numeric param) before rendering.'
+                        : 'Render the animated clip into a video in the Gallery'
                 }
                 onClick={doRenderClip}
               >
@@ -472,6 +475,13 @@ export function MotionTimeline() {
               <p className="field-help mt-render-mock">
                 Mock backend selected — rendering is disabled. It would only produce a clearly-labelled
                 placeholder. Switch to the local Diffusers bridge for a real render.
+              </p>
+            ) : null}
+            {isCloudBackend ? (
+              <p className="field-help mt-render-mock">
+                Cloud backend selected — motion clips render frame-by-frame on the local Diffusers
+                bridge. Switch Backend to the Diffusers bridge; the Cloud backend generates single
+                stills/videos only.
               </p>
             ) : null}
             {rendering || renderPct > 0 ? (

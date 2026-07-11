@@ -118,6 +118,14 @@ describe('store backend selection and manifests', () => {
     expect(state.backendSettings.fallbackToMock).toBe(false);
   });
 
+  it('setAdapter(cloud) selects the cloud backend and future-cloud turbo id', () => {
+    useStudio.getState().setAdapter('cloud');
+    expect(useStudio.getState().adapterId).toBe('cloud');
+    expect(useStudio.getState().backendSettings.selectedBackend).toBe('cloud');
+    expect(useStudio.getState().turboBackendId).toBe('future-cloud');
+    useStudio.getState().setAdapter('mock'); // restore for other tests
+  });
+
   it('render planner and manifest include selected non-mock backend details', () => {
     const wf = wfWithModel();
     const plan = createRenderPlan(wf, DEMO_SHELF, { presetId: 'fast', backendId: 'comfyui-api' });

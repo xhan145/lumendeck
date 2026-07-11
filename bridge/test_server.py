@@ -265,6 +265,222 @@ def test_diffusers_install_uses_backend_without_real_install():
         server.diffusers_backend = old_backend
 
 
+def _with_temp_settings(fn):
+    """Run fn with LUMENDECK_SETTINGS_PATH pointed at a fresh temp file."""
+    import tempfile
+    old = os.environ.get("LUMENDECK_SETTINGS_PATH")
+    fd, path = tempfile.mkstemp(prefix="lumendeck-settings-", suffix=".json")
+    os.close(fd)
+    os.remove(path)  # start from "missing file"
+    os.environ["LUMENDECK_SETTINGS_PATH"] = path
+    try:
+        fn()
+    finally:
+        if old is None:
+            os.environ.pop("LUMENDECK_SETTINGS_PATH", None)
+        else:
+            os.environ["LUMENDECK_SETTINGS_PATH"] = old
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def test_cloud_providers_route_lists_all_without_keys():
+    def check():
+        status, _headers, body = build_response("GET", "/cloud/providers", b"")
+        assert status == 200
+        providers = json.loads(body)["providers"]
+        ids = {p["id"] for p in providers}
+        assert ids == {"openai", "stability", "fal", "replicate", "runway"}
+        assert all(p["hasKey"] is False for p in providers)
+        assert all(p["models"] for p in providers)
+        assert all("key" not in p for p in providers)  # never leak values
+    _with_temp_settings(check)
+
+
+def test_cloud_keys_persist_and_blank_clears():
+    def check():
+        payload = json.dumps({"provider": "openai", "key": "sk-test-123"}).encode()
+        status, _h, body = build_response("POST", "/cloud/keys", payload)
+        assert status == 200 and json.loads(body)["hasKey"] is True
+        _s, _h, body = build_response("GET", "/cloud/providers", b"")
+        by_id = {p["id"]: p for p in json.loads(body)["providers"]}
+        assert by_id["openai"]["hasKey"] is True
+        # blank key deletes the entry
+        payload = json.dumps({"provider": "openai", "key": "  "}).encode()
+        status, _h, body = build_response("POST", "/cloud/keys", payload)
+        assert status == 200 and json.loads(body)["hasKey"] is False
+        _s, _h, body = build_response("GET", "/cloud/providers", b"")
+        by_id = {p["id"]: p for p in json.loads(body)["providers"]}
+        assert by_id["openai"]["hasKey"] is False
+    _with_temp_settings(check)
+
+
+def test_cloud_keys_rejects_unknown_provider():
+    def check():
+        payload = json.dumps({"provider": "nope", "key": "x"}).encode()
+        status, _h, body = build_response("POST", "/cloud/keys", payload)
+        assert status == 400 and "unknown provider" in json.loads(body)["error"]
+    _with_temp_settings(check)
+
+
+def test_cloud_generate_requires_key():
+    def check():
+        payload = json.dumps({"provider": "openai", "model": "gpt-image-1", "prompt": "x"}).encode()
+        status, _h, body = build_response("POST", "/cloud/generate", payload)
+        assert status == 400 and "key" in json.loads(body)["error"].lower()
+    _with_temp_settings(check)
+
+
+def test_cloud_generate_success_and_progress_done():
+    def check():
+        build_response("POST", "/cloud/keys", json.dumps({"provider": "openai", "key": "sk-1"}).encode())
+        import cloud as cloud_mod
+
+        class FakeProvider:
+            id = "openai"
+            label = "OpenAI Images"
+
+            def models(self):
+                return [{"id": "gpt-image-1", "label": "GPT Image 1", "kind": "image"}]
+
+            def generate(self, job, model, key, on_progress):
+                assert model == "gpt-image-1" and key == "sk-1"
+                on_progress({"phase": "running", "progress": 0.5})
+                return {"image_base64": "QUJD", "seed": "7", "mediaType": "image",
+                        "mimeType": "image/png", "extension": "png"}
+
+        original = cloud_mod.PROVIDERS["openai"]
+        cloud_mod.PROVIDERS["openai"] = FakeProvider()
+        try:
+            payload = json.dumps({"provider": "openai", "model": "gpt-image-1",
+                                  "prompt": "x", "jobId": "cloudtest1"}).encode()
+            status, _h, body = build_response("POST", "/cloud/generate", payload)
+            assert status == 200
+            data = json.loads(body)
+            assert data["image_base64"] == "QUJD"
+            _s, _h, progress = build_response("GET", "/progress/cloudtest1", b"")
+            assert json.loads(progress)["phase"] == "done"
+        finally:
+            cloud_mod.PROVIDERS["openai"] = original
+    _with_temp_settings(check)
+
+
+def test_cloud_routes_reject_untrusted_browser_origins():
+    def check():
+        evil = "https://evil.example"
+        status, _h, body = build_response("GET", "/cloud/providers", b"", evil)
+        assert status == 403 and "cross-origin" in json.loads(body)["error"]
+        payload = json.dumps({"provider": "openai", "key": "sk-x"}).encode()
+        status, _h, _b = build_response("POST", "/cloud/keys", payload, evil)
+        assert status == 403
+        status, _h, _b = build_response("POST", "/cloud/generate", payload, evil)
+        assert status == 403
+        # the app's own origins (and originless native clients) still pass
+        status, _h, _b = build_response("GET", "/cloud/providers", b"", "http://tauri.localhost")
+        assert status == 200
+        status, _h, _b = build_response("GET", "/cloud/providers", b"", "")
+        assert status == 200
+        # non-cloud routes keep their existing wide-open behavior
+        status, _h, _b = build_response("GET", "/health", b"", evil)
+        assert status == 200
+    _with_temp_settings(check)
+
+
+def test_cloud_generate_rejects_uncurated_model():
+    def check():
+        build_response("POST", "/cloud/keys", json.dumps({"provider": "openai", "key": "sk-1"}).encode())
+        payload = json.dumps({"provider": "openai", "model": "../evil/path", "prompt": "x"}).encode()
+        status, _h, body = build_response("POST", "/cloud/generate", payload)
+        assert status == 400 and "unknown model" in json.loads(body)["error"]
+    _with_temp_settings(check)
+
+
+def test_cloud_keys_rejects_control_characters():
+    def check():
+        payload = json.dumps({"provider": "openai", "key": "abc\ndef"}).encode()
+        status, _h, body = build_response("POST", "/cloud/keys", payload)
+        assert status == 400 and "invalid characters" in json.loads(body)["error"]
+    _with_temp_settings(check)
+
+
+def test_cloud_keys_refuses_to_overwrite_corrupt_settings():
+    def check():
+        path = os.environ["LUMENDECK_SETTINGS_PATH"]
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{ this is not json")
+        payload = json.dumps({"provider": "openai", "key": "sk-1"}).encode()
+        status, _h, body = build_response("POST", "/cloud/keys", payload)
+        assert status == 503 and "unreadable" in json.loads(body)["error"]
+        with open(path, "r", encoding="utf-8") as fh:
+            assert fh.read() == "{ this is not json"  # untouched
+    _with_temp_settings(check)
+
+
+def test_cloud_result_parked_and_recoverable_by_job_id():
+    def check():
+        build_response("POST", "/cloud/keys", json.dumps({"provider": "openai", "key": "sk-1"}).encode())
+        import cloud as cloud_mod
+
+        class FakeProvider:
+            id = "openai"
+            label = "OpenAI Images"
+
+            def models(self):
+                return [{"id": "gpt-image-1", "label": "GPT Image 1", "kind": "image"}]
+
+            def generate(self, job, model, key, on_progress):
+                return {"image_base64": "UEFSS0VE", "seed": "9"}
+
+        original = cloud_mod.PROVIDERS["openai"]
+        cloud_mod.PROVIDERS["openai"] = FakeProvider()
+        try:
+            payload = json.dumps({"provider": "openai", "model": "gpt-image-1",
+                                  "prompt": "x", "jobId": "cloudresult1"}).encode()
+            status, _h, _b = build_response("POST", "/cloud/generate", payload)
+            assert status == 200
+            status, _h, body = build_response("GET", "/cloud/result/cloudresult1", b"")
+            assert status == 200 and json.loads(body)["image_base64"] == "UEFSS0VE"
+            status, _h, _b = build_response("GET", "/cloud/result/not..valid!!", b"")
+            assert status == 400
+            status, _h, _b = build_response("GET", "/cloud/result/neverexisted42", b"")
+            assert status == 404
+        finally:
+            cloud_mod.PROVIDERS["openai"] = original
+            try:
+                os.remove(server._cloud_result_path("cloudresult1"))
+            except OSError:
+                pass
+    _with_temp_settings(check)
+
+
+def test_cloud_generate_surfaces_cloud_error_as_502():
+    def check():
+        build_response("POST", "/cloud/keys", json.dumps({"provider": "openai", "key": "sk-1"}).encode())
+        import cloud as cloud_mod
+
+        class FailingProvider:
+            id = "openai"
+            label = "OpenAI Images"
+
+            def models(self):
+                return [{"id": "gpt-image-1", "label": "GPT Image 1", "kind": "image"}]
+
+            def generate(self, job, model, key, on_progress):
+                raise cloud_mod.CloudError("openai", "HTTP 401: invalid key")
+
+        original = cloud_mod.PROVIDERS["openai"]
+        cloud_mod.PROVIDERS["openai"] = FailingProvider()
+        try:
+            payload = json.dumps({"provider": "openai", "model": "gpt-image-1", "prompt": "x"}).encode()
+            status, _h, body = build_response("POST", "/cloud/generate", payload)
+            assert status == 502
+            assert "openai" in json.loads(body)["error"]
+            assert "401" in json.loads(body)["error"]
+        finally:
+            cloud_mod.PROVIDERS["openai"] = original
+    _with_temp_settings(check)
+
+
 if __name__ == "__main__":
     test_health_reports_procedural_and_diffusers_flag()
     test_models_returns_list()
@@ -287,4 +503,15 @@ if __name__ == "__main__":
     test_diffusers_download_uses_backend_without_real_weights()
     test_diffusers_download_failure_includes_status()
     test_diffusers_install_uses_backend_without_real_install()
+    test_cloud_providers_route_lists_all_without_keys()
+    test_cloud_keys_persist_and_blank_clears()
+    test_cloud_keys_rejects_unknown_provider()
+    test_cloud_generate_requires_key()
+    test_cloud_generate_success_and_progress_done()
+    test_cloud_generate_surfaces_cloud_error_as_502()
+    test_cloud_routes_reject_untrusted_browser_origins()
+    test_cloud_generate_rejects_uncurated_model()
+    test_cloud_keys_rejects_control_characters()
+    test_cloud_keys_refuses_to_overwrite_corrupt_settings()
+    test_cloud_result_parked_and_recoverable_by_job_id()
     print("bridge server: all checks passed")

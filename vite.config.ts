@@ -84,6 +84,7 @@ export default defineConfig({
       '/diffusers': bridgeProxy,
       '/progress': bridgeProxy,
       '/civitai': bridgeProxy,
+      '/cloud': bridgeProxy,
     },
   },
   test: {

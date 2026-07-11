@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { buildRenderJob, isArchiveResult, normalizeProgress, type BackendAdapter, type RenderProgressCallback, type SvdModelInfo, type AnimateStillOptions } from '../bridge/adapter';
+import { CloudAdapter } from '../bridge/cloudAdapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -590,6 +591,7 @@ interface StudioState {
 export const mockAdapter = new MockAdapter();
 export const httpAdapter = new HttpAdapter();
 export const comfyAdapter = new ComfyAdapter();
+export const cloudAdapter = new CloudAdapter();
 
 // Durable gallery store (IndexedDB when available, in-memory fallback otherwise).
 // Resolved once per session; `durable` is false in private-mode/unsupported envs.
@@ -715,6 +717,13 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
   if (settings.selectedBackend === 'comfyui') {
     comfyAdapter.setBaseUrl(settings.comfyUrl);
     return comfyAdapter;
+  }
+  if (settings.selectedBackend === 'cloud') {
+    // Cloud calls are proxied through the LOCAL bridge so keys stay off the browser.
+    cloudAdapter.setBaseUrl(settings.bridgeUrl);
+    cloudAdapter.setProvider(settings.cloudProvider);
+    cloudAdapter.setModel(settings.cloudModel);
+    return cloudAdapter;
   }
   return mockAdapter;
 }
@@ -1763,6 +1772,15 @@ export const useStudio = create<StudioState>((set, get) => {
         set({ controlStatus: 'Pick a field preset before starting a live preview.' });
         return;
       }
+      if (get().backendSettings.selectedBackend === 'cloud') {
+        // Streaming previews render one frame per pointer move — on the Cloud
+        // backend every frame would spend PAID provider credits. Refuse loudly.
+        set({
+          controlStatus:
+            'Live field previews are disabled on the Cloud backend — each frame would spend paid API credits. Switch to the local bridge for streaming previews.',
+        });
+        return;
+      }
       // Bump + capture the supersede token: only the latest call may write the image.
       const token = ++fieldPreviewToken;
       setField({ ...get().field, previewPending: true });
@@ -1919,6 +1937,9 @@ export const useStudio = create<StudioState>((set, get) => {
       let ok = false;
       let status: 'healthy' | 'unavailable' | 'degraded' = 'unavailable';
       let message = '';
+      // bridgeOnline mirrors `ok` except where a branch distinguishes "backend
+      // configured" from "bridge reachable" (the cloud branch sets this).
+      let bridgeReachable: boolean | null = null;
       if (state.backendSettings.selectedBackend === 'mock') {
         ok = true;
         status = 'healthy';
@@ -1929,6 +1950,36 @@ export const useStudio = create<StudioState>((set, get) => {
         ok = health.ok;
         status = health.status;
         message = health.message;
+      } else if (state.backendSettings.selectedBackend === 'cloud') {
+        cloudAdapter.setBaseUrl(state.backendSettings.bridgeUrl);
+        const reachable = await cloudAdapter.ping();
+        // The bridge itself is online whenever it answered — a missing provider
+        // key must NOT flip bridgeOnline (other UI reads it for bridge features).
+        bridgeReachable = reachable;
+        if (!reachable) {
+          ok = false;
+          status = 'unavailable';
+          message = 'Local bridge is offline — the Cloud backend calls providers through it.';
+        } else {
+          try {
+            const providers = await cloudAdapter.listProviders();
+            const chosen = providers.find((p) => p.id === state.backendSettings.cloudProvider);
+            const hasModel = Boolean(state.backendSettings.cloudModel);
+            ok = Boolean(chosen?.hasKey) && hasModel;
+            status = ok ? 'healthy' : 'degraded';
+            message = !chosen
+              ? 'Pick a cloud provider and save its API key.'
+              : !chosen.hasKey
+                ? `No API key saved for ${chosen.label}. Add one in the Cloud section below.`
+                : !hasModel
+                  ? `Pick a model for ${chosen.label} before rendering.`
+                  : `${chosen.label} is configured and ready.`;
+          } catch (exc) {
+            ok = false;
+            status = 'degraded';
+            message = `Bridge is reachable but /cloud/providers failed: ${exc instanceof Error ? exc.message : String(exc)}`;
+          }
+        }
       } else {
         httpAdapter.setBaseUrl(state.backendSettings.bridgeUrl);
         ok = await httpAdapter.ping();
@@ -1946,7 +1997,7 @@ export const useStudio = create<StudioState>((set, get) => {
           checkedAt: new Date().toISOString(),
         },
       });
-      set({ backendSettings, bridgeOnline: ok });
+      set({ backendSettings, bridgeOnline: bridgeReachable ?? ok });
       if (ok && state.backendSettings.selectedBackend === 'bridge') void get().refreshBridgeModelStatus();
     },
     setTurboPreset: (turboPresetId) => set({ turboPresetId, turboLastPlan: null, turboError: null }),
@@ -2316,7 +2367,17 @@ export const useStudio = create<StudioState>((set, get) => {
           fallback,
           fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
           bridgeRenderer: backendSettings.bridgeRenderer,
+          // Provider provenance only when the provider actually made the image —
+          // a fallback render never touched the cloud.
+          ...(backendSettings.selectedBackend === 'cloud' && !fallback
+            ? { cloudProvider: backendSettings.cloudProvider, cloudModel: backendSettings.cloudModel }
+            : {}),
         };
+        if (result.mediaType === 'video' && manifest.media.type !== 'video') {
+          // A provider returned a video for an image-mode workflow (e.g. a Cloud
+          // video model): correct the media record so the Gallery caption is honest.
+          manifest.media = { type: 'video', format: result.extension, frameCount: Math.max(1, job.frameCount), fps: job.fps || 0 };
+        }
         const item: GalleryItem = {
           id: uid('render'),
           dataUrl: result.dataUrl,
