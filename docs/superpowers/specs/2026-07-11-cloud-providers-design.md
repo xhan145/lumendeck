@@ -66,29 +66,43 @@ dataUrl; `cloudAdapter` mirrors that conversion.
   `COMPLETED`; then `GET .../requests/<id>` → `images[0].url` (or `video.url`) → download.
 - **Replicate** (image+video, async) — `Authorization: Bearer <key>`, plus header
   `Prefer: wait=5` best-effort. `POST https://api.replicate.com/v1/models/<owner/name>/predictions`
-  with `{input:{prompt, ...}}` (official-model route: no version hash to curate). Poll
-  `GET /v1/predictions/<id>` until `succeeded`; `output` is URL or list of URLs → download
-  first. Detect image vs video by URL extension. Models: `black-forest-labs/flux-dev`,
-  `stability-ai/sdxl` (image), one video model (`minimax/video-01`).
+  with `{input:{prompt, ...}}` — this route works ONLY for OFFICIAL models, so every curated id
+  must be official (a version-pinned community model 404s). Poll `GET /v1/predictions/<id>`
+  until `succeeded`; `output` is URL or list of URLs → download first; sniff image format from
+  magic bytes (flux/sd3.5 default to webp — `output_format:"png"` is forced). Models:
+  `black-forest-labs/flux-dev`, `stability-ai/stable-diffusion-3.5-large` (image),
+  `minimax/video-01` (video).
 - **Runway** (video, async) — `Authorization: Bearer <key>`, `X-Runway-Version: 2024-11-06`.
-  `POST https://api.dev.runwayml.com/v1/image_to_video` when `job.initImage` present (data URL
-  passed as `promptImage`), else `text_to_video`; body `{model, promptText, duration, ratio}`
-  (map job aspect to nearest supported ratio). Response `id`; poll `GET /v1/tasks/<id>` until
-  `SUCCEEDED`; download `output[0]` → base64 MP4. Models: `gen3a_turbo`, `gen4_turbo`.
+  Both curated models are image-to-video ONLY: a job without `initImage` fails loud with
+  guidance BEFORE any HTTP call (Runway's `text_to_video` endpoint accepts a different model
+  family). `POST https://api.dev.runwayml.com/v1/image_to_video` with `promptImage` (data URL
+  from `job.initImage`), `{model, promptText, duration, ratio}` (nearest supported ratio).
+  Response `id`; poll `GET /v1/tasks/<id>` until `SUCCEEDED`; download `output[0]` → base64
+  MP4. Models: `gen4_turbo`, `gen3a_turbo`.
 
-## Bridge: `bridge/server.py` routes (edit)
+## Bridge: `bridge/server.py` routes (edit; hardened per the 2026-07-11 adversarial review)
 
-Add `/cloud` to `API_PREFIXES`; three routes inside the pure `build_response()`:
+Add `/cloud` to `API_PREFIXES`; routes inside the pure `build_response()` (which gains an
+optional `origin` parameter). Because the bridge answers everything with
+`Access-Control-Allow-Origin: *`, every `/cloud/*` route rejects requests whose browser
+`Origin` is not the app itself (Tauri webview / bridge static server / Vite dev server) with
+HTTP 403 — otherwise any website could plant keys or burn paid credits.
 
-- `GET /cloud/providers` → `[{id, label, kind, models, hasKey}]` (`hasKey` from settings.json;
-  key values never returned).
-- `POST /cloud/keys` body `{provider, key}` → validate provider id; persist under `cloudKeys`;
-  empty/blank key deletes the entry (that's how a key is cleared). → `{"ok": true, "hasKey": bool}`.
-- `POST /cloud/generate` body `{provider, model, jobId, ...RenderJob}` → look up provider, load
-  key (missing → HTTP 400 with clear message), track progress via the existing `_JOB_ID` /
-  `_write_progress` plumbing, call `provider.generate(...)`, return result JSON. On `CloudError`
-  → HTTP 502 with `{"error": "<provider>: <message>"}` (mirrors how /generate surfaces worker
-  errors; the adapter throws it loudly).
+- `GET /cloud/providers` → `{"providers": [{id, label, kind, models, hasKey}]}` (`hasKey` from
+  settings.json; key values never returned).
+- `POST /cloud/keys` body `{provider, key}` → validate provider id AND key shape (printable
+  ASCII ≤512 chars — a control character would leak the key via urllib error text); persist
+  under `cloudKeys` with an ATOMIC write (`os.replace`); a corrupt existing settings.json →
+  503 without overwriting; empty/blank key deletes the entry (that's how a key is cleared).
+  → `{"ok": true, "hasKey": bool}`.
+- `POST /cloud/generate` body `{provider, model, jobId, ...RenderJob}` → look up provider,
+  validate `model` against the provider's curated list (the string is interpolated into
+  provider URLs), load key (missing → HTTP 400 with clear message), track progress via the
+  existing `_JOB_ID` / `_write_progress` plumbing, call `provider.generate(...)`, return result
+  JSON and PARK a copy at a per-job temp path. On `CloudError` → HTTP 502 with
+  `{"error": "<provider>: <message>"}` (the adapter throws it loudly).
+- `GET /cloud/result/<jobId>` → the parked result for a finished job (404 otherwise), so the
+  adapter can recover a long video render whose POST outlived the webview's fetch timeout.
 
 ## Frontend: `src/bridge/cloudAdapter.ts` (new)
 

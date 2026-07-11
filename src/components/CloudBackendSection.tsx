@@ -16,6 +16,8 @@ export function CloudBackendSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Bumped by the Retry button: re-runs the provider fetch after a bridge outage.
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,27 +34,41 @@ export function CloudBackendSection() {
         setProviders([]);
         setError(
           `Bridge unreachable (${exc instanceof Error ? exc.message : String(exc)}). ` +
-            'The Cloud backend calls providers through the local bridge — start LumenDeck’s bridge first.',
+            'The Cloud backend calls providers through the local bridge — start LumenDeck’s bridge, then Retry.',
         );
       });
     return () => {
       cancelled = true;
     };
-  }, [backendSettings.bridgeUrl]);
+  }, [backendSettings.bridgeUrl, reloadNonce]);
 
   const chosen = providers?.find((p) => p.id === backendSettings.cloudProvider) ?? null;
   const models = chosen?.models ?? [];
   const modelValue = models.some((m) => m.id === backendSettings.cloudModel) ? backendSettings.cloudModel : '';
 
+  // A persisted cloudModel that no longer exists in the provider's curated list
+  // would silently reach the bridge (and 400) while the select shows a
+  // placeholder — snap the setting to a real model once the list is known.
+  useEffect(() => {
+    if (!chosen || models.length === 0) return;
+    if (!models.some((m) => m.id === backendSettings.cloudModel)) {
+      updateBackendSettings({ cloudModel: models[0].id });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers, backendSettings.cloudProvider]);
+
   const saveKey = async (value: string) => {
     if (!chosen) return;
+    const provider = chosen; // capture: the selection may change mid-await
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const hasKey = await cloudAdapter.saveKey(chosen.id, value);
+      const hasKey = await cloudAdapter.saveKey(provider.id, value);
       setKeyDraft('');
-      setNotice(hasKey ? 'Key saved on the local bridge.' : 'Key cleared.');
+      setNotice(hasKey ? `Key for ${provider.label} saved on the local bridge.` : `Key for ${provider.label} cleared.`);
+      // Reflect the change immediately even if the refresh below fails.
+      setProviders((prev) => prev?.map((p) => (p.id === provider.id ? { ...p, hasKey } : p)) ?? prev);
       cloudAdapter.setBaseUrl(backendSettings.bridgeUrl);
       setProviders(await cloudAdapter.listProviders());
     } catch (exc: unknown) {
@@ -65,12 +81,26 @@ export function CloudBackendSection() {
   return (
     <div className="cloud-backend-section">
       <label className="field">
+        <span className="field-label">Diffusers bridge URL</span>
+        <input
+          value={backendSettings.bridgeUrl}
+          placeholder="http://127.0.0.1:8787"
+          onChange={(event) => updateBackendSettings({ bridgeUrl: event.target.value })}
+        />
+        <span className="field-help">Cloud calls are proxied through this local bridge.</span>
+      </label>
+
+      <label className="field">
         <span className="field-label">Cloud provider</span>
         <select
           value={backendSettings.cloudProvider}
           onChange={(event) => {
             const id = event.target.value;
             const next = providers?.find((p) => p.id === id);
+            // A typed-but-unsaved key must never carry over to another provider.
+            setKeyDraft('');
+            setNotice(null);
+            setError(null);
             updateBackendSettings({ cloudProvider: id, cloudModel: next?.models[0]?.id ?? '' });
           }}
         >
@@ -122,6 +152,11 @@ export function CloudBackendSection() {
         <button className="btn" type="button" disabled={busy || !chosen?.hasKey} onClick={() => void saveKey('')}>
           Clear key
         </button>
+        {error ? (
+          <button className="btn" type="button" disabled={busy} onClick={() => setReloadNonce((n) => n + 1)}>
+            {Icon.pulse()} Retry
+          </button>
+        ) : null}
       </div>
 
       {chosen && !chosen.hasKey ? (
