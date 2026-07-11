@@ -4,6 +4,7 @@ import { analyzePortfolio } from '../../core/creative/portfolio';
 import { buildAnalysisContext } from '../../state/creative';
 import { Icon } from '../icons';
 import { ReadinessRing } from './ReadinessRing';
+import { PublishedLinks } from './PublishedLinks';
 import type { ProjectStatus } from '../../core/creative/types';
 import '../../styles/creative.css';
 
@@ -50,6 +51,7 @@ export function StudioOverview() {
               <button className="btn" type="button" onClick={seedDemo}>{Icon.sparkle({ size: 15 })} Load demo</button>
             </div>
           </section>
+          <PublishedLinks />
         </div>
       </main>
     );
@@ -75,6 +77,7 @@ export function StudioOverview() {
             <p className="creative-lead">
               {funnel.total} project{funnel.total === 1 ? '' : 's'} · {funnel.shipped} shipped · {Math.round(funnel.shipRate * 100)}% ship rate
             </p>
+            <button className="btn tiny" type="button" onClick={() => setView('craft')}>{Icon.sparkle({ size: 13 })} Craft insights</button>
           </div>
         </header>
 
@@ -206,6 +209,8 @@ export function StudioOverview() {
             </div>
             <div className="overview-velocity-legend"><span className="ov-dot started" /> started <span className="ov-dot shipped" /> shipped</div>
           </section>
+
+          <PublishedLinks />
         </div>
       </div>
     </main>

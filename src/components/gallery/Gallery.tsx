@@ -92,6 +92,7 @@ function DrawerOrganizer({ item }: { item: GalleryItem }) {
 
 function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
   const restoreSnapshot = useStudio((s) => s.restoreSnapshot);
+  const recordPublishedShare = useStudio((s) => s.recordPublishedShare);
   const m = item.manifest as ManifestWithTurbo;
   const base = slugify(m.prompt);
   const ext = mediaExtension(item);
@@ -166,7 +167,8 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
         }
         result = poster;
       }
-      const { url } = await publishShowcase(result.html, base);
+      const { url, path, token } = await publishShowcase(result.html, base);
+      recordPublishedShare({ title, url, path, token, kind: 'gallery', sourceId: item.id });
       let copied = false;
       try { await navigator.clipboard?.writeText(url); copied = true; } catch { /* clipboard optional */ }
       setPublishState({ k: 'done', url, copied });

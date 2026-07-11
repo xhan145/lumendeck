@@ -9,6 +9,7 @@
 //
 // Deploy: `supabase functions deploy publish-showcase` (or the Supabase MCP).
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { deleteToken } from '../_shared/deleteToken.ts';
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const RATE_LIMIT = 20;
@@ -68,5 +69,9 @@ Deno.serve(async (req: Request) => {
   if (upErr) return json({ error: `Upload failed: ${upErr.message}` }, 500);
   await admin.from('lumendeck_publish_events').insert({ ip });
 
-  return json({ url: `${url}/storage/v1/object/public/${BUCKET}/${path}` }, 200);
+  // Stateless HMAC capability token so the publisher — and only the publisher — can
+  // later unpublish this exact object (see unpublish-showcase + _shared/deleteToken.ts).
+  const secret = Deno.env.get('LUMENDECK_DELETE_SECRET');
+  const token = secret ? await deleteToken(secret, path) : '';
+  return json({ url: `${url}/storage/v1/object/public/${BUCKET}/${path}`, path, token }, 200);
 });

@@ -29,6 +29,11 @@ describe('studio store — recipe/graph single-object invariant', () => {
     expect(useStudio.getState().workflow.nodes.filter((n) => n.kind === 'control')).toHaveLength(2);
   });
 
+  it('routes to the craft view', () => {
+    useStudio.getState().setView('craft');
+    expect(useStudio.getState().view).toBe('craft');
+  });
+
   it('routes to all primary views and stores local preferences', () => {
     const store = useStudio.getState();
     const views = ['guide', 'recipe', 'graph', 'shelf', 'gallery', 'controls', 'settings', 'diagnostics', 'performance'] as const;

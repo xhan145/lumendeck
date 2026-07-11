@@ -1469,3 +1469,12 @@
 .svd-row { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .svd-row input[type="number"] { width: 56px; }
 .svd-row input[type="range"] { width: 120px; }
+
+/* Prompt Coach tab */
+.ps-coach { display: flex; flex-direction: column; gap: 6px; }
+.ps-coach-item { display: grid; grid-template-columns: 18px auto 1fr; gap: 8px; align-items: center; text-align: left; padding: 6px 8px; border: 1px solid var(--line, rgba(255,255,255,0.08)); border-radius: 8px; background: none; cursor: pointer; color: inherit; }
+.ps-coach-item:hover { border-color: var(--accent, #7aa2ff); }
+.ps-coach-glyph { font-weight: 700; text-align: center; }
+.ps-coach-item.add-token .ps-coach-glyph { color: #6ee7a8; }
+.ps-coach-label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-coach-reason { font-size: 11px; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

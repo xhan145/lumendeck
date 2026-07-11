@@ -18,6 +18,21 @@ export interface RenderInfo {
   prompt: string;
   /** whether this render is still referenced by any project */
   linkedToProject: boolean;
+  /** ---- craft-brain fields (optional; other engines ignore them) ---- */
+  /** model family from the manifest (e.g. 'SDXL', 'Pony'); '' if none */
+  modelFamily?: string;
+  /** sampler name from the manifest */
+  sampler?: string;
+  /** sampler steps */
+  steps?: number;
+  /** cfg scale */
+  cfg?: number;
+  /** the render's negative prompt */
+  negativePrompt?: string;
+  /** true for mock/procedural fallback renders — excluded from the craft corpus */
+  fallback?: boolean;
+  /** curated-actions signal: linkedToProject OR labeled */
+  kept?: boolean;
 }
 
 export interface AnalysisContext {

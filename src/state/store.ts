@@ -101,6 +101,8 @@ import {
   hydrateCreative,
   type CreativeState,
 } from './creative';
+import { hydrateShares, addShare, removeShare, type PublishedShare } from './shares';
+import { unpublishShowcase, type UnpublishResult } from '../bridge/publish';
 import { downloadJson, downloadBase64, slugify } from '../bridge/exporter';
 import type {
   CreativeRecipe,
@@ -141,6 +143,7 @@ export type { CreativeState } from './creative';
 export type ViewId =
   | 'mission'
   | 'overview'
+  | 'craft'
   | 'projects'
   | 'recipes'
   | 'entropy'
@@ -562,6 +565,14 @@ interface StudioState {
   resolveEntropyItem(item: EntropyItem, action: EntropyAction): void;
   setAiEnabled(on: boolean): void;
   seedCreativeDemo(): void;
+
+  /* -------------------------------------------------- Published share-links */
+  publishedShares: PublishedShare[];
+  recordPublishedShare(input: Omit<PublishedShare, 'id' | 'publishedAt'>): void;
+  /** Local-only removal ("Forget locally") — does not call the server. */
+  removePublishedShare(id: string): void;
+  /** Server-side unpublish; removes the local row only when the server confirms. */
+  unpublishShare(id: string): Promise<UnpublishResult>;
 }
 
 export const mockAdapter = new MockAdapter();
@@ -709,6 +720,7 @@ const initialNodeMeta = seedNodeMeta(
 );
 const initialBackendSettings = sanitizeBackendSettings(persisted.backendSettings ?? DEFAULT_BACKEND_SETTINGS);
 const initialAppSettings = sanitizeAppSettings(persisted.appSettings ?? DEFAULT_APP_SETTINGS);
+const initialShares = hydrateShares(persisted.shares);
 const initialCreative = hydrateCreative(persisted.creative);
 const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
   ? 'controls'
@@ -934,6 +946,7 @@ export const useStudio = create<StudioState>((set, get) => {
     galleryReady: false,
     galleryDurable,
     creative: initialCreative,
+    publishedShares: initialShares,
     queue: [],
     adapterId: initialBackendSettings.selectedBackend,
     bridgeOnline: false,
@@ -2733,6 +2746,18 @@ export const useStudio = create<StudioState>((set, get) => {
         activeProjectId: newBrains[0]?.id ?? get().creative.activeProjectId,
         seeded: true,
       });
+    },
+
+    recordPublishedShare: (input) =>
+      set({ publishedShares: addShare(get().publishedShares, input, crypto.randomUUID(), Date.now()) }),
+    removePublishedShare: (id) =>
+      set({ publishedShares: removeShare(get().publishedShares, id) }),
+    unpublishShare: async (id) => {
+      const share = get().publishedShares.find((s) => s.id === id);
+      if (!share) return { ok: true, status: 200 };
+      const result = await unpublishShowcase(share.path, share.token);
+      if (result.ok) set({ publishedShares: removeShare(get().publishedShares, id) });
+      return result;
     },
   };
 });

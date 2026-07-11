@@ -20,6 +20,18 @@ export function isFallbackRender(item: RenderHonestyLike): boolean {
   return item.manifest?.turboForge?.warnings?.some((warning) => warning.code === 'backend-fallback') ?? false;
 }
 
+/**
+ * A render that must NOT be treated as real-model output: an actual fallback, OR a
+ * mock/procedural render (the mock backend is the DEFAULT). Analysis that mines "what a
+ * real model produced" (e.g. the craft brain) must exclude these so placeholder renders
+ * never masquerade as validated signal.
+ */
+export function isSyntheticRender(item: RenderHonestyLike): boolean {
+  if (isFallbackRender(item)) return true;
+  const mode = renderMeta(item)?.mode ?? item.renderMode;
+  return mode === 'mock' || mode === 'procedural';
+}
+
 export function fallbackReasonFor(item: RenderHonestyLike): string {
   const meta = renderMeta(item);
   if (item.fallbackReason) return item.fallbackReason;

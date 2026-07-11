@@ -9,6 +9,7 @@ import { BUILTIN_FIELD_PRESETS } from '../core/field/presets';
 import type { AudioState } from './audio';
 import type { AudioMapping } from '../core/audio/mapping';
 import type { CreativeState } from './creative';
+import type { PublishedShare } from './shares';
 import { pruneNodeMeta, type NodeMetaMap } from './nodeMeta';
 
 const KEY = 'lumendeck.v1';
@@ -67,6 +68,11 @@ export interface PersistedState {
    * a missing slice hydrates to {} and re-seeds from the current workflow nodes.
    */
   nodeMeta?: NodeMetaMap;
+  /**
+   * Published hosted share-links (url + storage path + HMAC delete token). Optional so
+   * state saved before this feature still loads (missing -> empty via hydrateShares).
+   */
+  shares?: PublishedShare[];
 }
 
 /**
@@ -91,6 +97,8 @@ export function persistedProjection(state: {
   creative?: CreativeState;
   /** Optional so callers assembled before this slice existed still typecheck. */
   nodeMeta?: NodeMetaMap;
+  /** Optional so callers assembled before this slice existed still typecheck. */
+  publishedShares?: PublishedShare[];
 }): PersistedState {
   return {
     workflow: state.workflow,
@@ -127,6 +135,8 @@ export function persistedProjection(state: {
     // Creative OS: brains + recipes are light metadata (renders referenced by id
     // only), safe for the localStorage projection.
     creative: state.creative,
+    // Published share-links — light metadata (no render bytes), safe to persist.
+    shares: state.publishedShares ?? [],
   };
 }
 
