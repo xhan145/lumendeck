@@ -609,3 +609,45 @@
 .published-meta { font-size: 11px; opacity: 0.55; text-transform: capitalize; }
 .published-actions { display: flex; gap: 6px; align-items: center; }
 .published-error { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--danger, #ff6b6b); }
+
+/* Craft insights view */
+.craft-palette { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+.craft-chip { line-height: 1.2; }
+.craft-dims { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.craft-dim-title { font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.04em; }
+.craft-bars { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.craft-bars li { display: grid; grid-template-columns: 1fr 80px auto; gap: 8px; align-items: center; font-size: 12px; }
+.craft-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.craft-bar-track { height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.craft-bar-fill { display: block; height: 100%; background: var(--accent, #7aa2ff); }
+.craft-bar-count { opacity: 0.6; }
+.craft-note { font-size: 12px; opacity: 0.6; margin: 0 0 8px; }
+.craft-working { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.craft-working li { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.craft-work-label { font-weight: 600; }
+.craft-work-lift { opacity: 0.8; }
+.craft-work-counts { opacity: 0.55; font-size: 12px; }
+.craft-conf.high { color: #6ee7a8; }
+.craft-conf.medium { color: #ffd479; }
+.craft-conf.low { opacity: 0.6; }
+.craft-suggestions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.craft-suggestion { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line, rgba(255,255,255,0.08)); border-radius: 10px; }
+.craft-suggestion-text { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.craft-suggestion-meta { opacity: 0.55; font-size: 12px; }
+
+/* Prompt Lab — lineage tab */
+.craft-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.lineage-list { display: flex; flex-direction: column; gap: 12px; }
+.lineage-strip { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0; }
+.lineage-thumb { display: flex; flex-direction: column; gap: 4px; align-items: center; flex: 0 0 auto; width: 96px; }
+.lineage-thumb > button { padding: 0; border: 2px solid transparent; border-radius: 8px; background: none; cursor: pointer; }
+.lineage-thumb.sel > button { border-color: var(--accent, #7aa2ff); }
+.lineage-thumb img { width: 92px; height: 92px; object-fit: cover; border-radius: 6px; display: block; }
+.lineage-stepdiff { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }
+.lineage-diff { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.lineage-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lineage-compare-grid img { width: 100%; border-radius: 8px; }
+.lineage-compare-grid figcaption { font-size: 11px; opacity: 0.7; }
+.chip.diff-add { color: #6ee7a8; }
+.chip.diff-rem { color: #ff9b9b; }
+>>>>>>> origin/main

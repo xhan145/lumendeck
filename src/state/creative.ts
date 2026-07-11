@@ -10,6 +10,7 @@ import type { CreativeRecipe, ProjectBrain } from '../core/creative/types';
 import { sanitizeBrain } from '../core/creative/brain';
 import { sanitizeRecipe } from '../core/creative/recipes';
 import { classifyAspect, type AnalysisContext, type RenderInfo } from '../core/creative/context';
+import { isSyntheticRender } from '../core/renderHonesty';
 
 export interface CreativeState {
   brains: ProjectBrain[];
@@ -64,14 +65,23 @@ export function buildAnalysisContext(
     const canvas = g.manifest?.canvas ?? { width: 0, height: 0 };
     const prompt = g.manifest?.resolvedPrompt || g.manifest?.prompt || '';
     const seed = g.manifest?.seed ?? 0;
+    const labeled = Boolean(g.collectionId) || (g.tags?.length ?? 0) > 0;
+    const linkedToProject = linked.has(g.id);
     return {
       id: g.id,
       createdAt: g.createdAt,
       aspect: classifyAspect(canvas.width, canvas.height),
-      labeled: Boolean(g.collectionId) || (g.tags?.length ?? 0) > 0,
+      labeled,
       signature: `${prompt}|${seed}|${canvas.width}x${canvas.height}`,
       prompt,
-      linkedToProject: linked.has(g.id),
+      linkedToProject,
+      modelFamily: g.manifest?.model?.family ?? '',
+      sampler: g.manifest?.sampler?.name ?? '',
+      steps: g.manifest?.sampler?.steps ?? 0,
+      cfg: g.manifest?.sampler?.cfg ?? 0,
+      negativePrompt: g.manifest?.negativePrompt ?? '',
+      fallback: isSyntheticRender(g),
+      kept: linkedToProject || labeled,
     };
   });
   return { renders, knownModelIds: new Set(shelf.map((m) => m.id)) };

@@ -143,6 +143,7 @@ export type { CreativeState } from './creative';
 export type ViewId =
   | 'mission'
   | 'overview'
+  | 'craft'
   | 'projects'
   | 'recipes'
   | 'entropy'

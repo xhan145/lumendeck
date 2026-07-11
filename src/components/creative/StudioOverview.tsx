@@ -77,6 +77,7 @@ export function StudioOverview() {
             <p className="creative-lead">
               {funnel.total} project{funnel.total === 1 ? '' : 's'} · {funnel.shipped} shipped · {Math.round(funnel.shipRate * 100)}% ship rate
             </p>
+            <button className="btn tiny" type="button" onClick={() => setView('craft')}>{Icon.sparkle({ size: 13 })} Craft insights</button>
           </div>
         </header>
 
