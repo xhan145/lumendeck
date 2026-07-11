@@ -28,6 +28,25 @@ export interface CloudProviderInfo {
 const NOT_ON_CLOUD =
   'is not available on the Cloud backend — switch Backend to the local Diffusers bridge. The Cloud backend renders single images/videos only.';
 
+interface CloudGenerateResponse {
+  image_base64?: string;
+  video_base64?: string;
+  mediaType?: 'image' | 'video';
+  mimeType?: string;
+  extension?: string;
+  seed?: number | string;
+  error?: string;
+}
+
+/** The POST /cloud/generate connection itself failed (network drop or the
+ * webview's fetch timeout on a long video task) — distinct from an HTTP error
+ * response, because the bridge may still finish and park the result. */
+class CloudDisconnect extends Error {
+  constructor(readonly original: unknown) {
+    super('cloud generate connection dropped');
+  }
+}
+
 /**
  * Hosted-API backend. All provider HTTP happens on the local bridge
  * (/cloud/generate) so API keys never touch the browser; this adapter only
@@ -90,6 +109,56 @@ export class CloudAdapter implements BackendAdapter {
     return Boolean(data.hasKey);
   }
 
+  private async postGenerate(job: RenderJob, jobId: string): Promise<CloudGenerateResponse> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.base}/cloud/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...job, provider: this.provider, model: this.model, jobId }),
+      });
+    } catch (err) {
+      throw new CloudDisconnect(err);
+    }
+    const data = (await res.json().catch(() => null)) as CloudGenerateResponse | null;
+    if (!res.ok || !data || data.error) {
+      throw new Error(data?.error ?? `Cloud render failed (${res.status}).`);
+    }
+    return data;
+  }
+
+  /**
+   * After a dropped POST connection the bridge may still finish the render and
+   * park the result (GET /cloud/result/<jobId>): watch progress until done or
+   * error, bounded slightly past the bridge's own 10-minute video deadline.
+   * Returns null when there is nothing to recover.
+   */
+  private async recoverResult(jobId: string): Promise<CloudGenerateResponse | null> {
+    const deadline = Date.now() + 11 * 60_000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let p: { phase?: string; detail?: string } | null = null;
+      try {
+        const res = await this.fetchImpl(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(2000) });
+        if (res.ok) p = (await res.json()) as { phase?: string; detail?: string };
+      } catch {
+        // transient poll failure — keep waiting
+      }
+      if (!p) continue;
+      if (p.phase === 'error') throw new Error(p.detail ?? 'Cloud render failed after the connection dropped.');
+      if (p.phase === 'unknown') return null; // never tracked or pruned — nothing to recover
+      if (p.phase !== 'done') continue;
+      try {
+        const res = await this.fetchImpl(`${this.base}/cloud/result/${jobId}`);
+        const data = (await res.json().catch(() => null)) as CloudGenerateResponse | null;
+        return res.ok && data && !data.error ? data : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
   async generate(job: RenderJob, onProgress?: RenderProgressCallback): Promise<RenderResult> {
     onProgress?.({ progress: 0.05, phase: 'queued' });
     const jobId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
@@ -106,6 +175,9 @@ export class CloudAdapter implements BackendAdapter {
           const res = await this.fetchImpl(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1200) });
           if (!res.ok) continue;
           const p = (await res.json()) as { phase?: string; step?: number; steps?: number };
+          // The render may have completed while this poll was in flight — a
+          // stale 'rendering' callback after 'done' would wipe the final preview.
+          if (!polling) break;
           if (p.phase === 'loading') onProgress?.({ progress: 0.1, phase: 'queued' });
           else if (p.phase === 'rendering' && p.steps && p.steps > 0) {
             const progress = Math.min(0.95, 0.15 + 0.8 * ((p.step ?? 0) / p.steps));
@@ -119,27 +191,27 @@ export class CloudAdapter implements BackendAdapter {
     if (polling) void pollLoop();
 
     try {
-      const res = await this.fetchImpl(`${this.base}/cloud/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...job, provider: this.provider, model: this.model, jobId }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        image_base64?: string;
-        video_base64?: string;
-        mediaType?: 'image' | 'video';
-        mimeType?: string;
-        extension?: string;
-        seed?: number | string;
-        error?: string;
-      } | null;
-      if (!res.ok || !data || data.error) {
-        throw new Error(data?.error ?? `Cloud render failed (${res.status}).`);
+      let data: CloudGenerateResponse;
+      try {
+        data = await this.postGenerate(job, jobId);
+      } catch (err) {
+        if (!(err instanceof CloudDisconnect)) throw err;
+        const recovered = await this.recoverResult(jobId);
+        if (!recovered) {
+          const cause = err.original;
+          throw new Error(
+            `Cloud render connection dropped and no finished result was recoverable: ${
+              cause instanceof Error ? cause.message : String(cause)
+            }`,
+          );
+        }
+        data = recovered;
       }
       const mediaType = data.mediaType ?? (data.video_base64 ? 'video' : 'image');
       const mimeType = data.mimeType ?? (mediaType === 'video' ? 'video/mp4' : 'image/png');
       const payload = data.video_base64 ?? data.image_base64;
       if (!payload) throw new Error('Cloud render response did not include media data.');
+      polling = false;
       const dataUrl = `data:${mimeType};base64,${payload}`;
       onProgress?.({ progress: 1, phase: 'done', previewDataUrl: dataUrl });
       return {

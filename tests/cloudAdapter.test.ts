@@ -93,6 +93,34 @@ describe('CloudAdapter', () => {
     expect(post?.body).toEqual({ provider: 'openai', key: 'sk-x' });
   });
 
+  it('recovers a parked result when the generate connection drops mid-render', async () => {
+    let generateCalls = 0;
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/cloud/generate') && init?.method === 'POST') {
+        generateCalls += 1;
+        throw new TypeError('network connection was lost');
+      }
+      if (url.includes('/progress/')) {
+        return new Response(JSON.stringify({ phase: 'done' }), { status: 200 });
+      }
+      if (url.includes('/cloud/result/')) {
+        return new Response(
+          JSON.stringify({ image_base64: 'UkVDT1ZFUkVE', seed: '11', mediaType: 'image', mimeType: 'image/png', extension: 'png' }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as typeof fetch;
+    const adapter = new CloudAdapter('http://127.0.0.1:8787', impl);
+    adapter.setProvider('openai');
+    adapter.setModel('gpt-image-1');
+    const result = await adapter.generate(job());
+    expect(generateCalls).toBe(1);
+    expect(result.dataUrl).toBe('data:image/png;base64,UkVDT1ZFUkVE');
+    expect(result.seed).toBe(11);
+  }, 15000);
+
   it('is loudly unsupported for SVD/evolve/motion and lists no SVD models', async () => {
     const { impl } = stubFetch(() => ({ json: {} }));
     const adapter = new CloudAdapter('http://127.0.0.1:8787', impl);
