@@ -26,7 +26,7 @@ function isTauri(): boolean {
  * - Tauri desktop: the loopback address, since the UI is loaded from tauri://.
  * - A custom, non-default URL is always honored (remote bridge).
  */
-function resolveBase(url: string): string {
+export function resolveBase(url: string): string {
   const trimmed = (url || '').trim().replace(/\/+$/, '');
   if (trimmed && trimmed !== DEFAULT_BRIDGE_URL) return trimmed;
   return isTauri() ? DEFAULT_BRIDGE_URL : '';
@@ -90,8 +90,11 @@ export class HttpAdapter implements BackendAdapter {
   /** injectable fetch (tests); the SVD methods use it so they can be unit-tested. */
   private fetchImpl: typeof fetch;
 
-  constructor(base: string = DEFAULT_BRIDGE_URL, fetchImpl: typeof fetch = fetch) {
-    this.fetchImpl = fetchImpl;
+  constructor(base: string = DEFAULT_BRIDGE_URL, fetchImpl?: typeof fetch) {
+    // NOTE: never default to the bare global `fetch` — assigning it to a property
+    // and invoking as this.fetchImpl(...) rebinds `this` to the adapter and throws
+    // "Illegal invocation" in browsers. Wrap it so `this` stays undefined.
+    this.fetchImpl = fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
     this.setBaseUrl(base);
   }
 
