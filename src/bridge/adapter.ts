@@ -95,6 +95,27 @@ export interface RenderMotionOptions {
   jobId?: string;
 }
 
+/** A locally-discovered Stable Video Diffusion model. */
+export interface SvdModelInfo {
+  id: string;
+  name: string;
+  path: string;
+  kind: 'folder' | 'file';
+}
+
+/** Options for animating a still into a coherent clip via SVD. */
+export interface AnimateStillOptions {
+  frames: number;
+  fps: number;
+  /** motion amount (SVD motion_bucket_id, 1..255). */
+  motion: number;
+  seed: number;
+  /** absolute path of the SVD model to use (from listSvdModels). */
+  modelPath: string;
+  /** stable id for progress polling; adapters mint one when omitted. */
+  jobId?: string;
+}
+
 /** Objective weights for scoring an evolve candidate (CLIP vs. aesthetic). */
 export interface EvolveWeights {
   clip: number;
@@ -151,6 +172,15 @@ export interface BackendAdapter {
    * backend it returns procedural frames with `fallback:true` (never silent).
    */
   renderMotion(jobs: RenderJob[], opts: RenderMotionOptions, onProgress?: RenderProgressCallback): Promise<RenderResult>;
+  /**
+   * Animate a still image into a short coherent clip via Stable Video Diffusion.
+   * `imageBase64` is the raw base64 (no data: prefix). Returns a video `RenderResult`.
+   * Throws loudly on any backend error (missing model, OOM). The mock backend returns
+   * an explicitly-labeled placeholder — never a pretend-SVD clip.
+   */
+  animateStill(imageBase64: string, opts: AnimateStillOptions, onProgress?: RenderProgressCallback): Promise<RenderResult>;
+  /** Locally-available SVD models (empty on backends that can't run SVD). */
+  listSvdModels(): Promise<SvdModelInfo[]>;
   /**
    * Render + score ONE evolve generation: `jobs` is the population (built by the
    * frontend from each genome), rendered by the resident worker (model stays

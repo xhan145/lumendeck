@@ -103,6 +103,30 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
     { k: 'idle' } | { k: 'busy' } | { k: 'done'; url: string; copied: boolean } | { k: 'err'; msg: string }
   >({ k: 'idle' });
 
+  // SVD "Animate this render": only offered for still images (not existing clips).
+  const svdModels = useStudio((s) => s.svdModels);
+  const refreshSvdModels = useStudio((s) => s.refreshSvdModels);
+  const animateStill = useStudio((s) => s.animateStill);
+  const svdBackend = useStudio((s) => s.backendSettings.selectedBackend);
+  const isImage = !item.mimeType?.startsWith('video/') && (item.mediaType ?? 'image') !== 'video';
+  const [svdState, setSvdState] = useState<{ k: 'idle' } | { k: 'busy'; detail: string } | { k: 'err'; msg: string } | { k: 'done' }>({ k: 'idle' });
+  const [motion, setMotion] = useState(127);
+  const [svdFrames, setSvdFrames] = useState(14);
+  useEffect(() => { if (isImage) void refreshSvdModels(); }, [isImage, refreshSvdModels]);
+
+  const runAnimate = async () => {
+    setSvdState({ k: 'busy', detail: 'Starting…' });
+    const r = await animateStill(
+      item.id,
+      { frames: svdFrames, fps: 7, motion, seed: 0, modelPath: svdModels[0]?.path ?? '' },
+      (p) => {
+        const d = typeof p === 'number' ? '' : (p.detail ?? '');
+        setSvdState((s) => (s.k === 'busy' ? { k: 'busy', detail: d || s.detail } : s));
+      },
+    );
+    setSvdState(r.ok ? { k: 'done' } : { k: 'err', msg: r.error ?? 'Animate failed' });
+  };
+
   // Export a single self-contained Showcase HTML file for this render.
   const shareShowcase = () => {
     const source = {
@@ -204,6 +228,31 @@ function Drawer({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
             </div>
           ) : publishState.k === 'err' ? (
             <div className="publish-result error" role="alert">{Icon.error({ size: 13 })} Publish failed: {publishState.msg}</div>
+          ) : null}
+          {isImage ? (
+            <div className="svd-panel">
+              {svdModels.length === 0 ? (
+                svdBackend !== 'bridge' ? (
+                  <p className="publish-note">{Icon.warning({ size: 13 })} Animating stills needs the local Diffusers bridge backend. Switch to it in Settings, then add a Stable Video Diffusion model to your models folder.</p>
+                ) : (
+                  <p className="publish-note">{Icon.warning({ size: 13 })} No Stable Video Diffusion model found. Put an SVD model in your models folder, then reopen this render to animate it.</p>
+                )
+              ) : (
+                <>
+                  <p className="publish-note">{Icon.play({ size: 13 })} Animate this still into a short coherent clip (SVD). On an 8GB GPU this can take a few minutes.</p>
+                  <div className="svd-controls">
+                    <label className="svd-row">Motion <input type="range" min={1} max={255} value={motion} onChange={(e) => setMotion(Number(e.target.value))} /> <span className="mono">{motion}</span></label>
+                    <label className="svd-row">Frames <input type="number" min={8} max={25} value={svdFrames} onChange={(e) => setSvdFrames(Math.max(8, Math.min(25, Number(e.target.value) || 14)))} /></label>
+                    <button className="btn primary" type="button" disabled={svdState.k === 'busy'} onClick={() => void runAnimate()}>
+                      {Icon.play({ size: 14 })} {svdState.k === 'busy' ? 'Animating…' : 'Animate'}
+                    </button>
+                  </div>
+                  {svdState.k === 'busy' ? <span className="publish-note">{svdState.detail || 'Working… (this can take a few minutes on 8GB)'}</span> : null}
+                  {svdState.k === 'done' ? <span className="publish-ok">{Icon.ok({ size: 13 })} Clip added to the gallery.</span> : null}
+                  {svdState.k === 'err' ? <div className="publish-result error" role="alert">{Icon.error({ size: 13 })} {svdState.msg}</div> : null}
+                </>
+              )}
+            </div>
           ) : null}
           <dl className="detail-grid">
             <DetailRow label="Prompt">{m.prompt || '—'}</DetailRow>

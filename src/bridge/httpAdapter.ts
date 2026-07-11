@@ -8,6 +8,8 @@ import type {
   RenderMotionOptions,
   RenderProgressCallback,
   RenderResult,
+  AnimateStillOptions,
+  SvdModelInfo,
 } from './adapter';
 import { buildStreamingPreview } from './preview';
 
@@ -85,8 +87,11 @@ export class HttpAdapter implements BackendAdapter {
   label = 'Local bridge';
   private renderer: string = 'auto';
   private base = DEFAULT_BRIDGE_URL;
+  /** injectable fetch (tests); the SVD methods use it so they can be unit-tested. */
+  private fetchImpl: typeof fetch;
 
-  constructor(base: string = DEFAULT_BRIDGE_URL) {
+  constructor(base: string = DEFAULT_BRIDGE_URL, fetchImpl: typeof fetch = fetch) {
+    this.fetchImpl = fetchImpl;
     this.setBaseUrl(base);
   }
 
@@ -384,6 +389,62 @@ export class HttpAdapter implements BackendAdapter {
         fallback: data.fallback,
         fallbackReason: data.fallbackReason,
       };
+    } finally {
+      polling = false;
+    }
+  }
+
+  async listSvdModels(): Promise<SvdModelInfo[]> {
+    try {
+      const res = await this.fetchImpl(`${this.base}/svd-models`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return [];
+      const data = (await res.json()) as { models?: SvdModelInfo[] };
+      return Array.isArray(data.models) ? data.models : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async animateStill(imageBase64: string, opts: AnimateStillOptions, onProgress?: RenderProgressCallback): Promise<RenderResult> {
+    const jobId = opts.jobId
+      ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`);
+    onProgress?.({ progress: 0.02, phase: 'queued' });
+    let polling = Boolean(onProgress);
+    const pollLoop = async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 700));
+        if (!polling) break;
+        try {
+          const res = await this.fetchImpl(`${this.base}/progress/${jobId}`, { signal: AbortSignal.timeout(1200) });
+          if (!res.ok) continue;
+          const p = (await res.json()) as { phase?: string; step?: number; steps?: number };
+          if (p.phase === 'loading') onProgress?.({ progress: 0.05, phase: 'loading', detail: 'Loading SVD…' });
+          else if (p.phase === 'rendering' && p.steps) onProgress?.({ progress: Math.min(0.95, 0.05 + 0.9 * ((p.step ?? 0) / p.steps)), phase: 'rendering', detail: `Step ${p.step ?? 0}/${p.steps}` });
+          else if (p.phase === 'decoding') onProgress?.({ progress: 0.97, phase: 'decoding', detail: 'Decoding frames…' });
+        } catch {
+          // advisory
+        }
+      }
+    };
+    if (polling) void pollLoop();
+    try {
+      const res = await this.fetchImpl(`${this.base}/animate-svd`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Map the UI option names to the worker's clamp keys so the values take effect.
+        body: JSON.stringify({ image: imageBase64, modelPath: opts.modelPath, num_frames: opts.frames, fps: opts.fps, motion_bucket_id: opts.motion, seed: opts.seed, jobId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Bridge /animate-svd failed (${res.status}): ${text.slice(0, 200)}`);
+      }
+      const data = (await res.json()) as { video_base64?: string; error?: string; mediaType?: 'video'; mimeType?: string; extension?: string; seed?: number | string };
+      if (data.error) throw new Error(data.error);
+      if (!data.video_base64) throw new Error('Bridge /animate-svd response did not include video data.');
+      const mimeType = data.mimeType ?? 'video/mp4';
+      const dataUrl = `data:${mimeType};base64,${data.video_base64}`;
+      onProgress?.({ progress: 1, phase: 'done', previewDataUrl: dataUrl });
+      return { dataUrl, mediaType: 'video', mimeType, extension: data.extension ?? 'mp4', seed: typeof data.seed === 'number' ? data.seed : Number(data.seed) || opts.seed };
     } finally {
       polling = false;
     }

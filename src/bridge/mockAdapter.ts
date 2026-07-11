@@ -7,6 +7,8 @@ import type {
   RenderMotionOptions,
   RenderProgressCallback,
   RenderResult,
+  AnimateStillOptions,
+  SvdModelInfo,
 } from './adapter';
 import { resolveSeed } from './adapter';
 import { buildStreamingPreview } from './preview';
@@ -175,6 +177,26 @@ export class MockAdapter implements BackendAdapter {
       extension: last!.extension,
       fallback: true,
       fallbackReason: `Mock backend: procedural preview only (${frames} ${opts.format.toUpperCase()} frames not encoded). Use the local Diffusers bridge to render a real motion clip.`,
+    };
+  }
+
+  async listSvdModels(): Promise<SvdModelInfo[]> {
+    return [];
+  }
+
+  async animateStill(_imageBase64: string, opts: AnimateStillOptions): Promise<RenderResult> {
+    // The built-in mock backend cannot run SVD — return an explicitly-labeled clip.
+    const w = 512, h = 288;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#1a1030"/><circle cx="${w / 2}" cy="${h / 2}" r="40" fill="#7a5cff"><animate attributeName="r" values="30;50;30" dur="2s" repeatCount="indefinite"/></circle><text x="${w / 2}" y="${h - 16}" fill="#cbb8ff" font-family="sans-serif" font-size="13" text-anchor="middle">mock - SVD needs a real backend + model</text></svg>`;
+    const dataUrl = `data:image/svg+xml;base64,${btoa(svg)}`;
+    return {
+      dataUrl,
+      mediaType: 'video',
+      mimeType: 'image/svg+xml',
+      extension: 'svg',
+      seed: opts.seed,
+      fallback: true,
+      fallbackReason: 'Mock backend can’t run SVD — connect a real backend and add a Stable Video Diffusion model.',
     };
   }
 

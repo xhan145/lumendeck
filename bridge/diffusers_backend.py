@@ -305,11 +305,13 @@ def _animate(job, state, report):
     key = "anim:" + _ref_key(model_ref)
     if state.get("anim_key") != key or state.get("anim_pipe") is None:
         report({"phase": "loading"})
-        # Free the still-image pipe (and any old animate pipe) to conserve VRAM.
+        # Free the still-image pipe (and any old animate/SVD pipe) to conserve VRAM.
         state["pipe"] = None
         state["key"] = None
         state["controlnets"] = {}
         state["anim_pipe"] = None
+        state["svd_pipe"] = None
+        state["svd_key"] = None
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -366,6 +368,152 @@ def _animate(job, state, report):
         "extension": "gif",
         "engine": "animatediff",
     }
+
+
+def _svd_target_size(width, height):
+    try:
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        return (1024, 576)
+    if w <= 0 or h <= 0:
+        return (1024, 576)
+    return (576, 1024) if h > w else (1024, 576)
+
+
+def _clamp_svd(job):
+    def _i(key, default, lo, hi):
+        try:
+            v = int(job.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        return max(lo, min(hi, v))
+    try:
+        naug = float(job.get("noise_aug_strength", 0.02))
+    except (TypeError, ValueError):
+        naug = 0.02
+    return {
+        "num_frames": _i("num_frames", 14, 8, 25),
+        "fps": _i("fps", 7, 1, 30),
+        "motion_bucket_id": _i("motion_bucket_id", 127, 1, 255),
+        "noise_aug_strength": max(0.0, min(1.0, naug)),
+        "decode_chunk_size": _i("decode_chunk_size", 2, 1, 8),
+        "num_inference_steps": _i("num_inference_steps", 25, 1, 50),
+        "seed": _i("seed", 0, 0, 2**31 - 1),
+    }
+
+
+def _load_svd_pipe(model_path):
+    import torch
+    from diffusers import StableVideoDiffusionPipeline
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    if os.path.isdir(model_path):
+        try:
+            pipe = StableVideoDiffusionPipeline.from_pretrained(model_path, torch_dtype=dtype, variant="fp16")
+        except Exception:
+            pipe = StableVideoDiffusionPipeline.from_pretrained(model_path, torch_dtype=dtype)
+    else:
+        pipe = StableVideoDiffusionPipeline.from_single_file(model_path, torch_dtype=dtype)
+    for enable in ("enable_vae_slicing", "enable_vae_tiling", "enable_attention_slicing"):
+        try:
+            getattr(pipe, enable)()
+        except Exception:
+            pass
+    if torch.cuda.is_available():
+        try:
+            pipe.enable_model_cpu_offload()
+        except Exception:
+            pipe = pipe.to("cuda")
+    else:
+        pipe = pipe.to("cpu")
+    return pipe
+
+
+def _animate_svd(job, state, report):
+    """Real image->video via Stable Video Diffusion, encoded H.264. Loud on OOM/missing."""
+    import base64 as _b64
+    import io as _io
+    import torch
+    from PIL import Image
+    model_path = job.get("modelPath")
+    if not model_path or not os.path.exists(model_path):
+        raise RuntimeError("No SVD model found. Put a Stable Video Diffusion model in your models folder.")
+    key = "svd:" + str(model_path)
+    if state.get("svd_key") != key or state.get("svd_pipe") is None:
+        report({"phase": "loading"})
+        state["pipe"] = None
+        state["key"] = None
+        state["anim_pipe"] = None
+        state["anim_key"] = None
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        state["svd_pipe"] = _load_svd_pipe(model_path)
+        state["svd_key"] = key
+    pipe = state["svd_pipe"]
+
+    raw = job.get("image", "")
+    if "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        image = Image.open(_io.BytesIO(_b64.b64decode(raw))).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(f"Could not decode the input image: {exc}")
+    tw, th = _svd_target_size(image.width, image.height)
+    src_ar, dst_ar = image.width / image.height, tw / th
+    if src_ar > dst_ar:
+        nw = int(image.height * dst_ar)
+        left = (image.width - nw) // 2
+        image = image.crop((left, 0, left + nw, image.height))
+    else:
+        nh = int(image.width / dst_ar)
+        top = (image.height - nh) // 2
+        image = image.crop((0, top, image.width, top + nh))
+    image = image.resize((tw, th))
+
+    p = _clamp_svd(job)
+    gen_device = "cuda" if torch.cuda.is_available() else "cpu"
+    generator = torch.Generator(device=gen_device).manual_seed(p["seed"])
+    # Progress is per DENOISING step (num_inference_steps), not per output frame.
+    steps = p["num_inference_steps"]
+    report({"phase": "rendering", "step": 0, "steps": steps})
+
+    def on_step(_pipe, step, _timestep, callback_kwargs):
+        report({"phase": "rendering", "step": int(step) + 1, "steps": steps})
+        return callback_kwargs
+
+    kwargs = dict(
+        image=image,
+        # Pass the cropped target size so the OUTPUT orientation matches the still —
+        # SVD defaults to 1024x576 and would otherwise stretch portrait inputs to landscape.
+        height=th,
+        width=tw,
+        num_frames=p["num_frames"],
+        num_inference_steps=steps,
+        motion_bucket_id=p["motion_bucket_id"],
+        noise_aug_strength=p["noise_aug_strength"],
+        decode_chunk_size=p["decode_chunk_size"],
+        generator=generator,
+    )
+    try:
+        try:
+            result = pipe(**kwargs, callback_on_step_end=on_step)
+        except TypeError:
+            result = pipe(**kwargs)
+    except torch.cuda.OutOfMemoryError:
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        state["svd_pipe"] = None
+        state["svd_key"] = None
+        raise RuntimeError("Not enough VRAM for SVD at these settings - try fewer frames or a smaller decode chunk.")
+    frames = result.frames[0]
+    report({"phase": "decoding"})
+    encoded = _encode_sequence([f.convert("RGB") for f in frames], p["fps"], "mp4", loop=False)
+    report({"phase": "done"})
+    return {**encoded, "seed": p["seed"], "frameCount": len(frames), "fps": p["fps"], "engine": "svd"}
 
 
 _CONTROL_TYPES = ("canny", "depth", "pose", "scribble", "lineart", "softedge", "tile")
@@ -488,6 +636,16 @@ def _render_one_image(job, state, report):
             state["pipe"] = None
             state["lora_key"] = None
             state["controlnets"] = {}
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        # Switching back to still renders from SVD: evict the resident SVD pipe too
+        # (it holds several GB and would otherwise leak on an 8GB card).
+        if state.get("svd_pipe") is not None:
+            state["svd_pipe"] = None
+            state["svd_key"] = None
             try:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -1105,6 +1263,17 @@ def serve():
                 out = do_generate(payload, state)
             elif command == "render_sequence":
                 out = do_render_sequence(payload, state)
+            elif command == "animate_svd":
+                _svd_pp = payload.get("progressPath")
+                def _svd_report(data, _p=_svd_pp):
+                    if not _p:
+                        return
+                    try:
+                        with open(_p, "w", encoding="utf-8") as fh:
+                            json.dump(data, fh)
+                    except OSError:
+                        pass
+                out = _animate_svd(payload, state, _svd_report)
             elif command == "evolve_step":
                 out = do_evolve_step(payload, state)
             elif command == "preprocess":
@@ -1143,6 +1312,10 @@ def main():
         out = do_render_sequence(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
         print(json.dumps(out))
         return
+    if command == "animate_svd":
+        out = _animate_svd(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None}, lambda _d: None)
+        print(json.dumps(out))
+        return
     if command == "evolve_step":
         out = do_evolve_step(json.load(sys.stdin), {"pipe": None, "key": None, "lora_key": None})
         print(json.dumps(out))
@@ -1160,6 +1333,90 @@ if __name__ == "__main__":
 
 def model_id() -> str:
     return _MODEL_ID
+
+
+def svd_target_size(width, height):
+    """SVD is trained only at 1024x576 (landscape) and 576x1024 (portrait). Snap by
+    orientation; square/degenerate defaults to landscape."""
+    try:
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        return (1024, 576)
+    if w <= 0 or h <= 0:
+        return (1024, 576)
+    return (576, 1024) if h > w else (1024, 576)
+
+
+def clamp_svd_params(job):
+    """Clamp SVD params to safe ranges with conservative 8GB-friendly defaults."""
+    def _i(key, default, lo, hi):
+        try:
+            v = int(job.get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        return max(lo, min(hi, v))
+    try:
+        naug = float(job.get("noise_aug_strength", 0.02))
+    except (TypeError, ValueError):
+        naug = 0.02
+    naug = max(0.0, min(1.0, naug))
+    return {
+        "num_frames": _i("num_frames", 14, 8, 25),
+        "fps": _i("fps", 7, 1, 30),
+        "motion_bucket_id": _i("motion_bucket_id", 127, 1, 255),
+        "noise_aug_strength": naug,
+        "decode_chunk_size": _i("decode_chunk_size", 2, 1, 8),
+        "num_inference_steps": _i("num_inference_steps", 25, 1, 50),
+        "seed": _i("seed", 0, 0, 2**31 - 1),
+    }
+
+
+def is_svd_model(path):
+    """True for an SVD diffusers folder (model_index.json class) or an svd*.safetensors."""
+    try:
+        if os.path.isdir(path):
+            idx = os.path.join(path, "model_index.json")
+            if os.path.isfile(idx):
+                with open(idx, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                # A malformed model_index.json can parse to a non-dict; never crash the scan.
+                return isinstance(data, dict) and data.get("_class_name") == "StableVideoDiffusionPipeline"
+            return False
+        name = os.path.basename(path).lower()
+        if not name.endswith(".safetensors"):
+            return False
+        return name.startswith("svd") or ("svd" in name and "img2vid" in name)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+
+
+def find_svd_models(models_dir):
+    """Discover SVD models under models_dir: any diffusers folder (model_index.json ==
+    SVD) or any svd*.safetensors, RECURSIVELY (matches how discover_model_dir walks, so
+    the common ComfyUI/Fooocus `models/checkpoints/svd_xt.safetensors` layout is found).
+    Tolerant of None / a missing dir (returns [])."""
+    out = []
+    if not models_dir:
+        return out
+    seen = set()
+    try:
+        walker = os.walk(models_dir)
+    except (OSError, TypeError):
+        return out
+    for root, dirs, files in walker:
+        # A diffusers SVD folder is identified by its own model_index.json.
+        if is_svd_model(root) and root not in seen:
+            seen.add(root)
+            out.append({"id": os.path.basename(root) or root, "name": os.path.basename(root) or root, "path": root, "kind": "folder"})
+            dirs[:] = []  # don't descend into a matched diffusers folder
+            continue
+        for name in files:
+            full = os.path.join(root, name)
+            if is_svd_model(full) and full not in seen:
+                seen.add(full)
+                out.append({"id": name, "name": name, "path": full, "kind": "file"})
+    out.sort(key=lambda m: m["path"])
+    return out
 
 
 def _encode_sequence(frames, fps, fmt="mp4", loop=True):
@@ -1956,6 +2213,26 @@ def render_motion(payload: dict) -> dict:
         if "worker exited unexpectedly" not in str(exc).lower():
             raise
         out = _worker("render_sequence", worker_payload, timeout=3600)
+    if isinstance(out, dict) and out.get("error"):
+        raise RuntimeError(out["error"])
+    return out
+
+
+def animate_svd(payload: dict) -> dict:
+    """Image->video via SVD on the resident worker. Raises loudly on error."""
+    status = model_status()
+    if not status.get("dependenciesReady"):
+        raise RuntimeError("Diffusers runtime is not installed yet. Use Install runtime + model first.")
+    if not payload.get("image"):
+        raise RuntimeError("animate_svd needs an 'image'")
+    if not payload.get("modelPath"):
+        raise RuntimeError("No SVD model selected. Put a Stable Video Diffusion model in your models folder.")
+    try:
+        out = _persistent_worker.request("animate_svd", payload, timeout=3600)
+    except RuntimeError as exc:
+        if "worker exited unexpectedly" not in str(exc).lower():
+            raise
+        out = _worker("animate_svd", payload, timeout=3600)
     if isinstance(out, dict) and out.get("error"):
         raise RuntimeError(out["error"])
     return out

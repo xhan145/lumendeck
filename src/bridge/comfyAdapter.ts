@@ -6,6 +6,8 @@ import type {
   RenderMotionOptions,
   RenderProgressCallback,
   RenderResult,
+  AnimateStillOptions,
+  SvdModelInfo,
 } from './adapter';
 import { resolveSeed } from './adapter';
 import { buildStreamingPreview } from './preview';
@@ -154,6 +156,14 @@ export class ComfyAdapter implements BackendAdapter {
    */
   async renderMotion(_jobs: RenderJob[], _opts: RenderMotionOptions, _onProgress?: RenderProgressCallback): Promise<RenderResult> {
     throw new Error('Motion-clip rendering is not supported on the ComfyUI backend. Use the local Diffusers bridge or the Mock backend to render a motion clip.');
+  }
+
+  async listSvdModels(): Promise<SvdModelInfo[]> {
+    return [];
+  }
+
+  async animateStill(_imageBase64: string, _opts: AnimateStillOptions): Promise<RenderResult> {
+    throw new Error('SVD animate is not supported on the ComfyUI backend yet.');
   }
 
   /**
