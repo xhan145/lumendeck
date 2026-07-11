@@ -46,6 +46,12 @@ export interface AppSettings {
    */
   palettePinned?: boolean;
   /**
+   * Whether the app chrome (topbar + NavRail) auto-hides after idle. Optional
+   * and additive: when unset, autohide is ON (the glass-cinema default);
+   * `false` pins the chrome permanently.
+   */
+  chromeAutohide?: boolean;
+  /**
    * 3D node rendering style (gradient orbs vs the v0.12 full cards). Optional
    * and additive: when unset, Graph3DView defaults to 'orbs'.
    */
@@ -110,6 +116,7 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
     },
     graphMode: settings?.graphMode === '2d' || settings?.graphMode === '3d' ? settings.graphMode : undefined,
     palettePinned: typeof settings?.palettePinned === 'boolean' ? settings.palettePinned : undefined,
+    chromeAutohide: typeof settings?.chromeAutohide === 'boolean' ? settings.chromeAutohide : undefined,
     graph3dStyle: settings?.graph3dStyle === 'orbs' || settings?.graph3dStyle === 'cards' ? settings.graph3dStyle : undefined,
     graph3dEffects:
       settings?.graph3dEffects === 'off' ||
