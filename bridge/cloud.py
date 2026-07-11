@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import json
+import random
 import time
 import urllib.error
 import urllib.request
@@ -88,6 +89,13 @@ def _prompt_of(job):
     return str(job.get("resolvedPrompt") or job.get("prompt") or "")
 
 
+def _pick_seed(job):
+    """The seed actually sent to a seed-capable provider: the job's fixed seed,
+    or a fresh random 32-bit one when the job asked for random (-1)."""
+    seed = int(job.get("seed", -1))
+    return seed if seed >= 0 else random.getrandbits(32)
+
+
 def _multipart(fields):
     """Hand-rolled multipart/form-data (text fields only). Returns (body, content_type)."""
     boundary = "lumendeck-cloud-7f2a9c1b"
@@ -107,21 +115,39 @@ def _poll_progress(started, deadline):
     return min(0.9, 0.1 + 0.8 * (elapsed / max(1.0, deadline)))
 
 
-def _image_result(provider_id, url, headers, job):
-    raw = _http_bytes(provider_id, url, headers=headers)
+def _sniff_image(raw, url):
+    """(mime, extension) from the downloaded bytes' magic numbers — providers
+    return webp/jpg regardless of what the URL suggests, so never trust the
+    extension alone. Falls back to the URL hint, then PNG."""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png", "png"
+    if raw[:2] == b"\xff\xd8":
+        return "image/jpeg", "jpg"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp", "webp"
+    if raw[:4] in (b"GIF8",):
+        return "image/gif", "gif"
     clean = url.split("?")[0].lower()
-    mime = "image/jpeg" if clean.endswith((".jpg", ".jpeg")) else "image/png"
-    ext = "jpg" if mime == "image/jpeg" else "png"
+    if clean.endswith((".jpg", ".jpeg")):
+        return "image/jpeg", "jpg"
+    if clean.endswith(".webp"):
+        return "image/webp", "webp"
+    return "image/png", "png"
+
+
+def _image_result(provider_id, url, headers, job, seed=None):
+    raw = _http_bytes(provider_id, url, headers=headers)
+    mime, ext = _sniff_image(raw, url)
     return {"image_base64": base64.b64encode(raw).decode("ascii"),
-            "seed": str(job.get("seed", -1)), "mediaType": "image",
-            "mimeType": mime, "extension": ext}
+            "seed": str(seed if seed is not None else job.get("seed", -1)),
+            "mediaType": "image", "mimeType": mime, "extension": ext}
 
 
-def _video_result(provider_id, url, headers, job):
+def _video_result(provider_id, url, headers, job, seed=None):
     raw = _http_bytes(provider_id, url, headers=headers)
     return {"video_base64": base64.b64encode(raw).decode("ascii"),
             "mediaType": "video", "mimeType": "video/mp4", "extension": "mp4",
-            "seed": str(job.get("seed", -1))}
+            "seed": str(seed if seed is not None else job.get("seed", -1))}
 
 
 class CloudProvider:
@@ -220,9 +246,8 @@ class StabilityProvider(CloudProvider):
                   "aspect_ratio": _stability_aspect(int(job.get("width", 1024)), int(job.get("height", 1024)))}
         if job.get("negativePrompt"):
             fields["negative_prompt"] = str(job["negativePrompt"])
-        seed = int(job.get("seed", -1))
-        if seed >= 0:
-            fields["seed"] = seed
+        seed = _pick_seed(job)
+        fields["seed"] = seed
         if endpoint == "sd3":
             fields["model"] = model
         body, content_type = _multipart(fields)
@@ -250,13 +275,12 @@ class FalProvider(CloudProvider):
     def generate(self, job, model, key, on_progress):
         headers = {"Authorization": f"Key {key}"}
         is_video = self._model_kind(model) == "video"
+        seed = _pick_seed(job)
         payload = {"prompt": _prompt_of(job)}
         if not is_video:
             payload["image_size"] = {"width": int(job.get("width", 1024)),
                                      "height": int(job.get("height", 1024))}
-            seed = int(job.get("seed", -1))
-            if seed >= 0:
-                payload["seed"] = seed
+            payload["seed"] = seed
             if job.get("negativePrompt"):
                 payload["negative_prompt"] = str(job["negativePrompt"])
         submitted = _http_json(self.id, f"https://queue.fal.run/{model}", method="POST",
@@ -280,24 +304,33 @@ class FalProvider(CloudProvider):
                 raise CloudError(self.id, f"timed out after {deadline}s waiting for the queue")
             _sleep(POLL_INTERVAL_S)
         result = _http_json(self.id, base_url, headers=headers)
+        # Result URLs are public CDN links — never send the API key to that host.
         if is_video:
             url = (result.get("video") or {}).get("url")
             if not url:
                 raise CloudError(self.id, f"no video url in result: {json.dumps(result)[:200]}")
-            return _video_result(self.id, url, headers, job)
+            # The video payload sends no seed, so report the job's own seed honestly.
+            return _video_result(self.id, url, {}, job)
         images = result.get("images") or []
         url = images[0].get("url") if images else None
         if not url:
             raise CloudError(self.id, f"no image url in result: {json.dumps(result)[:200]}")
-        return _image_result(self.id, url, headers, job)
+        return _image_result(self.id, url, {}, job, seed=seed)
 
 
-# Extra inputs each curated Replicate model accepts beyond `prompt` (Replicate
-# rejects unknown input keys with a 422, so this list is deliberately per-model).
+# Extra job-derived inputs each curated Replicate model accepts beyond `prompt`
+# (Replicate rejects unknown input keys with a 422, so this is per-model), plus
+# static inputs always sent (e.g. force PNG — flux/sd3.5 default to webp).
+# NOTE: only OFFICIAL models work on the /v1/models/{model}/predictions route;
+# version-pinned community models would need POST /v1/predictions + a hash.
 _REPLICATE_EXTRAS = {
     "black-forest-labs/flux-dev": ("seed",),
-    "stability-ai/sdxl": ("seed", "negative_prompt", "width", "height"),
+    "stability-ai/stable-diffusion-3.5-large": ("seed",),
     "minimax/video-01": (),
+}
+_REPLICATE_STATIC = {
+    "black-forest-labs/flux-dev": {"output_format": "png"},
+    "stability-ai/stable-diffusion-3.5-large": {"output_format": "png"},
 }
 
 
@@ -309,7 +342,7 @@ class ReplicateProvider(CloudProvider):
     def models(self):
         return [
             {"id": "black-forest-labs/flux-dev", "label": "FLUX.1 dev", "kind": "image"},
-            {"id": "stability-ai/sdxl", "label": "SDXL", "kind": "image"},
+            {"id": "stability-ai/stable-diffusion-3.5-large", "label": "SD 3.5 Large", "kind": "image"},
             {"id": "minimax/video-01", "label": "MiniMax Video-01", "kind": "video"},
         ]
 
@@ -318,8 +351,9 @@ class ReplicateProvider(CloudProvider):
         is_video = self._model_kind(model) == "video"
         extras = _REPLICATE_EXTRAS.get(model, ())
         inputs = {"prompt": _prompt_of(job)}
-        seed = int(job.get("seed", -1))
-        if "seed" in extras and seed >= 0:
+        inputs.update(_REPLICATE_STATIC.get(model, {}))
+        seed = _pick_seed(job)
+        if "seed" in extras:
             inputs["seed"] = seed
         if "negative_prompt" in extras and job.get("negativePrompt"):
             inputs["negative_prompt"] = str(job["negativePrompt"])
@@ -352,8 +386,9 @@ class ReplicateProvider(CloudProvider):
         if not isinstance(url, str) or not url:
             raise CloudError(self.id, f"no output url in prediction: {json.dumps(info)[:200]}")
         if url.split("?")[0].lower().endswith((".mp4", ".webm")) or is_video:
+            # Video models take no seed; report the job's own seed honestly.
             return _video_result(self.id, url, {}, job)
-        return _image_result(self.id, url, {}, job)
+        return _image_result(self.id, url, {}, job, seed=seed if "seed" in extras else None)
 
 
 def _runway_ratio(width, height, model):
@@ -385,13 +420,17 @@ class RunwayProvider(CloudProvider):
         ratio = _runway_ratio(int(job.get("width", 1280)), int(job.get("height", 720)), model)
         init_image = str(job.get("initImage") or "")
         prompt_text = _prompt_of(job)[:1000]
-        if init_image:
-            endpoint = "https://api.dev.runwayml.com/v1/image_to_video"
-            body = {"model": model, "promptImage": _as_data_url(init_image),
-                    "promptText": prompt_text, "ratio": ratio, "duration": 5}
-        else:
-            endpoint = "https://api.dev.runwayml.com/v1/text_to_video"
-            body = {"model": model, "promptText": prompt_text, "ratio": ratio, "duration": 5}
+        if not init_image:
+            # Both curated models are image-to-video ONLY (Runway's text_to_video
+            # endpoint accepts a different model family) — fail loud BEFORE any
+            # HTTP call instead of letting the API 400 with a raw validation error.
+            raise CloudError(self.id, (
+                f"{model} needs a starting image (image-to-video). Attach an image on a "
+                "Load Image capsule, or pick an image provider for text-only prompts."
+            ))
+        endpoint = "https://api.dev.runwayml.com/v1/image_to_video"
+        body = {"model": model, "promptImage": _as_data_url(init_image),
+                "promptText": prompt_text, "ratio": ratio, "duration": 5}
         task = _http_json(self.id, endpoint, method="POST", headers=headers, body=body)
         task_id = task.get("id")
         if not task_id:

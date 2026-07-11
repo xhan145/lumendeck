@@ -195,17 +195,30 @@ def test_replicate_official_model_route_and_curated_inputs():
     originals = _patched(json_stub=stub, bytes_stub=BytesRecorder(b"REP"))
     try:
         result = PROVIDERS["replicate"].generate(
-            _job(negativePrompt="ugly"), "stability-ai/sdxl", "r8-key", lambda p: None)
+            _job(negativePrompt="ugly"), "stability-ai/stable-diffusion-3.5-large", "r8-key", lambda p: None)
     finally:
         _restore(originals)
     create = stub.calls[0]
-    assert create["url"] == "https://api.replicate.com/v1/models/stability-ai/sdxl/predictions"
+    assert create["url"] == "https://api.replicate.com/v1/models/stability-ai/stable-diffusion-3.5-large/predictions"
     assert create["headers"]["Authorization"] == "Bearer r8-key"
     assert create["body"]["input"]["prompt"] == "a neon cat"
-    assert create["body"]["input"]["negative_prompt"] == "ugly"
     assert create["body"]["input"]["seed"] == 7
+    assert create["body"]["input"]["output_format"] == "png"
+    # sd3.5-large official route accepts no negative_prompt/width inputs
+    assert "negative_prompt" not in create["body"]["input"]
+    assert "width" not in create["body"]["input"]
     assert stub.calls[1]["url"] == "https://api.replicate.com/v1/predictions/p1"
     assert result["image_base64"] == base64.b64encode(b"REP").decode("ascii")
+
+
+def test_replicate_curated_models_are_official_route_only():
+    # /v1/models/{model}/predictions only works for OFFICIAL models; a curated
+    # version-pinned community model would 404 on every render. Pin the list.
+    assert {m["id"] for m in PROVIDERS["replicate"].models()} == {
+        "black-forest-labs/flux-dev",
+        "stability-ai/stable-diffusion-3.5-large",
+        "minimax/video-01",
+    }
 
 
 def test_replicate_flux_omits_unsupported_inputs():
@@ -218,6 +231,7 @@ def test_replicate_flux_omits_unsupported_inputs():
     inputs = stub.calls[0]["body"]["input"]
     assert "negative_prompt" not in inputs and "width" not in inputs
     assert inputs["seed"] == 7
+    assert inputs["output_format"] == "png"  # flux defaults to webp otherwise
 
 
 def test_replicate_failed_prediction_raises():
@@ -263,15 +277,51 @@ def test_runway_image_to_video_uses_prompt_image_and_polls():
     assert result["mimeType"] == "video/mp4"
 
 
-def test_runway_text_to_video_without_init_image():
-    stub = JsonRecorder([{"id": "t2"}, {"status": "SUCCEEDED", "output": ["https://cdn.run/v2.mp4"]}])
-    originals = _patched(json_stub=stub, bytes_stub=BytesRecorder(b"V"))
+def test_runway_without_init_image_raises_before_any_http():
+    # Both curated Runway models are image-to-video ONLY; a text-only job must
+    # fail loud with guidance BEFORE spending an HTTP call (the API would 400).
+    stub = JsonRecorder([])
+    originals = _patched(json_stub=stub, bytes_stub=BytesRecorder(b""))
     try:
-        PROVIDERS["runway"].generate(_job(width=720, height=1280), "gen3a_turbo", "k", lambda p: None)
+        try:
+            PROVIDERS["runway"].generate(_job(width=720, height=1280), "gen3a_turbo", "k", lambda p: None)
+            assert False, "expected CloudError"
+        except CloudError as exc:
+            assert "starting image" in str(exc)
     finally:
         _restore(originals)
-    assert stub.calls[0]["url"] == "https://api.dev.runwayml.com/v1/text_to_video"
-    assert stub.calls[0]["body"]["ratio"] == "768:1280"
+    assert stub.calls == []  # no request was made
+
+
+def test_runway_ratio_mapping():
+    assert cloud._runway_ratio(1280, 768, "gen3a_turbo") == "1280:768"
+    assert cloud._runway_ratio(720, 1280, "gen3a_turbo") == "768:1280"
+    assert cloud._runway_ratio(1280, 720, "gen4_turbo") == "1280:720"
+    assert cloud._runway_ratio(960, 960, "gen4_turbo") == "960:960"
+
+
+def test_image_result_sniffs_magic_bytes_over_url_extension():
+    webp = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 8
+    stub = BytesRecorder(webp)
+    originals = _patched(bytes_stub=stub)
+    try:
+        result = cloud._image_result("test", "https://cdn.x/out.png", {}, _job())
+    finally:
+        _restore(originals)
+    assert result["mimeType"] == "image/webp"
+    assert result["extension"] == "webp"
+
+
+def test_random_seed_resolves_to_real_seed_for_seed_capable_providers():
+    stub = BytesRecorder(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+    originals = _patched(bytes_stub=stub)
+    try:
+        result = PROVIDERS["stability"].generate(_job(seed=-1), "core", "k", lambda p: None)
+    finally:
+        _restore(originals)
+    assert b'name="seed"' in stub.calls[0]["body"]
+    assert result["seed"] != "-1"
+    assert int(result["seed"]) >= 0
 
 
 def test_poll_timeout_raises_cloud_error():
@@ -320,10 +370,14 @@ if __name__ == "__main__":
     test_fal_video_model_returns_video_contract()
     test_fal_failed_status_raises_cloud_error()
     test_replicate_official_model_route_and_curated_inputs()
+    test_replicate_curated_models_are_official_route_only()
     test_replicate_flux_omits_unsupported_inputs()
     test_replicate_failed_prediction_raises()
     test_runway_image_to_video_uses_prompt_image_and_polls()
-    test_runway_text_to_video_without_init_image()
+    test_runway_without_init_image_raises_before_any_http()
+    test_runway_ratio_mapping()
+    test_image_result_sniffs_magic_bytes_over_url_extension()
+    test_random_seed_resolves_to_real_seed_for_seed_capable_providers()
     test_poll_timeout_raises_cloud_error()
     test_http_helper_error_propagates_as_cloud_error()
     print("bridge cloud: all checks passed")
