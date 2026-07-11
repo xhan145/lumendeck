@@ -56,6 +56,17 @@ export interface BridgeModelStatus {
   cacheDir: string;
   installCommand: string;
   installable?: boolean;
+  /**
+   * Hardware detection fields (additive, best-effort). Populated by the worker's
+   * status() VRAM probe; all optional so older bridges and detection failures
+   * still yield a valid status. Never blocks launch.
+   */
+  gpuName?: string;
+  totalVramMb?: number;
+  freeVramMb?: number;
+  computeCapability?: string;
+  cudaInitFailed?: boolean;
+  bf16Supported?: boolean;
   managedRuntime?: {
     path?: string;
     python?: string;

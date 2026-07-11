@@ -1,5 +1,6 @@
 import type { ControlSlot, LoraSlot, Workflow } from '../core/types';
 import type { PipelineTimings } from '../turboForge/types';
+import type { MemoryProfileDirective } from '../core/hardware/optimizations';
 import { findNode } from '../core/workflow';
 import { expandWildcards, hasWildcards, mulberry32, type UsedWildcard, type WildcardSet } from '../core/prompt/wildcards';
 
@@ -44,6 +45,14 @@ export interface RenderJob {
   resolvedPrompt: string;
   /** wildcards resolved for this job (empty when none were present). */
   usedWildcards: UsedWildcard[];
+  /**
+   * Optional low-VRAM directive from the active hardware profile. Additive: when
+   * absent (or `lowVram:false`) the bridge worker takes its unchanged legacy path,
+   * so users who did not select a constrained profile are byte-for-byte identical.
+   * Only `lowVram:true` (the GTX 1650 4GB profile / a safe retry) switches the
+   * worker to CPU offload + explicit precision.
+   */
+  memoryProfile?: MemoryProfileDirective;
 }
 
 export interface RenderResult {

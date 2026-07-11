@@ -1,6 +1,7 @@
 import type { ViewId } from './store';
 import type { TurboPresetId } from '../turboForge/types';
 import type { RenderBackendId } from '../turboForge/backends/backendSettings';
+import { isHardwareProfileId, type HardwareProfileId } from '../core/hardware/profiles';
 
 export type ThemeMode = 'dark' | 'system';
 export type StartupBehavior = 'guide' | 'last-view' | 'controls';
@@ -19,6 +20,14 @@ export interface AppSettings {
   cacheDirectory: string;
   preferredBackend: RenderBackendId;
   vramSafetyMode: VramSafetyMode;
+  /**
+   * Selected hardware profile (drives low-VRAM behavior). Separate from the
+   * *effective* runtime profile, which `auto` resolves via hardware detection.
+   * Additive: state persisted before this feature had no field, so a missing
+   * value sanitizes to 'auto' and preserves current behavior. Unknown values
+   * fall back to 'auto' rather than crashing startup.
+   */
+  hardwareProfile: HardwareProfileId;
   maxConcurrentJobs: number;
   turboAccelerationProfile: TurboPresetId;
   compileCacheEnabled: boolean;
@@ -75,6 +84,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   cacheDirectory: '',
   preferredBackend: 'bridge',
   vramSafetyMode: 'balanced',
+  hardwareProfile: 'auto',
   maxConcurrentJobs: 1,
   turboAccelerationProfile: 'fast',
   compileCacheEnabled: true,
@@ -101,6 +111,9 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
       : 'guide',
     preferredBackend: settings?.preferredBackend ?? DEFAULT_APP_SETTINGS.preferredBackend,
     vramSafetyMode: settings?.vramSafetyMode ?? DEFAULT_APP_SETTINGS.vramSafetyMode,
+    hardwareProfile: isHardwareProfileId(settings?.hardwareProfile)
+      ? settings.hardwareProfile
+      : DEFAULT_APP_SETTINGS.hardwareProfile,
     maxConcurrentJobs: Math.max(1, Math.min(4, Number(settings?.maxConcurrentJobs ?? DEFAULT_APP_SETTINGS.maxConcurrentJobs))),
     turboAccelerationProfile: settings?.turboAccelerationProfile ?? DEFAULT_APP_SETTINGS.turboAccelerationProfile,
     compileCacheEnabled: settings?.compileCacheEnabled ?? DEFAULT_APP_SETTINGS.compileCacheEnabled,

@@ -45,7 +45,11 @@ function socketTypesCompatible(out: string, input: string): boolean {
     || (input === 'lora_stack' && out === 'model');
 }
 
-export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
+export function checkHealth(
+  wf: Workflow,
+  shelf: ModelAsset[],
+  vramBudgetGB: number = VRAM_BUDGET_GB,
+): HealthIssue[] {
   const issues: HealthIssue[] = [];
   let n = 0;
   const add = (issue: Omit<HealthIssue, 'id'>) => issues.push({ id: `hi_${++n}`, ...issue });
@@ -200,11 +204,11 @@ export function checkHealth(wf: Workflow, shelf: ModelAsset[]): HealthIssue[] {
     }
     if (checkpoint) {
       const vram = estimateVramGB(width, height, batch, checkpoint.family);
-      if (vram > VRAM_BUDGET_GB) {
+      if (vram > vramBudgetGB) {
         add({
           severity: 'warning',
           code: 'vram-risk',
-          message: `Estimated ${vram} GB VRAM for ${checkpoint.family} at ${width}×${height}×${batch} — over the ${VRAM_BUDGET_GB} GB budget.`,
+          message: `Estimated ${vram} GB VRAM for ${checkpoint.family} at ${width}×${height}×${batch} — over the ${vramBudgetGB} GB budget.`,
           nodeId: canvasNode.id,
         });
       }
