@@ -96,10 +96,25 @@ describe('buildLumenConstellation', () => {
     });
     const gallery = withCollections.children!.find((c) => c.id === 'gallery')!;
     expect(gallery.children!.some((c) => c.id === 'collection-c1')).toBe(true);
+    // 12 total − 7 categorized → the 5 null-collection renders surface honestly.
+    const uncat = gallery.children!.find((c) => c.id === 'gallery-uncategorized')!;
+    expect(uncat.description).toContain('5');
+    expect(gallery.children!.some((c) => c.id === 'gallery-frontier')).toBe(false);
     expect(gallery.status).toBe('active');
 
     const empty = buildLumenConstellation().children!.find((c) => c.id === 'gallery')!;
     expect(empty.children!.length).toBeGreaterThan(0); // frontier placeholder, never bare
+    expect(empty.children![0].id).toBe('gallery-frontier');
     expect(empty.status).toBe('forming');
+  });
+
+  it('never shows the first-render placeholder when uncategorized renders exist (Codex P2)', () => {
+    // Fresh user: first render made, no collections yet (collectionId null default).
+    const gallery = buildLumenConstellation({ galleryCount: 1, collections: [] })
+      .children!.find((c) => c.id === 'gallery')!;
+    expect(gallery.children!.some((c) => c.id === 'gallery-frontier')).toBe(false);
+    const uncat = gallery.children!.find((c) => c.id === 'gallery-uncategorized')!;
+    expect(uncat.description).toContain('1 render');
+    expect(gallery.status).toBe('active');
   });
 });

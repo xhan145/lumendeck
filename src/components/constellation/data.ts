@@ -168,7 +168,23 @@ function galleryBranch(input: ConstellationDataInput, resolve: (c: string) => st
     status: 'active' as const,
     strength: clamp01(0.3 + c.count / 24),
   }));
-  if (children.length === 0) {
+  // Renders default to collectionId null (and deleting a collection re-files its
+  // renders as null) — surface them honestly instead of pretending nothing exists.
+  const categorized = collections.reduce((sum, c) => sum + c.count, 0);
+  const uncategorized = Math.max(0, total - categorized);
+  if (uncategorized > 0) {
+    children.push({
+      id: 'gallery-uncategorized',
+      label: 'Uncategorized',
+      description: `${uncategorized} ${uncategorized === 1 ? 'render' : 'renders'} not yet filed into a collection.`,
+      colors: [mint, cyan],
+      type: 'evidence',
+      status: 'active',
+      strength: clamp01(0.3 + uncategorized / 24),
+    });
+  }
+  // The frontier placeholder appears only when there is truly nothing yet.
+  if (total === 0 && children.length === 0) {
     children.push({
       id: 'gallery-frontier',
       label: 'Awaiting First Render',
