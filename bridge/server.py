@@ -100,11 +100,11 @@ def _read_progress(job_id: str) -> dict:
 
 
 def _prune_progress_files(max_age_s: int = 3600) -> None:
-    """Drop stale progress files so temp doesn't accumulate them."""
+    """Drop stale progress + parked cloud-result files so temp doesn't accumulate them."""
     try:
         now = time.time()
         for name in os.listdir(tempfile.gettempdir()):
-            if not name.startswith("lumendeck-progress-"):
+            if not name.startswith(("lumendeck-progress-", "lumendeck-cloudresult-")):
                 continue
             path = os.path.join(tempfile.gettempdir(), name)
             try:
@@ -115,6 +115,35 @@ def _prune_progress_files(max_age_s: int = 3600) -> None:
     except OSError:
         pass
 
+# ---- Cloud route protection ----------------------------------------------
+# The bridge answers every route with `Access-Control-Allow-Origin: *`, which
+# is fine for local render plumbing but NOT for routes that front paid API
+# keys: a hostile website could POST /cloud/keys or burn credits via
+# /cloud/generate from the user's browser. /cloud/* therefore only accepts
+# requests whose Origin is the app itself (Tauri webview, the bridge's own
+# static server, or the Vite dev server). Non-browser clients send no Origin.
+_TRUSTED_ORIGINS = frozenset({
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+    "http://localhost:5178",
+    "http://127.0.0.1:5178",
+    "http://localhost:8787",
+    "http://127.0.0.1:8787",
+})
+
+# API keys are printable-ASCII tokens. Reject anything else at save time so a
+# control character can never reach urllib headers (whose exceptions would
+# echo the full key back into an error response).
+_KEY_SHAPE = re.compile(r"^[\x21-\x7e]{1,512}$")
+
+
+def _cloud_result_path(job_id: str) -> str:
+    """Cloud renders can outlive the webview's fetch timeout (long video tasks);
+    the result is also parked here so the adapter can recover it by job id."""
+    return os.path.join(tempfile.gettempdir(), f"lumendeck-cloudresult-{job_id}.json")
+
+
 # ---- Bridge-side settings (cloud API keys live here, NEVER in the browser) ----
 def _settings_path() -> str:
     override = os.environ.get("LUMENDECK_SETTINGS_PATH")
@@ -124,12 +153,23 @@ def _settings_path() -> str:
     return os.path.join(root, "settings.json")
 
 
-def _load_settings() -> dict:
+def _load_settings(strict: bool = False) -> dict:
+    """Read settings.json. A MISSING file is a normal empty state; an unreadable
+    or corrupt file only returns {} on best-effort reads — strict callers that
+    intend to WRITE the file back must get the error instead, or a read-modify-
+    write would silently replace the whole file (wiping other providers' keys)."""
+    path = _settings_path()
+    if not os.path.exists(path):
+        return {}
     try:
-        with open(_settings_path(), "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise ValueError("settings.json root is not an object")
+        return data
     except Exception:
+        if strict:
+            raise
         return {}
 
 
@@ -138,8 +178,11 @@ def _save_settings(settings: dict) -> None:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
+    # Atomic replace: a crash mid-write must never destroy the existing file.
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(settings, fh, indent=2)
+    os.replace(tmp, path)
 
 
 try:
@@ -433,11 +476,20 @@ def _procedural_motion(jobs: list, fps: int, loop: bool = True) -> dict:
     }
 
 
-def build_response(method: str, path: str, body: bytes):
-    """Return (status_code, headers_dict, body_bytes) for a request. Pure & testable."""
+def build_response(method: str, path: str, body: bytes, origin: str = ""):
+    """Return (status_code, headers_dict, body_bytes) for a request. Pure & testable.
+
+    `origin` is the request's Origin header (empty for same-origin GETs and
+    non-browser clients); /cloud/* routes reject untrusted browser origins."""
     headers = dict(CORS)
     if method == "OPTIONS":
         return 204, headers, b""
+
+    if path.startswith("/cloud") and origin and origin not in _TRUSTED_ORIGINS:
+        headers["Content-Type"] = "application/json"
+        return 403, headers, json.dumps({
+            "error": "cross-origin access to /cloud is not allowed",
+        }).encode()
 
     if method == "GET" and path == "/health":
         headers["Content-Type"] = "application/json"
@@ -606,7 +658,16 @@ def build_response(method: str, path: str, body: bytes):
         if provider_id not in cloud_providers.PROVIDERS:
             return 400, headers, json.dumps({"error": f"unknown provider: {provider_id or '(missing)'}"}).encode()
         key = str(req.get("key", "")).strip()
-        settings = _load_settings()
+        if key and not _KEY_SHAPE.match(key):
+            return 400, headers, json.dumps({
+                "error": "key contains invalid characters (expected a printable ASCII token)",
+            }).encode()
+        try:
+            settings = _load_settings(strict=True)
+        except Exception as exc:
+            return 503, headers, json.dumps({
+                "error": f"settings.json is unreadable ({exc}); refusing to overwrite it. Fix or delete the file.",
+            }).encode()
         cloud_keys = settings.get("cloudKeys")
         if not isinstance(cloud_keys, dict):
             cloud_keys = {}
@@ -636,10 +697,22 @@ def build_response(method: str, path: str, body: bytes):
         model = str(job.get("model", ""))
         if not model:
             return 400, headers, json.dumps({"error": "model is required"}).encode()
-        key = str((_load_settings().get("cloudKeys") or {}).get(provider_id, "")).strip()
+        # Only curated model ids may reach the provider layer — the model string
+        # is interpolated into provider URLs, so free-form values are rejected.
+        if not any(m["id"] == model for m in provider.models()):
+            return 400, headers, json.dumps({
+                "error": f"unknown model for {provider.label}: {model}",
+            }).encode()
+        stored = _load_settings().get("cloudKeys")
+        stored = stored if isinstance(stored, dict) else {}
+        key = str(stored.get(provider_id, "")).strip()
         if not key:
             return 400, headers, json.dumps({
                 "error": f"no API key saved for {provider.label}. Save one under Backend -> Cloud.",
+            }).encode()
+        if not _KEY_SHAPE.match(key):
+            return 400, headers, json.dumps({
+                "error": f"the saved key for {provider.label} contains invalid characters — re-save it.",
             }).encode()
         job_id = str(job.get("jobId", ""))
         track = bool(_JOB_ID.match(job_id))
@@ -664,17 +737,39 @@ def build_response(method: str, path: str, body: bytes):
 
         try:
             result = provider.generate(job, model, key, _report)
+            payload = json.dumps(result).encode()
             if track:
+                # Park the result so the adapter can recover it via
+                # GET /cloud/result/<jobId> if this response outlived the
+                # webview's fetch timeout (long video tasks).
+                try:
+                    with open(_cloud_result_path(job_id), "wb") as fh:
+                        fh.write(payload)
+                except OSError:
+                    pass
                 _write_progress(job_id, {"phase": "done"})
-            return 200, headers, json.dumps(result).encode()
+            return 200, headers, payload
         except cloud_providers.CloudError as exc:
             if track:
-                _write_progress(job_id, {"phase": "error"})
+                _write_progress(job_id, {"phase": "error", "detail": str(exc)})
             return 502, headers, json.dumps({"error": str(exc)}).encode()
         except Exception as exc:
             if track:
-                _write_progress(job_id, {"phase": "error"})
+                _write_progress(job_id, {"phase": "error", "detail": str(exc)})
             return 502, headers, json.dumps({"error": f"{provider_id}: {exc}"}).encode()
+
+    if method == "GET" and path.startswith("/cloud/result/"):
+        headers["Content-Type"] = "application/json"
+        job_id = path[len("/cloud/result/"):]
+        if not _JOB_ID.match(job_id):
+            return 400, headers, json.dumps({"error": "invalid job id"}).encode()
+        try:
+            with open(_cloud_result_path(job_id), "rb") as fh:
+                return 200, headers, fh.read()
+        except OSError:
+            return 404, headers, json.dumps({
+                "error": "no result for this job (still running, failed, or expired)",
+            }).encode()
 
     if method == "POST" and path == "/generate":
         headers["Content-Type"] = "application/json"
@@ -908,7 +1003,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(*build_response("OPTIONS", self.path, b""))
 
     def do_GET(self):  # noqa: N802
-        status, headers, body = build_response("GET", self.path, b"")
+        status, headers, body = build_response("GET", self.path, b"", self.headers.get("Origin", ""))
         if status == 404 and self._serve_static():
             return
         self._send(status, headers, body)
@@ -938,7 +1033,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", 0))
-        self._send(*build_response("POST", self.path, self.rfile.read(length)))
+        self._send(*build_response("POST", self.path, self.rfile.read(length), self.headers.get("Origin", "")))
 
     def log_message(self, *_args):  # silence default stderr logging
         pass
