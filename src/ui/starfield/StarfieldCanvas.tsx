@@ -23,10 +23,18 @@ export function StarfieldCanvas() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const state = createStarfield({ seed: 0xc0ffee, starCount: STAR_COUNT, dustCount: DUST_COUNT, constellations: true });
-    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    // Live media query — the OS setting can change mid-session, and this canvas
+    // mounts once for the app's lifetime, so a one-shot sample would either
+    // animate forever or stay frozen after a toggle.
+    const media = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-reduced-motion: reduce)') : undefined;
+    let reduced = !!media?.matches;
 
     let w = 0;
     let h = 0;
+    const drawStatic = () => {
+      ctx.clearRect(0, 0, w, h);
+      renderStarfield(ctx, state, w, h, AMBIENT_ALPHA);
+    };
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
@@ -34,11 +42,7 @@ export function StarfieldCanvas() {
       canvas.width = Math.max(1, Math.floor(w * dpr));
       canvas.height = Math.max(1, Math.floor(h * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (reduced) {
-        // Static frame: stars visible, nothing animates.
-        ctx.clearRect(0, 0, w, h);
-        renderStarfield(ctx, state, w, h, AMBIENT_ALPHA);
-      }
+      if (reduced) drawStatic(); // static frame: stars visible, nothing animates
     };
     resize();
     window.addEventListener('resize', resize);
@@ -69,12 +73,24 @@ export function StarfieldCanvas() {
       if (document.hidden) stop();
       else start();
     };
+    const onMotionChange = (e: MediaQueryListEvent) => {
+      reduced = e.matches;
+      if (reduced) {
+        stop();
+        drawStatic();
+      } else if (!document.hidden) {
+        start();
+      }
+    };
     document.addEventListener('visibilitychange', onVisibility);
+    media?.addEventListener?.('change', onMotionChange);
     if (!document.hidden) start();
+    if (reduced) drawStatic();
 
     return () => {
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
+      media?.removeEventListener?.('change', onMotionChange);
       window.removeEventListener('resize', resize);
     };
   }, []);

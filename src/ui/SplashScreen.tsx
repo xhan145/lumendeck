@@ -67,6 +67,10 @@ export function SplashScreen({ onDone }: { onDone: () => void }) {
       canvas.width = Math.max(1, Math.floor(w * dpr));
       canvas.height = Math.max(1, Math.floor(h * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // The width/height assignment CLEARS the bitmap; the reduced-motion path
+      // has no render loop, so the static frame must be redrawn here or a
+      // resize (window drag, Tauri initial fit) blanks the stars mid-splash.
+      if (reduced && state.constellation) renderStarfield(ctx, state, w, h, 1);
     };
     resize();
     window.addEventListener('resize', resize);

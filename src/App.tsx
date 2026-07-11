@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStudio, type ViewId } from './state/store';
 import { StarfieldCanvas } from './ui/starfield/StarfieldCanvas';
 import { SplashScreen } from './ui/SplashScreen';
@@ -88,6 +88,15 @@ export function App() {
   const autohideArmed = chromeAutohide && splashDone;
   const top = useAutoHide('top', autohideArmed);
   const left = useAutoHide('left', autohideArmed);
+  // While the splash covers the app, the shell is `inert`: the overlay blocks
+  // the pointer, so keyboard + screen-reader access to the invisible UI must be
+  // blocked too (no Tab-activating covered buttons). Set via the DOM property —
+  // React 18's JSX types don't know the inert attribute yet.
+  const shellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (shellRef.current) shellRef.current.inert = !splashDone;
+  }, [splashDone]);
 
   useEffect(() => { void probeBridge(); }, [probeBridge]);
 
@@ -115,7 +124,7 @@ export function App() {
   return (
     <>
       <StarfieldCanvas />
-      <div className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''}`}>
+      <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''}`}>
         <header
           className={`topbar ${autohideArmed && !top.visible ? 'chrome-hidden' : ''}`}
           {...top.barProps}

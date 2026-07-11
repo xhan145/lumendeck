@@ -12,7 +12,7 @@
 
 :root {
   --glass-surface: rgba(18, 22, 29, 0.55);
-  --glass-surface-strong: rgba(18, 22, 29, 0.75);
+  --glass-surface-strong: rgba(18, 22, 29, 0.78);
   --glass-fill: rgba(26, 31, 41, 0.72); /* nested cards: translucent, NO blur */
   --glass-border: rgba(255, 255, 255, 0.09);
   --glass-blur: 18px;
@@ -48,18 +48,27 @@ body {
 
 /* ===== Glass chrome ======================================================== */
 
+/* The chrome bars are fixed overlays in auto mode, so arbitrary BRIGHT page
+   content can scroll beneath them: they use the STRONG glass surface plus a
+   darkening term in the backdrop chain so --ld-text/-dim keep >=4.5:1 even
+   over a white render (0.78 dark glass over brightness(0.7) white ≈ #35383d). */
 .glass,
 .topbar,
 .nav-rail {
-  background: var(--glass-surface);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  background: var(--glass-surface-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.2) brightness(0.7);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.2) brightness(0.7);
   border-color: var(--glass-border);
 }
 
-/* Graph chrome joins the glass language (upgrades its 6px blur). */
+/* Graph chrome joins the glass language (upgrades its 6px blur).
+   NOTE: target the VISIBLE children, never .collapsible-palette itself — that
+   wrapper is an invisible pointer-events:none layout box spanning most of the
+   graph, and backdrop-filter blurs an element's whole box even when it paints
+   nothing (a giant permanent blur rectangle over the scene). */
 .graph-mode-toggle,
-.collapsible-palette,
+.palette-tab,
+.collapsible-palette .graph-toolbar,
 .motion-panel-tab,
 .motion-panel-body,
 .graph3d-ghost-note,
@@ -142,10 +151,14 @@ body {
   text-transform: uppercase;
   color: var(--ld-text-faint);
 }
-/* Reduced-motion splash: one gentle fade (no choreography). */
+/* Reduced-motion splash: one gentle fade (no choreography). pointer-events off
+   the moment the fade arms — base.css's global reduced-motion rule collapses
+   transition DURATIONS to ~0ms (the overlay snaps invisible early), and an
+   invisible full-screen z-1000 blocker must never swallow clicks. */
 .splash-root.splash-fade {
   transition: opacity 600ms ease 150ms;
   opacity: 0;
+  pointer-events: none;
 }
 .splash-root.splash-fade .splash-mark { opacity: 1; }
 
@@ -194,6 +207,13 @@ body {
   transition-duration: var(--dur-1);
   transition-timing-function: ease-in;
 }
+
+/* Modal overlays must stay ABOVE the auto-mode chrome: the in-tree drawers
+   (Gallery detail, recipe actions — z 40/41 in app.css) share the .shell
+   stacking context with the fixed bars (z 59/60), so without this a revealed
+   topbar would paint over an open aria-modal dialog and steal its clicks. */
+.drawer-scrim { z-index: 70; }
+.drawer { z-index: 71; }
 
 /* Slim glow strips hint at hidden bars (visual affordance only). */
 .chrome-strip {
@@ -252,9 +272,9 @@ body {
     background var(--dur-1) ease,
     border-color var(--dur-1) ease;
 }
-.btn:hover { transform: translateY(-1px); }
-.btn:active { transform: scale(0.97); }
-.btn.primary:hover { box-shadow: 0 0 18px -6px var(--md-primary-light); }
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn.primary:hover:not(:disabled) { box-shadow: 0 0 18px -6px var(--md-primary-light); }
 
 /* ===== Reduced motion ====================================================== */
 
@@ -267,8 +287,8 @@ body {
   .chip {
     transition: none;
   }
-  .btn:hover,
-  .btn:active {
+  .btn:hover:not(:disabled),
+  .btn:active:not(:disabled) {
     transform: none;
   }
   .shell.chrome-auto .topbar,

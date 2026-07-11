@@ -298,6 +298,10 @@ export function renderStarfield(
       const b = state.stars[c.chain[i + 1]];
       const seg = Math.min(1, Math.max(0, total - i));
       if (seg <= 0) break;
+      // Seam guard: stars wrap at the [0,1] edges, so a chained star crossing a
+      // screen edge mid-lifecycle would snap its link into a viewport-spanning
+      // streak. A real constellation link is always short — skip any that isn't.
+      if (Math.abs(b.x - a.x) > 0.5 || Math.abs(b.y - a.y) > 0.5) continue;
       ctx.moveTo(a.x * w, a.y * h);
       ctx.lineTo((a.x + (b.x - a.x) * seg) * w, (a.y + (b.y - a.y) * seg) * h);
     }

@@ -26,7 +26,12 @@ export interface ChromeInputs {
 }
 
 export const CHROME_IDLE_MS = 2500;
-export const EDGE_PROXIMITY_PX = 24;
+/**
+ * Reveal zone = the TRUE screen edge only. A wider zone (e.g. 24px) overlaps
+ * always-visible view chrome — the graph palette tab sits at (12,12) — turning
+ * intended in-view clicks into surprise bar reveals under the pointer.
+ */
+export const EDGE_PROXIMITY_PX = 4;
 
 export function chromeVisible(i: ChromeInputs): boolean {
   if (i.pinned || i.hovering || i.focusWithin || i.nearEdge) return true;

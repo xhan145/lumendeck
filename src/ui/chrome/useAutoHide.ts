@@ -35,8 +35,24 @@ export function useAutoHide(edge: 'top' | 'left', enabled: boolean): AutoHideBar
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     flags.current.lastActivity = now(); // fresh grace period on arm
     let lastMove = 0;
+    // Latest pointer position, recorded on EVERY move (cheap) so the throttled
+    // path and the 250ms poll can re-derive nearEdge from fresh coordinates —
+    // a leading-edge-only throttle would otherwise drop the FINAL sample of a
+    // flick (pointer parked at the edge never reveals; parked off-edge never
+    // hides). NaN until the first move = not near.
+    let lastX = Number.NaN;
+    let lastY = Number.NaN;
+
+    const sampleNearEdge = () => {
+      const c = edge === 'top' ? lastY : lastX;
+      const near = Number.isFinite(c) && c <= EDGE_PROXIMITY_PX;
+      const f = flags.current;
+      if (near !== f.nearEdge) f.lastActivity = now(); // reveal / start hide-grace
+      f.nearEdge = near;
+    };
 
     const recompute = () => {
+      sampleNearEdge(); // always fresh — never trust a stale cached flag
       const f = flags.current;
       const next = chromeVisible({
         pinned: false,
@@ -50,14 +66,11 @@ export function useAutoHide(edge: 'top' | 'left', enabled: boolean): AutoHideBar
     };
 
     const onMove = (e: PointerEvent) => {
+      lastX = e.clientX;
+      lastY = e.clientY;
       const t = now();
-      if (t - lastMove < MOVE_THROTTLE_MS) return;
+      if (t - lastMove < MOVE_THROTTLE_MS) return; // poll picks up the trailing sample
       lastMove = t;
-      const near = edge === 'top' ? e.clientY <= EDGE_PROXIMITY_PX : e.clientX <= EDGE_PROXIMITY_PX;
-      const f = flags.current;
-      if (near && !f.nearEdge) f.lastActivity = t; // re-arm the grace on reveal
-      if (!near && f.nearEdge) f.lastActivity = t; // grace countdown starts on leave
-      f.nearEdge = near;
       recompute();
     };
 
