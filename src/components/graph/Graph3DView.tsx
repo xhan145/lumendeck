@@ -48,6 +48,7 @@ import { createParticleField, type ParticleField } from './graph3d/particles';
 import {
   createAdaptiveQuality,
   featuresFor,
+  levelRank,
   minLevel,
   motionPolicy,
   type AdaptiveQuality,
@@ -447,7 +448,12 @@ export function Graph3DView({ onContextFailed }: Props) {
       lastStatsPublishRef.current = now;
       const s = fs.read();
       const cap = adaptiveRef.current?.cap();
-      const tier = `${effectsLevelRef.current}${cap && cap !== 'cinematic' ? ' (auto-capped)' : ''}`;
+      // "(auto-capped)" only when the cap is genuinely BELOW the user's chosen
+      // level — a cap that merely sits under 'cinematic' but at/above the user
+      // setting constrains nothing and must not read as degraded.
+      const userLevel = (useStudio.getState().appSettings.graph3dEffects ?? 'off') as EffectsLevel;
+      const capped = cap != null && levelRank(cap) < levelRank(userLevel);
+      const tier = `${effectsLevelRef.current}${capped ? ' (auto-capped)' : ''}`;
       statsElRef.current.textContent = `${s.fps.toFixed(0)} fps · ${s.frameMs.toFixed(1)}ms · worst ${s.worstMs.toFixed(1)}ms · ${s.drawCalls} draws · ${tier}`;
     }
   }, []);

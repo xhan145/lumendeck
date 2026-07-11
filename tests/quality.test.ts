@@ -145,6 +145,37 @@ describe('createAdaptiveQuality', () => {
     expect(q.cap()).toBe('rich'); // exactly ONE step back, not a jump to the top
   });
 
+  it('backs off the recovery window after a real up-then-down oscillation', () => {
+    const q = createAdaptiveQuality(OPTS); // recoverMs 10000
+    // 1) slow → drop cinematic→rich (no prior climb, so no penalty yet).
+    let t = feed(q, 40, 0, 3000);
+    expect(q.cap()).toBe('rich');
+    // 2) fast → climb rich→cinematic (one full window).
+    t = feed(q, 10, t, 10500);
+    expect(q.cap()).toBe('cinematic');
+    // 3) slow again → drop cinematic→rich. This downgrade FOLLOWS a climb = a
+    //    genuine oscillation, so the recovery window is now widened to 2×.
+    t = feed(q, 40, t, 3000);
+    expect(q.cap()).toBe('rich');
+    // 4) one plain window is no longer enough to climb (backoff in effect).
+    t = feed(q, 10, t, 10500);
+    expect(q.cap()).toBe('rich');
+    // 5) a second window (≈2×recoverMs total fast) finally climbs one step.
+    feed(q, 10, t, 10500);
+    expect(q.cap()).toBe('cinematic');
+  });
+
+  it('a plain run of downgrades under rising load carries NO oscillation penalty', () => {
+    const q = createAdaptiveQuality(OPTS);
+    // Two sequential downgrades with no climb between them (not oscillation).
+    let t = feed(q, 60, 0, 3000);
+    t = feed(q, 60, t, 3000);
+    expect(q.cap()).toBe('standard');
+    // Recovery still uses the base window (one 11s stretch → one step up).
+    feed(q, 10, t, 11000);
+    expect(q.cap()).toBe('rich');
+  });
+
   it('ignores idle gaps (dirty-flag sleeps are not slow frames)', () => {
     const q = createAdaptiveQuality(OPTS);
     let t = 0;

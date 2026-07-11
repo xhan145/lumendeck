@@ -191,6 +191,26 @@ export function createEnergyFlow(): EnergyFlow {
   return {
     points,
     setEdges(edges, pulsesPerEdge) {
+      // Snapshot the in-flight phase of each surviving pulse, keyed by edge id +
+      // its k-index within that edge. setEdges re-runs on common interactions
+      // (node select, activity/health commits), so WITHOUT this a pulse that has
+      // travelled to phase ~0.6 would teleport back to its seed phase every time,
+      // visibly restarting the flow. Pulses are laid out consecutively per edge
+      // (outer edge loop, inner k loop), so scanning in pi order gives k order.
+      // This runs only on graph-change commits — never in the per-frame hot loop.
+      const prevPhases = new Map<string, number[]>();
+      if (pulseCount > 0) {
+        const idByIndex: (string | undefined)[] = [];
+        for (const [id, idx] of edgeIndexById) idByIndex[idx] = id;
+        for (let pi = 0; pi < pulseCount; pi++) {
+          const id = idByIndex[pulseEdge[pi]];
+          if (id === undefined) continue;
+          let list = prevPhases.get(id);
+          if (!list) { list = []; prevPhases.set(id, list); }
+          list.push(phase[pi]);
+        }
+      }
+
       edgeIndexById.clear();
       pulseCount = 0;
       edgeCount = 0;
@@ -211,10 +231,13 @@ export function createEnergyFlow(): EnergyFlow {
         edgeActivity[ei] = Math.min(1, Math.max(0, e.activity));
         edgeBlocked[ei] = e.blocked ? 1 : 0;
         color.set(e.color);
+        const carried = prevPhases.get(e.id);
         for (let k = 0; k < want; k++) {
           const pi = pulseCount++;
           pulseEdge[pi] = ei;
-          phase[pi] = phaseHash(e.id, k);
+          // Carry a surviving pulse's phase forward; only genuinely NEW pulses
+          // (e.g. activity rose → more pulses) get a fresh deterministic seed.
+          phase[pi] = carried && k < carried.length ? carried[k] : phaseHash(e.id, k);
           colors[pi * 3] = color.r;
           colors[pi * 3 + 1] = color.g;
           colors[pi * 3 + 2] = color.b;
@@ -247,15 +270,17 @@ export function createEnergyFlow(): EnergyFlow {
         const t = blocked
           ? Math.min(0.999, Math.max(0, phase[i] + Math.sin(clock * 7 + i) * 0.012))
           : phase[i];
-        const p = bezierPoint(
-          edgeGeom[go], edgeGeom[go + 1], edgeGeom[go + 2],
-          edgeGeom[go + 3], edgeGeom[go + 4], edgeGeom[go + 5],
-          edgeGeom[go + 6], edgeGeom[go + 7], edgeGeom[go + 8],
-          t,
-        );
-        positions[i * 3] = p.x;
-        positions[i * 3 + 1] = p.y;
-        positions[i * 3 + 2] = p.z;
+        // Inline the quadratic bezier — this loop runs up to MAX_PULSES times on
+        // EVERY animated frame, so allocating a {x,y,z} per pulse (the pure
+        // bezierPoint) would churn ~30k short-lived objects/sec. bezierPoint stays
+        // the unit-tested reference; the hot path writes straight into positions.
+        const u = 1 - t;
+        const w0 = u * u;
+        const w1 = 2 * u * t;
+        const w2 = t * t;
+        positions[i * 3] = w0 * edgeGeom[go] + w1 * edgeGeom[go + 3] + w2 * edgeGeom[go + 6];
+        positions[i * 3 + 1] = w0 * edgeGeom[go + 1] + w1 * edgeGeom[go + 4] + w2 * edgeGeom[go + 7];
+        positions[i * 3 + 2] = w0 * edgeGeom[go + 2] + w1 * edgeGeom[go + 5] + w2 * edgeGeom[go + 8];
         energies[i] = blocked ? BLOCKED_ENERGY : 0.35 + 0.65 * activity;
       }
       posAttr.needsUpdate = true;

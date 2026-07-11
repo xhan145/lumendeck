@@ -108,6 +108,38 @@ describe('createEnergyFlow', () => {
     flow.dispose();
   });
 
+  it('preserves in-flight pulse phases across a setEdges rebuild (no teleport on re-commit)', () => {
+    const flow = createEnergyFlow();
+    flow.setEdges([edge('e1'), edge('e2')], 3);
+    // Fly the pulses well away from their seed phase.
+    for (let i = 0; i < 40; i++) flow.advance(0.05);
+    const posAttr = flow.points.geometry.getAttribute('position') as BufferAttribute;
+    const n = flow.points.geometry.drawRange.count;
+    const before = Array.from((posAttr.array as Float32Array).slice(0, n * 3));
+    // A re-commit with the SAME edges (what a node select / activity tick does)
+    // must NOT reset the phases: one negligible advance should land the pulses
+    // essentially where they already were, not back at their hashed seed.
+    flow.setEdges([edge('e1'), edge('e2')], 3);
+    flow.advance(1e-6);
+    const after = Array.from((posAttr.array as Float32Array).slice(0, n * 3));
+    for (let i = 0; i < after.length; i++) expect(after[i]).toBeCloseTo(before[i], 2);
+    flow.dispose();
+  });
+
+  it('seeds only genuinely new pulses when activity rises (existing ones keep their phase)', () => {
+    const flow = createEnergyFlow();
+    flow.setEdges([edge('e1', { activity: 0 })], 2); // 2 pulses
+    for (let i = 0; i < 30; i++) flow.advance(0.05);
+    const posAttr = flow.points.geometry.getAttribute('position') as BufferAttribute;
+    const first2 = Array.from((posAttr.array as Float32Array).slice(0, 6));
+    flow.setEdges([edge('e1', { activity: 1 })], 2); // now 4 pulses; first 2 carry over
+    flow.advance(1e-6);
+    const after = Array.from((posAttr.array as Float32Array).slice(0, 6));
+    for (let i = 0; i < 6; i++) expect(after[i]).toBeCloseTo(first2[i], 2);
+    expect(flow.points.geometry.drawRange.count).toBe(4);
+    flow.dispose();
+  });
+
   it('two flows with the same edges animate identically (deterministic phases)', () => {
     const a = createEnergyFlow();
     const b = createEnergyFlow();

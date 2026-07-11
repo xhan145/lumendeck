@@ -159,12 +159,27 @@ export interface AdaptiveQuality {
 }
 
 /**
+ * Widen the recovery window this many times at most (bounds oscillation-window
+ * growth to (1 + MAX_OSCILLATIONS)·recoverMs — a hard ceiling on how slow a
+ * climb can get for pathological hardware).
+ */
+const MAX_OSCILLATIONS = 6;
+
+/**
  * Hysteresis rules (no rapid oscillation):
  *  - Downgrade: EMA over budget continuously for `holdMs` → cap drops ONE step
  *    (never below `floor`), and both timers reset.
- *  - Recover: EMA under budget*recoverFactor continuously for `recoverMs` →
- *    cap rises ONE step. Recovery is slow by construction (recoverMs >> holdMs)
- *    and each step re-arms the timer, so climbing back is gradual.
+ *  - Recover: EMA under budget*recoverFactor continuously for the recovery
+ *    window → cap rises ONE step; each step re-arms the timer, so climbing back
+ *    is gradual.
+ *  - Anti-oscillation backoff: a downgrade that immediately FOLLOWS a climb is a
+ *    genuine up-then-down oscillation (the machine can't sustain the higher
+ *    tier). Each such cycle widens the recovery window by another `recoverMs`,
+ *    so borderline hardware settles at its sustainable tier instead of flapping
+ *    (and re-seeding the particle field) every ~recoverMs forever. A plain
+ *    sequence of downgrades under rising load carries NO penalty — only real
+ *    oscillation does. The penalty clears once the top tier is sustained well
+ *    past a full window (the machine has genuinely recovered).
  *  - Idle gaps (dt > maxSampleMs — the dirty-flag scheduler sleeping) are NOT
  *    slow frames; they are ignored and reset the violation window.
  */
@@ -177,12 +192,17 @@ export function createAdaptiveQuality(opts?: AdaptiveQualityOptions): AdaptiveQu
   const maxSampleMs = opts?.maxSampleMs ?? 250;
   const alpha = opts?.emaAlpha ?? 0.12;
   const floorRank = levelRank(floor);
+  const topRank = LEVEL_ORDER.length - 1;
 
-  let capRank = LEVEL_ORDER.length - 1; // start fully open
+  let capRank = topRank; // start fully open
   let ema = 0;
   let seeded = false;
   let overSince: number | null = null;
   let underSince: number | null = null;
+  // Anti-oscillation state: how many times we've climbed then immediately fallen
+  // again, and whether the current episode has already climbed at least once.
+  let oscillations = 0;
+  let climbedSinceDowngrade = false;
 
   return {
     feed(frameMs: number, now: number): boolean {
@@ -201,6 +221,9 @@ export function createAdaptiveQuality(opts?: AdaptiveQualityOptions): AdaptiveQu
         if (overSince == null) overSince = now;
         if (now - overSince >= holdMs && capRank > floorRank) {
           capRank--;
+          // A downgrade right after a climb = the higher tier wasn't sustainable.
+          if (climbedSinceDowngrade) oscillations = Math.min(oscillations + 1, MAX_OSCILLATIONS);
+          climbedSinceDowngrade = false;
           overSince = null;
           underSince = null;
           return true;
@@ -209,10 +232,20 @@ export function createAdaptiveQuality(opts?: AdaptiveQualityOptions): AdaptiveQu
         overSince = null;
         if (ema < budgetMs * recoverFactor) {
           if (underSince == null) underSince = now;
-          if (now - underSince >= recoverMs && capRank < LEVEL_ORDER.length - 1) {
-            capRank++;
-            underSince = null; // re-arm: each recovery step takes another full window
-            return true;
+          const recoverWindow = recoverMs * (1 + oscillations);
+          if (now - underSince >= recoverWindow) {
+            if (capRank < topRank) {
+              capRank++;
+              climbedSinceDowngrade = true;
+              underSince = null; // re-arm: each recovery step takes another window
+              return true;
+            }
+            // Already at the top and sustaining it past a full window: the
+            // machine has genuinely recovered → clear the oscillation penalty so
+            // future transient dips aren't punished by a stale backoff.
+            oscillations = 0;
+            climbedSinceDowngrade = false;
+            underSince = now; // re-arm; don't re-check every frame
           }
         } else {
           underSince = null;

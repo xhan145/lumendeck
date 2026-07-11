@@ -74,8 +74,11 @@ export function createPostPipeline(
     },
     setSize(width, height) {
       if (disposed || width < 1 || height < 1) return;
+      // composer.setSize already resizes EVERY pass (incl. bloom) at
+      // width*pixelRatio. Calling bloom.setSize(width, height) here would re-size
+      // the bloom mip chain at raw CSS pixels — half resolution on a HiDPI (dpr 2)
+      // display — so it is deliberately omitted.
       composer.setSize(width, height);
-      bloom.setSize(width, height);
     },
     dispose() {
       if (disposed) return;

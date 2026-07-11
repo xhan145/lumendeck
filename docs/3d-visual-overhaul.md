@@ -143,7 +143,12 @@ three.js postprocessing chain).
   without an ambient loop — accepted, since idle stillness is the design
   invariant.
 - Adaptive tier changes recreate the particle field (positions re-seed) — a
-  one-frame pop, rare by hysteresis.
+  one-frame pop. The controller now applies an anti-oscillation backoff: a
+  downgrade that immediately follows a climb widens the recovery window by
+  another `recoverMs` (bounded), so borderline hardware settles at its
+  sustainable tier instead of flapping, and the penalty clears once the top
+  tier is sustained. The pop is therefore rare in practice, not merely by
+  first-order hysteresis.
 - Blocked-pulse stutter is subtle at low zoom; the anomaly ring remains the
   primary error signal.
 - Dev-only Vite warning about multiple three.js instances can appear once when
