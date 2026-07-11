@@ -23,10 +23,10 @@ import {
   pointerRayToPlane,
   socketWorldPoint,
   worldFromCanvas,
-  zFromNode,
   type Vec3,
   type WorldPoint,
 } from './graph3d/projection';
+import { nodeDepth } from './graph3d/nodeSpace';
 import { gradientStops, primaryParamId, primaryWeight, weightT } from './graph3d/orbWeight';
 import {
   angleToValue,
@@ -107,6 +107,24 @@ interface DragState {
   offsetY: number;
   /** Fixed drag plane (captured at pointer-down) so the node tracks the ray stably. */
   planeZ: number;
+  /**
+   * How pointer motion maps this drag (captured at pointer-down from modifiers):
+   *  - 'layout'  → horizontal + vertical position (vertical = height = mass)
+   *  - 'depth'   → the z axis (Shift): vertical pointer delta pushes it in depth
+   *  - 'control' → parameters via the field profile (Alt): the Ghost's mapping
+   */
+  mode: 'layout' | 'depth' | 'control';
+  /** Pointer at down — depth integrates from here; also drives the click-slop test. */
+  startX: number;
+  startY: number;
+  /** Node world-depth at down (depth mode integrates a delta from this). */
+  startDepth: number;
+  /** Live field position [0..1]³ accumulated during a CONTROL drag (Ghost-style). */
+  fieldPos: { x: number; y: number; z: number };
+  /** Displacement from the start point — a small total on release = a click (expand). */
+  moved: number;
+  /** True when the drag began on an ORB pick (a no-move release expands the node). */
+  fromOrb: boolean;
 }
 
 interface CamState {
@@ -199,6 +217,8 @@ const GHOST_OPACITY = 0.45;
 const RING_BAND = { inner: 12, outer: 16 };
 /** Screen px of vertical Shift-drag that spans the full field Y axis. */
 const GHOST_SHIFT_PX_PER_AXIS = 320;
+/** World-depth units moved per screen px of vertical Shift+drag (node depth axis). */
+const DEPTH_DRAG_PER_PX = 2.6;
 /** Quiet period (ms) a ghost drag must settle before a streaming preview fires. */
 const PREVIEW_SETTLE_MS = 150;
 /** Anchor marker radius (world units). */
@@ -270,6 +290,8 @@ export function Graph3DView({ onContextFailed }: Props) {
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   const selectNode = useStudio((s) => s.selectNode);
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
+  const setNodeDepth = useStudio((s) => s.setNodeDepth);
+  const controlNode = useStudio((s) => s.controlNode);
   const connectSockets = useStudio((s) => s.connectSockets);
   const disconnectEdge = useStudio((s) => s.disconnectEdge);
   const addCapsule = useStudio((s) => s.addCapsule);
@@ -851,7 +873,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         t.scene.add(obj);
         t.nodeObjects.set(node.id, obj);
       }
-      obj.position.set(origin.x, origin.y, zFromNode(node.x) + (node.id === selectedNodeId ? LIFT : 0));
+      obj.position.set(origin.x, origin.y, nodeDepth(node) + (node.id === selectedNodeId ? LIFT : 0));
     }
     for (const [id, obj] of t.nodeObjects) {
       if (!seen.has(id)) {
@@ -1392,7 +1414,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     const fromNode = workflow.nodes.find((n) => n.id === wire.fromNode);
     if (!fromNode) return;
     const selectedFrom = fromNode.id === selectedNodeId;
-    const b = worldFromCanvas(wire.cursor, zFromNode(fromNode.x) + (selectedFrom ? LIFT : 0));
+    const b = worldFromCanvas(wire.cursor, nodeDepth(fromNode) + (selectedFrom ? LIFT : 0));
     const a = isOrbNode(fromNode)
       ? orbSurfacePoint(orbWorldCenter(fromNode), b, ORB_RADIUS)
       : socketWorldPoint(fromNode, wire.fromSocket.id, 'out', selectedFrom);
@@ -1761,7 +1783,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     for (const node of nodes) {
-      const z = zFromNode(node.x);
+      const z = nodeDepth(node);
       const tl = worldFromCanvas({ x: node.x, y: node.y }, z);
       const br = worldFromCanvas({ x: node.x + NODE_WIDTH, y: node.y + 180 }, z);
       minX = Math.min(minX, tl.x); maxX = Math.max(maxX, br.x);
@@ -1781,15 +1803,44 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, [applyCamera]);
 
   // ---- node/port interactions (same store actions as the 2D editor) --------
+  /**
+   * The drag mode a node press starts in, from the held modifiers:
+   *  - Alt → control (parameters via the field) — only when the node HAS a field
+   *    profile; otherwise Alt falls back to layout so the gesture is never dead.
+   *  - Shift → depth (the z axis).
+   *  - neither → layout (horizontal + height = mass).
+   */
+  const dragModeFor = (nodeId: string, e: { altKey: boolean; shiftKey: boolean }): DragState['mode'] =>
+    e.altKey && hasProfile(nodeId) ? 'control' : e.shiftKey ? 'depth' : 'layout';
+
+  /** Begin a node drag (from an orb pick or the selected card header). */
+  const startNodeDrag = (nodeId: string, e: React.PointerEvent, fromOrb: boolean): boolean => {
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return false;
+    const selected = nodeId === selectedNodeId;
+    const planeZ = nodeDepth(node) + (selected ? LIFT : 0);
+    const p = workflowPointAt(e.clientX, e.clientY, planeZ);
+    if (!p) return false;
+    dragRef.current = {
+      nodeId,
+      offsetX: p.x - node.x,
+      offsetY: p.y - node.y,
+      planeZ,
+      mode: dragModeFor(nodeId, e),
+      startX: e.clientX,
+      startY: e.clientY,
+      startDepth: nodeDepth(node),
+      fieldPos: { x: 0.5, y: 0.5, z: 0.5 },
+      moved: 0,
+      fromOrb,
+    };
+    return true;
+  };
+
   const onHeadDown = (nodeId: string) => (e: React.PointerEvent) => {
     e.stopPropagation();
     selectNode(nodeId);
-    const node = workflow.nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-    const planeZ = zFromNode(node.x) + LIFT; // node is selected while dragging
-    const p = workflowPointAt(e.clientX, e.clientY, planeZ);
-    if (!p) return;
-    dragRef.current = { nodeId, offsetX: p.x - node.x, offsetY: p.y - node.y, planeZ };
+    startNodeDrag(nodeId, e, false);
   };
 
   const onPortDown = (nodeId: string) => (socket: SocketDef, dir: 'in' | 'out', e: React.PointerEvent) => {
@@ -1967,6 +2018,14 @@ export function Graph3DView({ onContextFailed }: Props) {
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         return;
       }
+      // Orb body (not the ring band): start a node drag — layout / depth (Shift) /
+      // control (Alt) per the held modifier. A no-move release expands the node
+      // (click-to-expand preserved). Claimed BEFORE orbit/pan so orbs are grabbable.
+      const orbNodeId = tryPickOrbAt(e.clientX, e.clientY);
+      if (orbNodeId && startNodeDrag(orbNodeId, e, true)) {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
     }
     selectNode(null);
     interactionRef.current = {
@@ -2017,14 +2076,40 @@ export function Graph3DView({ onContextFailed }: Props) {
     }
     const drag = dragRef.current;
     if (drag) {
-      const p = workflowPointAt(e.clientX, e.clientY, drag.planeZ);
-      if (p) moveNodeTo(drag.nodeId, Math.round(p.x - drag.offsetX), Math.round(p.y - drag.offsetY));
+      drag.moved = Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY);
+      if (drag.mode === 'depth') {
+        // Shift+drag: vertical pointer delta pushes the node in depth (up = toward
+        // the camera, +z). Persisted per move like a layout move.
+        setNodeDepth(drag.nodeId, drag.startDepth + (drag.startY - e.clientY) * DEPTH_DRAG_PER_PX);
+      } else if (drag.mode === 'control') {
+        // Alt+drag: fly the node through field space → parameters (the Ghost's map,
+        // minus the proxy). Ground pointer sets field X/Z; Shift sets field Y.
+        const node = workflow.nodes.find((n) => n.id === drag.nodeId);
+        if (node) {
+          if (e.shiftKey) {
+            drag.fieldPos.y = clamp(0.5 + (drag.startY - e.clientY) / GHOST_SHIFT_PX_PER_AXIS, 0, 1);
+          } else {
+            const p = workflowPointAt(e.clientX, e.clientY, drag.planeZ);
+            if (p) {
+              const origin = orbWorldCenter(node);
+              const w = worldFromCanvas(p, drag.planeZ);
+              const pos = worldToFieldPos({ x: w.x, y: origin.y, z: w.z }, origin);
+              drag.fieldPos.x = pos.x;
+              drag.fieldPos.z = pos.z;
+            }
+          }
+          controlNode(drag.nodeId, drag.fieldPos); // one commit, re-tints + re-rings the orb
+        }
+      } else {
+        const p = workflowPointAt(e.clientX, e.clientY, drag.planeZ);
+        if (p) moveNodeTo(drag.nodeId, Math.round(p.x - drag.offsetX), Math.round(p.y - drag.offsetY));
+      }
       return;
     }
     if (wire) {
       const fromNode = workflow.nodes.find((n) => n.id === wire.fromNode);
       if (fromNode) {
-        const planeZ = zFromNode(fromNode.x) + (fromNode.id === selectedNodeId ? LIFT : 0);
+        const planeZ = nodeDepth(fromNode) + (fromNode.id === selectedNodeId ? LIFT : 0);
         const p = workflowPointAt(e.clientX, e.clientY, planeZ);
         if (p) setWire({ ...wire, cursor: p });
       }
@@ -2067,6 +2152,17 @@ export function Graph3DView({ onContextFailed }: Props) {
         if (g) endStreamPreview(g.pos);
         else previewDebouncerRef.current?.cancel();
       }
+      return;
+    }
+    // A node drag (orb body or card header) ends here. A press+release with no
+    // real movement is a click → expand the node into its editor card; a real
+    // drag has already committed its layout / depth / param changes live.
+    const drag = dragRef.current;
+    if (drag) {
+      const el = e.currentTarget as HTMLElement;
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      dragRef.current = null;
+      if (drag.fromOrb && drag.moved < CLICK_SLOP) expandNode(drag.nodeId);
       return;
     }
     const act = interactionRef.current;
@@ -2227,7 +2323,8 @@ export function Graph3DView({ onContextFailed }: Props) {
       </CollapsiblePalette>
 
       <div className="graph-hint">
-        Drag headers to move | drag space to orbit | shift-drag to pan | scroll to dolly | click a wire to remove |
+        Drag an orb to move (up = heavier) | shift-drag an orb for depth | alt-drag to tune its values |
+        {' '}drag space to orbit | scroll to dolly | click a wire to remove |
         {' '}{workflow.nodes.length} capsules, {workflow.edges.length} links
       </div>
 

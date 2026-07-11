@@ -1,21 +1,17 @@
 import type { WorkflowNode } from '../../../core/types';
 import { NODE_WIDTH, socketPoint, type Point } from '../wires';
+import { nodeDepth, zFromNode, Z_RULE } from './nodeSpace';
 
 /**
  * Pure projection math for the 3D graph. No DOM, no WebGL — fully unit-testable.
  *
- * Depth (z) is a VIEW concern: `WorkflowNode` keeps `{x, y}` only (schemaVersion 1
- * untouched). z is derived deterministically from the node's x column so saved
- * workflows need zero migration.
+ * Depth (z) is derived from the node's x column by default (`zFromNode`), OR set
+ * explicitly per node for 3D free-placement — `nodeDepth(node)` in nodeSpace.ts
+ * is the single authority; every node helper below routes depth through it.
+ * `zFromNode`/`Z_RULE` are re-exported here so existing importers are unaffected.
  */
 
-/** Z rule: gentle per-column recession — columns further right sit deeper. */
-export const Z_RULE = 0.12;
-
-/** zFromNode: world z of a node's plane from its workflow x (see Z_RULE). */
-export function zFromNode(x: number): number {
-  return -x * Z_RULE;
-}
+export { zFromNode, Z_RULE };
 
 /** World-space z lift applied to the selected node (toward the default camera). */
 export const LIFT = 50;
@@ -60,7 +56,7 @@ export function canvasFromWorld(wx: number, wy: number): Point {
  * to. y is negated (screen-down -> world-up); selected nodes lift by LIFT.
  */
 export function worldFromNode(node: WorkflowNode, selected: boolean): WorldPoint {
-  return worldFromCanvas({ x: node.x, y: node.y }, zFromNode(node.x) + (selected ? LIFT : 0));
+  return worldFromCanvas({ x: node.x, y: node.y }, nodeDepth(node) + (selected ? LIFT : 0));
 }
 
 /**
@@ -68,7 +64,7 @@ export function worldFromNode(node: WorkflowNode, selected: boolean): WorldPoint
  * offsets from wires.ts (single source of port geometry).
  */
 export function socketWorldPoint(node: WorkflowNode, socketId: string, dir: 'in' | 'out', selected: boolean): WorldPoint {
-  return worldFromCanvas(socketPoint(node, socketId, dir), zFromNode(node.x) + (selected ? LIFT : 0));
+  return worldFromCanvas(socketPoint(node, socketId, dir), nodeDepth(node) + (selected ? LIFT : 0));
 }
 
 /** Radius (world units) of an orb node sphere in the 3D 'orbs' style. */
@@ -81,7 +77,7 @@ export const ORB_RADIUS = 55;
  * node renders as the full DOM card instead.
  */
 export function orbWorldCenter(node: WorkflowNode): WorldPoint {
-  return worldFromCanvas({ x: node.x + NODE_WIDTH / 2, y: node.y + ORB_RADIUS }, zFromNode(node.x));
+  return worldFromCanvas({ x: node.x + NODE_WIDTH / 2, y: node.y + ORB_RADIUS }, nodeDepth(node));
 }
 
 const SURFACE_EPS = 1e-9;

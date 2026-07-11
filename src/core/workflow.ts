@@ -83,6 +83,25 @@ export function moveNode(wf: Workflow, nodeId: string, x: number, y: number): Wo
   });
 }
 
+/**
+ * Set a node's explicit world-depth (3D free-placement). Passing a non-finite z
+ * clears it (reverts the node to the derived column depth). Preserves references
+ * of unchanged nodes so the nodeMeta activity diff only touches the moved node.
+ */
+export function setNodeDepth(wf: Workflow, nodeId: string, z: number): Workflow {
+  return bump(wf, {
+    nodes: wf.nodes.map((n) => {
+      if (n.id !== nodeId) return n;
+      if (!Number.isFinite(z)) {
+        if (n.z === undefined) return n;
+        const { z: _drop, ...rest } = n;
+        return rest;
+      }
+      return { ...n, z };
+    }),
+  });
+}
+
 export function updateNodeParam(wf: Workflow, nodeId: string, paramId: string, value: unknown): Workflow {
   return bump(wf, {
     nodes: wf.nodes.map((n) =>

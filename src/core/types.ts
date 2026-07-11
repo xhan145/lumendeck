@@ -119,6 +119,14 @@ export interface WorkflowNode {
   kind: CapsuleKind;
   x: number;
   y: number;
+  /**
+   * Optional explicit world-depth (3D free-placement of the node along the
+   * z axis). Additive + backward-compatible: when absent the 3D view derives
+   * depth from the column rule `zFromNode(x)` (see graph3d/nodeSpace.ts), so
+   * saves made before 3D node control still load unchanged. The 2D editor
+   * ignores it. schemaVersion stays 1 (this field is optional).
+   */
+  z?: number;
   params: Record<string, unknown>;
 }
 

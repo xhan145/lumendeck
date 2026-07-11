@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { WorkflowNode } from '../../../core/types';
 import { orbWorldCenter } from './projection';
+import { massFromHeight } from './nodeSpace';
 import { weightT } from './orbWeight';
 import { GRID_Y } from './scene';
 
@@ -51,12 +52,16 @@ export function packWells(nodes: readonly WorkflowNode[]): { wells: Well[]; clam
     const t = weightT(node.kind, node.params);
     if (t == null) continue; // weightless kind → no well
     const c = orbWorldCenter(node);
+    // Height → mass: a lifted node warps spacetime more (deeper + wider well);
+    // ×1 at the neutral reference so ordinary layouts are unchanged. sigma keeps
+    // a smaller exponent so width grows more gently than depth.
+    const mass = massFromHeight(c.y);
     all.push({
       nodeId: node.id,
       x: c.x,
       z: c.z,
-      depth: t * DEPTH_SCALE,
-      sigma: SIGMA_MIN + t * (SIGMA_MAX - SIGMA_MIN),
+      depth: t * DEPTH_SCALE * mass,
+      sigma: (SIGMA_MIN + t * (SIGMA_MAX - SIGMA_MIN)) * Math.sqrt(mass),
     });
   }
   if (all.length <= MAX_WELLS) return { wells: all, clamped: false };

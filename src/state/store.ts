@@ -17,6 +17,7 @@ import {
   duplicateNode,
   findNode,
   moveNode,
+  setNodeDepth as setNodeDepthWf,
   removeNode,
   uid,
   updateNodeParam,
@@ -342,6 +343,10 @@ interface StudioState {
   setWorkflow(wf: Workflow): void;
   updateParam(nodeId: string, paramId: string, value: unknown): void;
   moveNodeTo(nodeId: string, x: number, y: number): void;
+  /** Set a node's explicit world-depth (3D free-placement); non-finite clears it. */
+  setNodeDepth(nodeId: string, z: number): void;
+  /** Drive a node's params from a field POSITION (control-mode node drag; intensity 1). */
+  controlNode(nodeId: string, pos: { x: number; y: number; z: number }): void;
   connectSockets(from: SocketRef, to: SocketRef): void;
   disconnectEdge(edgeId: string): void;
   addCapsule(kind: CapsuleKind, x: number, y: number): void;
@@ -800,15 +805,21 @@ export const useStudio = create<StudioState>((set, get) => {
     return fieldProfile(node.kind, currentFamily(), node.params, currentPromptText());
   };
   /** Write a ghost's field patches into the workflow in ONE commit (gradient/ring re-tint). */
-  const applyGhostToWorkflow = (ghost: Ghost) => {
-    const node = get().workflow.nodes.find((n) => n.id === ghost.nodeId);
-    const patches = applyField(ghost.pos, ghost.intensity, profileForNode(ghost.nodeId), ghost.nodeId);
+  /**
+   * Apply a field POSITION to a node's params in ONE commit (gradient + ring
+   * re-tint), via the same applyField + rack-fanout path the ghost uses. Shared
+   * by the ghost drag AND direct 3D node control (control-mode node drag), so
+   * both drive parameters identically. No-op when the node has no field profile.
+   */
+  const applyFieldPosToNode = (nodeId: string, pos: { x: number; y: number; z: number }, intensity: number) => {
+    const node = get().workflow.nodes.find((n) => n.id === nodeId);
+    const patches = applyField(pos, intensity, profileForNode(nodeId), nodeId);
     if (patches.length === 0) return;
     let next = get().workflow;
     for (const p of patches) next = updateNodeParam(next, p.nodeId, p.param, p.value);
-    // A loraRack/controlNetRack ghost's weight/strength is a DEAD aggregate that
+    // A loraRack/controlNetRack aggregate weight/strength is a DEAD value that
     // buildRenderJob never reads (it reads per-slot); fan it into the enabled slots
-    // so the ghost drag actually moves the render (see rackFanout.ts).
+    // so the drag actually moves the render (see rackFanout.ts).
     if (node && (node.kind === 'loraRack' || node.kind === 'controlNetRack')) {
       const aggParam = node.kind === 'loraRack' ? 'weight' : 'strength';
       const rackPatches = patches
@@ -818,6 +829,8 @@ export const useStudio = create<StudioState>((set, get) => {
     }
     commit(next);
   };
+
+  const applyGhostToWorkflow = (ghost: Ghost) => applyFieldPosToNode(ghost.nodeId, ghost.pos, ghost.intensity);
 
   // ---- Auto-Evolve helpers ------------------------------------------------
   const evClampInt = (v: number, lo: number, hi: number): number =>
@@ -983,6 +996,8 @@ export const useStudio = create<StudioState>((set, get) => {
       commit(updateNodeParam(get().workflow, nodeId, paramId, value)); // commit's diff stamps this node
     },
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
+    setNodeDepth: (nodeId, z) => commit(setNodeDepthWf(get().workflow, nodeId, z)),
+    controlNode: (nodeId, pos) => applyFieldPosToNode(nodeId, pos, 1),
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
     addCapsule: (kind, x, y) => {
