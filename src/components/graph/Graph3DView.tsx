@@ -292,6 +292,7 @@ export function Graph3DView({ onContextFailed }: Props) {
   const moveNodeTo = useStudio((s) => s.moveNodeTo);
   const setNodeDepth = useStudio((s) => s.setNodeDepth);
   const controlNode = useStudio((s) => s.controlNode);
+  const nodeControllable = useStudio((s) => s.nodeControllable);
   const connectSockets = useStudio((s) => s.connectSockets);
   const disconnectEdge = useStudio((s) => s.disconnectEdge);
   const addCapsule = useStudio((s) => s.addCapsule);
@@ -1805,19 +1806,27 @@ export function Graph3DView({ onContextFailed }: Props) {
   // ---- node/port interactions (same store actions as the 2D editor) --------
   /**
    * The drag mode a node press starts in, from the held modifiers:
-   *  - Alt → control (parameters via the field) — only when the node HAS a field
-   *    profile; otherwise Alt falls back to layout so the gesture is never dead.
+   *  - Alt → control (parameters via the field) — only when the node is actually
+   *    controllable under the EFFECTIVE profile (preset-aware, the same source
+   *    controlNode writes through); otherwise Alt falls back to layout so the
+   *    gesture is never dead.
    *  - Shift → depth (the z axis).
    *  - neither → layout (horizontal + height = mass).
    */
   const dragModeFor = (nodeId: string, e: { altKey: boolean; shiftKey: boolean }): DragState['mode'] =>
-    e.altKey && hasProfile(nodeId) ? 'control' : e.shiftKey ? 'depth' : 'layout';
+    e.altKey && nodeControllable(nodeId) ? 'control' : e.shiftKey ? 'depth' : 'layout';
 
   /** Begin a node drag (from an orb pick or the selected card header). */
   const startNodeDrag = (nodeId: string, e: React.PointerEvent, fromOrb: boolean): boolean => {
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return false;
-    const selected = nodeId === selectedNodeId;
+    // A header drag ALWAYS selects the node synchronously (onHeadDown → selectNode),
+    // so its card renders LIFTed this same gesture — the drag plane must include
+    // LIFT to match, even though `selectedNodeId` in this render closure is still
+    // stale. Orb drags never lift (orbs render at nodeDepth), so they honor the
+    // live selection state. (Without this, a not-yet-selected card in 'cards' mode
+    // tracks the cursor ~LIFT world-z off for its first drag.)
+    const selected = fromOrb ? nodeId === selectedNodeId : true;
     const planeZ = nodeDepth(node) + (selected ? LIFT : 0);
     const p = workflowPointAt(e.clientX, e.clientY, planeZ);
     if (!p) return false;

@@ -347,6 +347,13 @@ interface StudioState {
   setNodeDepth(nodeId: string, z: number): void;
   /** Drive a node's params from a field POSITION (control-mode node drag; intensity 1). */
   controlNode(nodeId: string, pos: { x: number; y: number; z: number }): void;
+  /**
+   * True when a node has at least one controllable axis under the EFFECTIVE field
+   * profile (the active preset if one is set, else the curated profile) — i.e.
+   * whether controlNode would actually write params. The 3D control-mode gate uses
+   * this so the mode decision and the field write always agree.
+   */
+  nodeControllable(nodeId: string): boolean;
   connectSockets(from: SocketRef, to: SocketRef): void;
   disconnectEdge(edgeId: string): void;
   addCapsule(kind: CapsuleKind, x: number, y: number): void;
@@ -998,6 +1005,10 @@ export const useStudio = create<StudioState>((set, get) => {
     moveNodeTo: (nodeId, x, y) => commit(moveNode(get().workflow, nodeId, x, y)),
     setNodeDepth: (nodeId, z) => commit(setNodeDepthWf(get().workflow, nodeId, z)),
     controlNode: (nodeId, pos) => applyFieldPosToNode(nodeId, pos, 1),
+    nodeControllable: (nodeId) => {
+      const p = profileForNode(nodeId); // preset-aware, same source controlNode writes through
+      return !!(p.x || p.y || p.z);
+    },
     connectSockets: (from, to) => commit(connect(get().workflow, from, to)),
     disconnectEdge: (edgeId) => commit(disconnect(get().workflow, edgeId)),
     addCapsule: (kind, x, y) => {
