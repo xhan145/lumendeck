@@ -19,6 +19,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { id: 'mission', label: 'Mission', icon: () => Icon.compass({ size: 22 }) },
       { id: 'overview', label: 'Overview', icon: () => Icon.target({ size: 22 }) },
+      { id: 'craft', label: 'Craft', icon: () => Icon.sparkle({ size: 22 }) },
       { id: 'projects', label: 'Projects', icon: () => Icon.layers({ size: 22 }) },
       { id: 'recipes', label: 'Recipes', icon: () => Icon.beaker({ size: 22 }) },
       { id: 'entropy', label: 'Entropy', icon: () => Icon.scatter({ size: 22 }) },
