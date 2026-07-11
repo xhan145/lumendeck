@@ -9,6 +9,9 @@ Exposes the same contract as the old FastAPI bridge:
   GET  /controlnet/capabilities?model=<shelf id> -> {"family": "...", "types": [...]}
   POST /controlnet/preprocess -> {"map_base64": "..."} (on-demand control-map preview)
   POST /generate -> {"image_base64": "...", "seed": int}
+  GET  /cloud/providers -> hosted providers + curated models + hasKey
+  POST /cloud/keys -> persist a provider API key bridge-side (blank key clears)
+  POST /cloud/generate -> run one RenderJob on a hosted provider (loud errors)
 
 `build_response` is a pure function so it can be unit-tested without binding a socket.
 """
@@ -40,10 +43,16 @@ try:
 except Exception:
     _HAS_CIVITAI = False
 
+try:
+    import cloud as cloud_providers
+    _HAS_CLOUD = True
+except Exception:
+    _HAS_CLOUD = False
+
 # Built web app (from `npm run build`). When present, the bridge serves the whole
 # UI on the same origin as the API, so the browser never makes a cross-origin call.
 DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
-API_PREFIXES = ("/health", "/models", "/svd-models", "/model-folder", "/generate", "/render-motion", "/animate-svd", "/evolve-step", "/diffusers", "/progress", "/civitai", "/controlnet")
+API_PREFIXES = ("/health", "/models", "/svd-models", "/model-folder", "/generate", "/render-motion", "/animate-svd", "/evolve-step", "/diffusers", "/progress", "/civitai", "/controlnet", "/cloud")
 
 
 def _civitai_dest(file_name: str, asset_type: str) -> str:
@@ -105,6 +114,33 @@ def _prune_progress_files(max_age_s: int = 3600) -> None:
                 pass
     except OSError:
         pass
+
+# ---- Bridge-side settings (cloud API keys live here, NEVER in the browser) ----
+def _settings_path() -> str:
+    override = os.environ.get("LUMENDECK_SETTINGS_PATH")
+    if override:
+        return override
+    root = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LumenDeck")
+    return os.path.join(root, "settings.json")
+
+
+def _load_settings() -> dict:
+    try:
+        with open(_settings_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_settings(settings: dict) -> None:
+    path = _settings_path()
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, indent=2)
+
 
 try:
     import diffusers_backend
@@ -550,6 +586,95 @@ def build_response(method: str, path: str, body: bytes):
             return 200, headers, json.dumps(status).encode()
         except Exception as exc:
             return 400, headers, json.dumps({"error": str(exc), "status": model_dir_status()}).encode()
+
+    if method == "GET" and path == "/cloud/providers":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_CLOUD:
+            return 503, headers, json.dumps({"error": "cloud module unavailable in this build"}).encode()
+        keys = _load_settings().get("cloudKeys") or {}
+        return 200, headers, json.dumps({"providers": cloud_providers.provider_listing(keys)}).encode()
+
+    if method == "POST" and path == "/cloud/keys":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_CLOUD:
+            return 503, headers, json.dumps({"error": "cloud module unavailable in this build"}).encode()
+        try:
+            req = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        provider_id = str(req.get("provider", ""))
+        if provider_id not in cloud_providers.PROVIDERS:
+            return 400, headers, json.dumps({"error": f"unknown provider: {provider_id or '(missing)'}"}).encode()
+        key = str(req.get("key", "")).strip()
+        settings = _load_settings()
+        cloud_keys = settings.get("cloudKeys")
+        if not isinstance(cloud_keys, dict):
+            cloud_keys = {}
+        if key:
+            cloud_keys[provider_id] = key
+        else:
+            cloud_keys.pop(provider_id, None)  # blank key clears the entry
+        settings["cloudKeys"] = cloud_keys
+        try:
+            _save_settings(settings)
+        except OSError as exc:
+            return 503, headers, json.dumps({"error": f"could not persist settings: {exc}"}).encode()
+        return 200, headers, json.dumps({"ok": True, "hasKey": bool(key)}).encode()
+
+    if method == "POST" and path == "/cloud/generate":
+        headers["Content-Type"] = "application/json"
+        if not _HAS_CLOUD:
+            return 503, headers, json.dumps({"error": "cloud module unavailable in this build"}).encode()
+        try:
+            job = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return 400, headers, json.dumps({"error": "invalid JSON"}).encode()
+        provider_id = str(job.get("provider", ""))
+        provider = cloud_providers.PROVIDERS.get(provider_id)
+        if provider is None:
+            return 400, headers, json.dumps({"error": f"unknown provider: {provider_id or '(missing)'}"}).encode()
+        model = str(job.get("model", ""))
+        if not model:
+            return 400, headers, json.dumps({"error": "model is required"}).encode()
+        key = str((_load_settings().get("cloudKeys") or {}).get(provider_id, "")).strip()
+        if not key:
+            return 400, headers, json.dumps({
+                "error": f"no API key saved for {provider.label}. Save one under Backend -> Cloud.",
+            }).encode()
+        job_id = str(job.get("jobId", ""))
+        track = bool(_JOB_ID.match(job_id))
+        if track:
+            _prune_progress_files()
+            _write_progress(job_id, {"phase": "loading"})
+
+        def _report(update: dict) -> None:
+            # Map cloud phases onto the progress shape the adapter already polls
+            # ({phase, step, steps}); queued -> loading, running -> rendering.
+            if not track:
+                return
+            phase = str(update.get("phase", "running"))
+            try:
+                fraction = max(0.0, min(1.0, float(update.get("progress") or 0.0)))
+            except (TypeError, ValueError):
+                fraction = 0.0
+            if phase == "queued":
+                _write_progress(job_id, {"phase": "loading"})
+            else:
+                _write_progress(job_id, {"phase": "rendering", "step": int(fraction * 100), "steps": 100})
+
+        try:
+            result = provider.generate(job, model, key, _report)
+            if track:
+                _write_progress(job_id, {"phase": "done"})
+            return 200, headers, json.dumps(result).encode()
+        except cloud_providers.CloudError as exc:
+            if track:
+                _write_progress(job_id, {"phase": "error"})
+            return 502, headers, json.dumps({"error": str(exc)}).encode()
+        except Exception as exc:
+            if track:
+                _write_progress(job_id, {"phase": "error"})
+            return 502, headers, json.dumps({"error": f"{provider_id}: {exc}"}).encode()
 
     if method == "POST" and path == "/generate":
         headers["Content-Type"] = "application/json"
