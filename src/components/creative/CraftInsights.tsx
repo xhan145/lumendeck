@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useStudio } from '../../state/store';
 import { analyzeCraft, MIN_CORPUS, MIN_KEPT } from '../../core/creative/craftBrain';
 import { buildAnalysisContext } from '../../state/creative';
+import { PromptLineage } from './PromptLineage';
 import { Icon } from '../icons';
 import '../../styles/creative.css';
 
@@ -32,6 +33,7 @@ export function CraftInsights() {
   const promoteToRecipe = useStudio((s) => s.promoteToRecipe);
   const setView = useStudio((s) => s.setView);
   const [made, setMade] = useState<string[]>([]);
+  const [tab, setTab] = useState<'insights' | 'lineage'>('insights');
 
   const report = useMemo(
     () => analyzeCraft(buildAnalysisContext(gallery, brains, shelf).renders, recipes, new Date()),
@@ -59,7 +61,14 @@ export function CraftInsights() {
           </div>
         </header>
 
-        {report.palette.length === 0 ? (
+        <div className="craft-tabs">
+          <button className={`btn tiny ${tab === 'insights' ? 'primary' : ''}`} type="button" onClick={() => setTab('insights')}>Insights</button>
+          <button className={`btn tiny ${tab === 'lineage' ? 'primary' : ''}`} type="button" onClick={() => setTab('lineage')}>Lineage</button>
+        </div>
+
+        {tab === 'lineage' ? (
+          <PromptLineage />
+        ) : report.palette.length === 0 ? (
           <section className="card creative-card"><p className="creative-empty">No real renders yet — generate a few and this fills in.</p></section>
         ) : (
           <>
