@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildLumenConstellation } from '../src/components/constellation/data';
 import { indexConstellation } from '../src/components/constellation/selection';
 import type { ConstellationNode } from '../src/components/constellation/types';
-import { CAPSULE_KINDS } from '../src/core/capsules';
+import { CAPSULES, CAPSULE_KINDS } from '../src/core/capsules';
 import type { ProjectBrain, CreativeRecipe } from '../src/core/creative/types';
 
 const walk = (node: ConstellationNode, fn: (n: ConstellationNode, depth: number) => void, depth = 0) => {
@@ -30,10 +30,11 @@ describe('buildLumenConstellation', () => {
     expect(indexConstellation(root).size).toBe(count);
   });
 
-  it('maps all 53 capsules under 11 category satellites', () => {
+  it('maps every capsule under its category satellite', () => {
     const root = buildLumenConstellation();
     const studio = root.children!.find((c) => c.id === 'studio')!;
-    expect(studio.children!.length).toBe(11);
+    const categories = new Set(CAPSULE_KINDS.map((k) => CAPSULES[k].category));
+    expect(studio.children!.length).toBe(categories.size);
     const leaves = studio.children!.flatMap((c) => c.children ?? []);
     expect(leaves.length).toBe(CAPSULE_KINDS.length);
   });

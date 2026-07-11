@@ -88,6 +88,21 @@ describe('selection history', () => {
     expect(canGoBack(s0)).toBe(false);
   });
 
+  it('with an index, back skips ghost ids that vanished in a tree rebuild', () => {
+    // History contains an id the (rebuilt) tree no longer has.
+    const s: ReturnType<typeof initialSelection> = { currentId: 'sampler', history: ['lumen', 'deleted-node', 'studio'] };
+    let n = goBack(s, index); // 'studio' exists → normal pop
+    expect(n.currentId).toBe('studio');
+    n = goBack(n, index); // 'deleted-node' is a ghost → skipped, lands on 'lumen'
+    expect(n.currentId).toBe('lumen');
+    expect(n.history).toEqual([]);
+  });
+
+  it('with an index, back is a no-op when every history entry is a ghost', () => {
+    const s: ReturnType<typeof initialSelection> = { currentId: 'lumen', history: ['ghost-a', 'ghost-b'] };
+    expect(goBack(s, index)).toBe(s);
+  });
+
   it('selection works for non-direct descendants (normalized map, not parent walk)', () => {
     let s = initialSelection('lumen');
     s = selectNode(s, 'sampler', index); // skip the intermediate level entirely

@@ -33,9 +33,28 @@
   color: var(--ld-text, #fbfcfe);
 }
 
-.constellation-overlay .constellation-nav,
 .constellation-overlay .constellation-back {
   pointer-events: auto; /* …except the interactive islands */
+}
+
+.constellation-nav {
+  /* Shrink-wrap: a stretched full-width strip would swallow orbit gestures. */
+  width: max-content;
+}
+
+/* List/fallback mode: the decorative header hides and the focus block goes
+   visually-hidden (aria-live keeps announcing) so nothing paints over the tree. */
+.constellation-overlay--list .constellation-head {
+  display: none;
+}
+
+.constellation-overlay--list .constellation-focus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .constellation-eyebrow {
@@ -208,6 +227,7 @@
 
 .constellation-fallback-note {
   margin: 0 0 14px;
+  margin-right: 110px; /* clear the absolutely-positioned view toggle */
   font-size: 12.5px;
   color: rgba(251, 252, 254, 0.65);
 }

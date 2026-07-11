@@ -93,7 +93,22 @@ export function ConstellationView() {
     (id: string) => setSelection((s) => selectNode(s, id, index)),
     [index],
   );
-  const back = useCallback(() => setSelection((s) => goBack(s)), []);
+  // Index-aware Back: history ids that vanished in a live tree rebuild are
+  // skipped, so Back never lands on a ghost node.
+  const back = useCallback(() => setSelection((s) => goBack(s, index)), [index]);
+
+  // Focus recovery: promoting remounts the label buttons and reaching the root
+  // disables Back — either can drop keyboard focus to <body>. When that
+  // happens, land focus on the overlay title (tabIndex -1, adjacent to the
+  // live-region announcement) so keyboard exploration continues seamlessly.
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      if (document.activeElement === document.body) {
+        (document.querySelector('.constellation-title') as HTMLElement | null)?.focus({ preventScroll: true });
+      }
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [selection.currentId]);
 
   const canvasMode = webglOk && !contextFailed && !listMode;
   const quality: EffectsLevel = graph3dEffects;
@@ -126,6 +141,7 @@ export function ConstellationView() {
         satelliteCount={satelliteCount}
         canGoBack={canGoBack(selection)}
         onBack={back}
+        mode={canvasMode ? 'scene' : 'list'}
       />
       {webglOk && !contextFailed ? (
         <button

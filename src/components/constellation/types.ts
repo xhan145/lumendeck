@@ -32,11 +32,3 @@ export interface ConstellationNode {
   strength?: number;
   children?: ConstellationNode[];
 }
-
-/** Props boundary for the scene — domain data in, selection events out. */
-export interface ConstellationSceneProps {
-  root: ConstellationNode;
-  initialNodeId?: string;
-  onNodeSelect?: (node: ConstellationNode) => void;
-  className?: string;
-}

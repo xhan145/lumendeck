@@ -79,7 +79,9 @@ the root).
 - Tiers (`quality` prop, fed from `appSettings.graph3dEffects`): geometry
   detail, 3D-starfield count, moon caps, and bloom (cinematic only, via the
   bloom-only `graph3d/postprocessing` pipeline) scale per tier; `'off'` still
-  renders at the minimal tier — this view *is* the content.
+  renders at the minimal tier — this view *is* the content. Note the deliberate
+  semantic difference from the graph view, where `'off'` disables its effect
+  layers entirely: the Universe always renders and `'off'` only lowers fidelity.
 - A `createAdaptiveQuality` governor sheds starfield/bloom under sustained
   slowness; frames are never sampled while the tab is hidden.
 - The loop is `createPlaybackDriver` (rAF + timer, starvation-proof); hidden

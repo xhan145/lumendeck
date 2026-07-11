@@ -98,6 +98,8 @@ interface SystemHandle {
 interface Retiring {
   system: SystemHandle;
   start: number;
+  /** Group scale at retire time — interrupted grows shrink from HERE, not 1. */
+  startScale: number;
 }
 
 interface Transition {
@@ -321,6 +323,12 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
         dirtyRef.current = true;
       };
 
+      // Label chips live inside the host, so their taps bubble here. They own
+      // their own click handling — the scene must never raycast "through" a
+      // chip (the ray would hit whatever body happens to pass behind it).
+      const isLabelTarget = (e: Event) =>
+        !!(e.target as Element | null)?.closest?.('.constellation-label');
+
       const ndcFromEvent = (e: PointerEvent) => {
         const rect = host.getBoundingClientRect();
         return new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
@@ -336,7 +344,15 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
       };
 
       const onPointerDown = (e: PointerEvent) => {
+        if (isLabelTarget(e)) return; // the chip's own click handles it
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        // Capture so drags survive crossing the view edge or overlay islands
+        // (the Graph3DView pattern).
+        try {
+          host.setPointerCapture(e.pointerId);
+        } catch {
+          /* capture is best-effort (e.g. synthetic events) */
+        }
         if (pointers.size === 1) downAt = { x: e.clientX, y: e.clientY };
         if (pointers.size === 2) {
           const [a, b] = [...pointers.values()];
@@ -366,8 +382,9 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
           markInteract();
           return;
         }
-        // Hover feedback (pointer devices, no buttons held).
-        const id = pickAt(e);
+        // Hover feedback (pointer devices, no buttons held). Over a chip, the
+        // chip's own CSS hover applies — clear any scene hover instead.
+        const id = isLabelTarget(e) ? null : pickAt(e);
         if (id !== hoveredRef.current) {
           hoveredRef.current = id;
           host.style.cursor = id ? 'pointer' : 'grab';
@@ -376,8 +393,14 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
       };
 
       const endPointer = (e: PointerEvent) => {
+        if (!pointers.has(e.pointerId)) return; // e.g. a label-originated tap we ignored on down
         const wasSingle = pointers.size === 1;
         pointers.delete(e.pointerId);
+        try {
+          host.releasePointerCapture(e.pointerId);
+        } catch {
+          /* already released */
+        }
         if (wasSingle && downAt) {
           const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
           if (moved < CLICK_SLOP_PX) {
@@ -387,6 +410,22 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
         }
         downAt = null;
         markInteract();
+      };
+
+      /** pointercancel / leaving mid-gesture: clear state, never pick/promote. */
+      const cancelPointer = (e: PointerEvent) => {
+        pointers.delete(e.pointerId);
+        if (pointers.size === 0) downAt = null;
+        markInteract();
+      };
+
+      /** Pointer left the host: drop hover highlight + cursor (drag state is capture-safe). */
+      const onHostLeave = () => {
+        if (hoveredRef.current) {
+          hoveredRef.current = null;
+          host.style.cursor = 'grab';
+          dirtyRef.current = true;
+        }
       };
 
       const clampDist = (d: number) => {
@@ -405,8 +444,8 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
       host.addEventListener('pointerdown', onPointerDown);
       host.addEventListener('pointermove', onPointerMove);
       host.addEventListener('pointerup', endPointer);
-      host.addEventListener('pointercancel', endPointer);
-      host.addEventListener('pointerleave', endPointer);
+      host.addEventListener('pointercancel', cancelPointer);
+      host.addEventListener('pointerleave', onHostLeave);
       host.addEventListener('wheel', onWheel, { passive: false });
       host.style.cursor = 'grab';
       host.style.touchAction = 'none';
@@ -494,7 +533,9 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
         if (retiring) {
           const p = Math.min(1, (nowMs - retiring.start) / 700);
           const e = easeOutCubic(p);
-          retiring.system.group.scale.setScalar(1 - 0.5 * e);
+          // Scale from the CAPTURED value at retire time — an interrupted
+          // half-grown system must shrink from where it was, never pop to 1.
+          retiring.system.group.scale.setScalar(retiring.startScale * (1 - 0.5 * e));
           retiring.system.center.setEnergy(1 - e);
           for (const s of retiring.system.satellites) s.body.setEnergy(s.baseEnergy * (1 - e));
           if (p >= 1) {
@@ -515,35 +556,51 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
             tmpV3.project(camera);
             const visible = tmpV3.z < 1 && Math.abs(tmpV3.x) < 1.05 && Math.abs(tmpV3.y) < 1.05;
             if (!visible) {
+              // visibility (not just opacity) removes the chip from the tab
+              // order + accessibility tree — no focusable invisible buttons.
               el.style.opacity = '0';
+              el.style.visibility = 'hidden';
               el.style.pointerEvents = 'none';
               continue;
             }
             const x = ((tmpV3.x + 1) / 2) * rectW;
             const y = ((1 - tmpV3.y) / 2) * rectH;
             el.style.opacity = '1';
+            el.style.visibility = 'visible';
             el.style.pointerEvents = 'auto';
             el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
             el.dataset.hovered = hoveredRef.current === s.id ? 'true' : 'false';
           }
         }
 
-        // Render + instrumentation + adaptive shedding (never feed hidden
-        // frames — the ~30ms timer cadence would read as sustained slowness).
+        // Render + instrumentation + adaptive shedding. The governor is fed the
+        // RENDER-TO-RENDER cadence (GPU-bound slowness widens the gap between
+        // frames; render() itself returns after command submission), exactly
+        // like Graph3DView's recordFrame — never CPU tick duration, and never
+        // hidden frames (the ~30ms timer cadence would read as sustained
+        // slowness). quality.ts's maxSampleMs gap filter absorbs idle sleeps.
         if (post && !postDisabled) post.render();
         else renderer.render(scene, camera);
-        if (hidden) return true;
-        const frameMs = performance.now() - nowMs;
-        stats.sample(frameMs);
-        if (adaptive.feed(frameMs, nowMs)) {
-          const cap = adaptive.cap();
-          if (starfield) starfield.object.visible = levelRank(cap) >= levelRank('rich');
-          postDisabled = levelRank(cap) < levelRank('cinematic');
+        if (hidden) {
+          lastRenderTs = 0; // hidden dirty-sync frames must not pollute the cadence
+          return true;
         }
+        const after = performance.now();
+        if (lastRenderTs > 0) {
+          const delta = after - lastRenderTs;
+          stats.sample(delta);
+          if (adaptive.feed(delta, after)) {
+            const cap = adaptive.cap();
+            if (starfield) starfield.object.visible = levelRank(cap) >= levelRank('rich');
+            postDisabled = levelRank(cap) < levelRank('cinematic');
+          }
+        }
+        lastRenderTs = after;
         return true;
       };
 
       let postDisabled = false;
+      let lastRenderTs = 0;
       const driver = createPlaybackDriver(tick, {
         requestFrame: (cb) => requestAnimationFrame(cb),
         cancelFrame: (id) => cancelAnimationFrame(id),
@@ -559,13 +616,14 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
         host.removeEventListener('pointerdown', onPointerDown);
         host.removeEventListener('pointermove', onPointerMove);
         host.removeEventListener('pointerup', endPointer);
-        host.removeEventListener('pointercancel', endPointer);
-        host.removeEventListener('pointerleave', endPointer);
+        host.removeEventListener('pointercancel', cancelPointer);
+        host.removeEventListener('pointerleave', onHostLeave);
         host.removeEventListener('wheel', onWheel);
         retiringRef.current?.system.dispose();
         retiringRef.current = null;
         systemRef.current?.dispose();
         systemRef.current = null;
+        transitionRef.current = null; // a stale transition must never animate the NEXT mount's system
         for (const e of env) e.dispose();
         post?.dispose();
         renderer.dispose();
@@ -591,38 +649,63 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
   centerIdRef.current = centerId;
 
   // ---- (re)build the orbital system when the selected node changes ---------
+  const builtCenterRef = useRef<string | null>(null);
   useEffect(() => {
     const ctx = ctxRef.current;
     if (!ctx) return;
     const node = index.get(centerId) ?? root;
     const reduced = reducedRef.current;
+    // A store-driven root rebuild with an UNCHANGED center is a data refresh,
+    // not a promotion: swap the system in place — no retiring choreography, no
+    // grow transition, no camera reframe (the user's zoom is theirs).
+    const isRefresh = builtCenterRef.current === centerId && systemRef.current !== null;
+    builtCenterRef.current = centerId;
 
-    // Where should the new system grow from? The promoted satellite's current
-    // world position, if it was on screen (otherwise the origin).
+    // Where should the new system grow from? The promoted body's current world
+    // position — satellite or moon — if it was on screen (else the origin).
     const from = new THREE.Vector3(0, 0, 0);
     const old = systemRef.current;
-    if (old) {
+    if (old && !isRefresh) {
       const promoted = old.satellites.find((s) => s.id === centerId);
-      if (promoted) promoted.group.getWorldPosition(from);
+      if (promoted) {
+        promoted.group.getWorldPosition(from);
+      } else {
+        // Deep promotion: the clicked body may be a MOON of a satellite.
+        outer: for (const s of old.satellites) {
+          for (const m of s.moons) {
+            if (m.body.mesh.userData.nodeId === centerId) {
+              m.body.group.getWorldPosition(from);
+              break outer;
+            }
+          }
+        }
+      }
       // An in-flight retiree is disposed immediately — transitions stay
       // interruptible without compounding.
       retiringRef.current?.system.dispose();
-      retiringRef.current = { system: old, start: performance.now() };
+      retiringRef.current = { system: old, start: performance.now(), startScale: old.group.scale.x };
+    } else if (old && isRefresh) {
+      old.dispose();
+      retiringRef.current?.system.dispose();
+      retiringRef.current = null;
+      transitionRef.current = null;
     }
 
     const sys = buildSystem(node, tier, reduced ? 0 : 1, shaderTimeRef.current);
     ctx.scene.add(sys.group);
     systemRef.current = sys;
 
-    if (old) {
+    if (old && !isRefresh) {
       sys.group.position.copy(from);
       sys.group.scale.setScalar(0.3);
       transitionRef.current = { start: performance.now(), duration: reduced ? 220 : 900, from };
+      // Frame the new system: out for wide systems, in for tight ones.
+      const cam = camRef.current;
+      cam.targetDist = Math.min(Math.max(sys.maxRadius * 1.9 + 4, 9), 46);
+    } else if (!old) {
+      const cam = camRef.current;
+      cam.targetDist = Math.min(Math.max(sys.maxRadius * 1.9 + 4, 9), 46);
     }
-
-    // Frame the new system: pull the camera out for wide systems, in for tight ones.
-    const cam = camRef.current;
-    cam.targetDist = Math.min(Math.max(sys.maxRadius * 1.9 + 4, 9), 46);
     dirtyRef.current = true;
 
     return () => {
@@ -660,7 +743,7 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
             ref={registerLabel(child.id)}
             type="button"
             className="constellation-label"
-            style={{ opacity: 0 }}
+            style={{ opacity: 0, visibility: 'hidden' }}
             onClick={() => onPromote(child.id)}
             title={child.description || child.label}
           >

@@ -67,11 +67,20 @@ export function selectNode(
   return { currentId: id, history: [...state.history, state.currentId] };
 }
 
-/** Pop one level. Safe no-op (same reference) when history is empty (at root). */
-export function goBack(state: SelectionState): SelectionState {
-  if (state.history.length === 0) return state;
-  const history = state.history.slice(0, -1);
-  return { currentId: state.history[state.history.length - 1], history };
+/**
+ * Pop one level. Safe no-op (same reference) when history is empty (at root).
+ * With an `index`, ghost entries — ids that vanished in a live tree rebuild
+ * (deleted collection, concept leaves replaced by real projects) — are skipped
+ * so Back always lands on a node that still exists.
+ */
+export function goBack(state: SelectionState, index?: Map<string, ConstellationNode>): SelectionState {
+  let history = state.history;
+  while (history.length > 0) {
+    const targetId = history[history.length - 1];
+    history = history.slice(0, -1);
+    if (!index || index.has(targetId)) return { currentId: targetId, history };
+  }
+  return state; // nothing valid to return to
 }
 
 export function canGoBack(state: SelectionState): boolean {
