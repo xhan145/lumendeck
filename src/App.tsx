@@ -1,5 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStudio, type ViewId } from './state/store';
+import { StarfieldCanvas } from './ui/starfield/StarfieldCanvas';
+import { SplashScreen } from './ui/SplashScreen';
+import { useAutoHide } from './ui/chrome/useAutoHide';
 import { APP_VERSION } from './state/storeConstants';
 import { Gallery } from './components/gallery/Gallery';
 import { GuideView } from './components/guide/GuideView';
@@ -23,6 +26,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { SupportPage } from './pages/SupportPage';
 import './styles/base.css';
 import './styles/app.css';
+import './styles/glass.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
   mission: 'Mission Control',
@@ -75,6 +79,24 @@ export function App() {
   const setView = useStudio((s) => s.setView);
   const probeBridge = useStudio((s) => s.probeBridge);
   const compactMode = useStudio((s) => s.appSettings.compactMode);
+  // Autohide chrome (glass cinema): ON unless explicitly pinned (false).
+  const chromeAutohide = useStudio((s) => s.appSettings.chromeAutohide !== false);
+  const updateAppSettings = useStudio((s) => s.updateAppSettings);
+  // The launch splash plays fully on EVERY launch; the app boots behind it.
+  const [splashDone, setSplashDone] = useState(false);
+  // Bars stay revealed while the splash plays (no hidden chrome on arrival).
+  const autohideArmed = chromeAutohide && splashDone;
+  const top = useAutoHide('top', autohideArmed);
+  const left = useAutoHide('left', autohideArmed);
+  // While the splash covers the app, the shell is `inert`: the overlay blocks
+  // the pointer, so keyboard + screen-reader access to the invisible UI must be
+  // blocked too (no Tab-activating covered buttons). Set via the DOM property —
+  // React 18's JSX types don't know the inert attribute yet.
+  const shellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (shellRef.current) shellRef.current.inert = !splashDone;
+  }, [splashDone]);
 
   useEffect(() => { void probeBridge(); }, [probeBridge]);
 
@@ -100,31 +122,57 @@ export function App() {
       : <MissionControl />;
 
   return (
-    <div className={`shell ${compactMode ? 'compact' : ''}`}>
-      <header className="topbar">
-        <div className="brand">
-          <BrandMark size={26} />
-          <span className="lumen">Lumen</span><span className="deck">Deck</span>
-          <span className="ver">v{APP_VERSION}</span>
-        </div>
-        <span className="view-title">{VIEW_TITLES[view] ?? 'Guide'}</span>
-        <div className="topbar-right">
-          <BridgeStatus />
-          <HealthChip />
-          <button className="btn controls-toggle" type="button" aria-label="Open Controls" onClick={() => setView('controls')}>
-            {Icon.gear({ size: 18 })} Controls
-          </button>
-          <button className="btn icon controls-toggle" type="button" aria-label="Open Settings" onClick={() => setView('settings')}>
-            {Icon.gear({ size: 18 })}
-          </button>
-        </div>
-      </header>
-      <div className="workspace">
-        <NavRail view={view} setView={setView} />
-        <div className="main-pane">
-          {page}
+    <>
+      <StarfieldCanvas />
+      <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''}`}>
+        <header
+          className={`topbar ${autohideArmed && !top.visible ? 'chrome-hidden' : ''}`}
+          {...top.barProps}
+        >
+          <div className="brand">
+            <BrandMark size={26} />
+            <span className="lumen">Lumen</span><span className="deck">Deck</span>
+            <span className="ver">v{APP_VERSION}</span>
+          </div>
+          <span className="view-title">{VIEW_TITLES[view] ?? 'Guide'}</span>
+          <div className="topbar-right">
+            <BridgeStatus />
+            <HealthChip />
+            <button className="btn controls-toggle" type="button" aria-label="Open Controls" onClick={() => setView('controls')}>
+              {Icon.gear({ size: 18 })} Controls
+            </button>
+            <button className="btn icon controls-toggle" type="button" aria-label="Open Settings" onClick={() => setView('settings')}>
+              {Icon.gear({ size: 18 })}
+            </button>
+            <button
+              className="btn icon"
+              type="button"
+              aria-pressed={!chromeAutohide}
+              aria-label={chromeAutohide ? 'Pin the toolbars (stop auto-hiding)' : 'Unpin the toolbars (auto-hide)'}
+              title={chromeAutohide ? 'Pin the toolbars (stop auto-hiding)' : 'Unpin the toolbars (auto-hide)'}
+              onClick={() => updateAppSettings({ chromeAutohide: !chromeAutohide })}
+            >
+              {Icon.layers({ size: 18 })}
+            </button>
+          </div>
+        </header>
+        <div className="workspace">
+          <div
+            className={`chrome-left ${autohideArmed && !left.visible ? 'chrome-hidden' : ''}`}
+            {...left.barProps}
+          >
+            <NavRail view={view} setView={setView} />
+          </div>
+          <div className="main-pane">
+            <div className="view-fade" key={view}>
+              {page}
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+      {autohideArmed && !top.visible && <div className="chrome-strip top" aria-hidden="true" />}
+      {autohideArmed && !left.visible && <div className="chrome-strip left" aria-hidden="true" />}
+      {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
+    </>
   );
 }

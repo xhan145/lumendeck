@@ -1,0 +1,302 @@
+/* UI Glass Cinema — glassmorphism shell over the ambient starfield, launch
+   splash, autohide chrome, and the app-wide motion language.
+   Spec: docs/superpowers/specs/2026-07-11-ui-glass-cinema-design.md
+   Loaded AFTER app.css (App.tsx import order), so same-specificity overrides
+   here win — the glass re-skin lives in THIS file instead of scattering edits.
+
+   Rules pinned here:
+   - ONE backdrop-filter layer per region: chrome bars/panels blur; cards nested
+     inside them use translucent fills only (--glass-fill), never nested blur.
+   - All motion is transform/opacity in the 150–400ms band; ambient layers sit
+     BELOW content. prefers-reduced-motion silences every animation herein. */
+
+:root {
+  --glass-surface: rgba(18, 22, 29, 0.55);
+  --glass-surface-strong: rgba(18, 22, 29, 0.78);
+  --glass-fill: rgba(26, 31, 41, 0.72); /* nested cards: translucent, NO blur */
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-blur: 18px;
+  --glass-radius: 16px;
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-1: 150ms;
+  --dur-2: 240ms;
+  --dur-3: 400ms;
+}
+
+/* ===== Ambient starfield layer ============================================ */
+
+/* Deep-space enrichment under everything (body already carries --ld-bg). */
+body {
+  background:
+    radial-gradient(1200px 700px at 24% 8%, rgba(52, 214, 244, 0.05), transparent 60%),
+    radial-gradient(1000px 720px at 78% 92%, rgba(124, 58, 237, 0.07), transparent 58%),
+    var(--ld-bg);
+}
+
+.starfield-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Shell content sits above the canvas; its own background stays transparent. */
+.shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* ===== Glass chrome ======================================================== */
+
+/* The chrome bars are fixed overlays in auto mode, so arbitrary BRIGHT page
+   content can scroll beneath them: they use the STRONG glass surface plus a
+   darkening term in the backdrop chain so --ld-text/-dim keep >=4.5:1 even
+   over a white render (0.78 dark glass over brightness(0.7) white ≈ #35383d). */
+.glass,
+.topbar,
+.nav-rail {
+  background: var(--glass-surface-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.2) brightness(0.7);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.2) brightness(0.7);
+  border-color: var(--glass-border);
+}
+
+/* Graph chrome joins the glass language (upgrades its 6px blur).
+   NOTE: target the VISIBLE children, never .collapsible-palette itself — that
+   wrapper is an invisible pointer-events:none layout box spanning most of the
+   graph, and backdrop-filter blurs an element's whole box even when it paints
+   nothing (a giant permanent blur rectangle over the scene). */
+.graph-mode-toggle,
+.palette-tab,
+.collapsible-palette .graph-toolbar,
+.motion-panel-tab,
+.motion-panel-body,
+.graph3d-ghost-note,
+.graph-hint {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
+  border-color: var(--glass-border);
+}
+
+/* No backdrop-filter support (old WebView2): solid fallback keeps contrast. */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass,
+  .topbar,
+  .nav-rail {
+    background: var(--ld-surface);
+  }
+}
+
+/* Cards float as translucent glass fills (no nested blur — see header rule). */
+.card,
+.page-card {
+  background: var(--glass-fill);
+  border-color: var(--glass-border);
+}
+
+/* The 3D stage lets the starfield glow through behind the WebGL scene
+   (its canvas is alpha-transparent at every tier except the cinematic dome,
+   which correctly covers the whole viewport anyway). */
+.graph3d-wrap {
+  background:
+    radial-gradient(1100px 620px at 30% 12%, rgba(52, 214, 244, 0.07), transparent 62%),
+    radial-gradient(950px 640px at 76% 86%, rgba(124, 58, 237, 0.1), transparent 60%),
+    linear-gradient(180deg, rgba(11, 18, 32, 0.55) 0%, rgba(7, 20, 38, 0.7) 100%);
+}
+
+/* ===== Launch splash ======================================================= */
+
+.splash-root {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(1100px 640px at 50% 30%, rgba(52, 214, 244, 0.06), transparent 60%),
+    radial-gradient(900px 640px at 70% 85%, rgba(124, 58, 237, 0.09), transparent 58%),
+    linear-gradient(180deg, #0b1220 0%, #060d1a 100%);
+  will-change: transform, opacity;
+}
+.splash-canvas {
+  position: absolute;
+  inset: 0;
+}
+.splash-mark {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.splash-mark .brand-mark {
+  filter: drop-shadow(0 0 14px rgba(255, 138, 0, 0.5)) drop-shadow(0 0 22px rgba(26, 115, 232, 0.4));
+}
+.splash-word {
+  font-weight: 700;
+  font-size: 34px;
+  letter-spacing: -0.02em;
+}
+.splash-word .lumen { color: var(--md-on-surface); }
+.splash-word .deck {
+  background: linear-gradient(90deg, var(--md-primary-light), var(--md-secondary));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.splash-tag {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ld-text-faint);
+}
+/* Reduced-motion splash: one gentle fade (no choreography). pointer-events off
+   the moment the fade arms — base.css's global reduced-motion rule collapses
+   transition DURATIONS to ~0ms (the overlay snaps invisible early), and an
+   invisible full-screen z-1000 blocker must never swallow clicks. */
+.splash-root.splash-fade {
+  transition: opacity 600ms ease 150ms;
+  opacity: 0;
+  pointer-events: none;
+}
+.splash-root.splash-fade .splash-mark { opacity: 1; }
+
+/* ===== Autohide chrome ===================================================== */
+
+/* In auto mode the bars become fixed overlays (transform-only motion) and the
+   main pane goes full-bleed — the payoff of hiding the chrome. */
+.shell.chrome-auto { grid-template-rows: 1fr; }
+.shell.chrome-auto .workspace { grid-template-columns: 1fr; }
+
+.shell.chrome-auto .topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52px;
+  z-index: 60;
+  transition: transform var(--dur-2) var(--ease-expo), opacity var(--dur-2) var(--ease-expo);
+}
+.shell.chrome-auto .topbar.chrome-hidden {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: var(--dur-1);
+  transition-timing-function: ease-in;
+}
+
+.chrome-left {
+  display: flex;
+  min-height: 0;
+}
+.chrome-left .nav-rail { height: 100%; }
+.shell.chrome-auto .chrome-left {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 59;
+  padding-top: 52px; /* clear the topbar when both are revealed */
+  transition: transform var(--dur-2) var(--ease-expo), opacity var(--dur-2) var(--ease-expo);
+}
+.shell.chrome-auto .chrome-left.chrome-hidden {
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: var(--dur-1);
+  transition-timing-function: ease-in;
+}
+
+/* Modal overlays must stay ABOVE the auto-mode chrome: the in-tree drawers
+   (Gallery detail, recipe actions — z 40/41 in app.css) share the .shell
+   stacking context with the fixed bars (z 59/60), so without this a revealed
+   topbar would paint over an open aria-modal dialog and steal its clicks. */
+.drawer-scrim { z-index: 70; }
+.drawer { z-index: 71; }
+
+/* Slim glow strips hint at hidden bars (visual affordance only). */
+.chrome-strip {
+  position: fixed;
+  z-index: 58;
+  pointer-events: none;
+  opacity: 0.8;
+}
+.chrome-strip.top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(180deg, rgba(52, 214, 244, 0.22), transparent);
+}
+.chrome-strip.left {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(90deg, rgba(52, 214, 244, 0.22), transparent);
+}
+
+/* ===== Motion language ===================================================== */
+
+/* View switches: crossfade + rise (keyed wrapper remounts per view). */
+.view-fade {
+  height: 100%;
+  position: relative;
+  animation: glassViewIn var(--dur-2) var(--ease-expo) both;
+}
+@keyframes glassViewIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+/* Staggered card entrances on the studio pages (first 8 children). */
+.studio-page-inner > * { animation: glassViewIn var(--dur-3) var(--ease-expo) both; }
+.studio-page-inner > *:nth-child(1) { animation-delay: 0ms; }
+.studio-page-inner > *:nth-child(2) { animation-delay: 35ms; }
+.studio-page-inner > *:nth-child(3) { animation-delay: 70ms; }
+.studio-page-inner > *:nth-child(4) { animation-delay: 105ms; }
+.studio-page-inner > *:nth-child(5) { animation-delay: 140ms; }
+.studio-page-inner > *:nth-child(6) { animation-delay: 175ms; }
+.studio-page-inner > *:nth-child(7) { animation-delay: 210ms; }
+.studio-page-inner > *:nth-child(8) { animation-delay: 245ms; }
+
+/* Micro-interactions: lift on hover, settle on press (buttons + chips). */
+.btn,
+.chip {
+  transition:
+    transform var(--dur-1) var(--ease-expo),
+    box-shadow var(--dur-1) var(--ease-expo),
+    background var(--dur-1) ease,
+    border-color var(--dur-1) ease;
+}
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn.primary:hover:not(:disabled) { box-shadow: 0 0 18px -6px var(--md-primary-light); }
+
+/* ===== Reduced motion ====================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .view-fade,
+  .studio-page-inner > * {
+    animation: none;
+  }
+  .btn,
+  .chip {
+    transition: none;
+  }
+  .btn:hover:not(:disabled),
+  .btn:active:not(:disabled) {
+    transform: none;
+  }
+  .shell.chrome-auto .topbar,
+  .shell.chrome-auto .chrome-left {
+    transition: opacity var(--dur-1) ease;
+  }
+  .shell.chrome-auto .topbar.chrome-hidden,
+  .shell.chrome-auto .chrome-left.chrome-hidden {
+    transform: none;
+  }
+}
