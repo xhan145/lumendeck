@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { buildRenderJob, isArchiveResult, normalizeProgress, type BackendAdapter, type RenderProgressCallback, type SvdModelInfo, type AnimateStillOptions } from '../bridge/adapter';
+import { CloudAdapter } from '../bridge/cloudAdapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
@@ -590,6 +591,7 @@ interface StudioState {
 export const mockAdapter = new MockAdapter();
 export const httpAdapter = new HttpAdapter();
 export const comfyAdapter = new ComfyAdapter();
+export const cloudAdapter = new CloudAdapter();
 
 // Durable gallery store (IndexedDB when available, in-memory fallback otherwise).
 // Resolved once per session; `durable` is false in private-mode/unsupported envs.
@@ -715,6 +717,13 @@ function activeAdapter(settings: BackendSettings): BackendAdapter {
   if (settings.selectedBackend === 'comfyui') {
     comfyAdapter.setBaseUrl(settings.comfyUrl);
     return comfyAdapter;
+  }
+  if (settings.selectedBackend === 'cloud') {
+    // Cloud calls are proxied through the LOCAL bridge so keys stay off the browser.
+    cloudAdapter.setBaseUrl(settings.bridgeUrl);
+    cloudAdapter.setProvider(settings.cloudProvider);
+    cloudAdapter.setModel(settings.cloudModel);
+    return cloudAdapter;
   }
   return mockAdapter;
 }
@@ -1929,6 +1938,24 @@ export const useStudio = create<StudioState>((set, get) => {
         ok = health.ok;
         status = health.status;
         message = health.message;
+      } else if (state.backendSettings.selectedBackend === 'cloud') {
+        cloudAdapter.setBaseUrl(state.backendSettings.bridgeUrl);
+        const reachable = await cloudAdapter.ping();
+        if (!reachable) {
+          ok = false;
+          status = 'unavailable';
+          message = 'Local bridge is offline — the Cloud backend calls providers through it.';
+        } else {
+          const providers = await cloudAdapter.listProviders().catch(() => []);
+          const chosen = providers.find((p) => p.id === state.backendSettings.cloudProvider);
+          ok = Boolean(chosen?.hasKey);
+          status = chosen?.hasKey ? 'healthy' : 'degraded';
+          message = !chosen
+            ? 'Pick a cloud provider and save its API key.'
+            : chosen.hasKey
+              ? `${chosen.label} is configured and ready.`
+              : `No API key saved for ${chosen.label}. Add one in the Cloud section below.`;
+        }
       } else {
         httpAdapter.setBaseUrl(state.backendSettings.bridgeUrl);
         ok = await httpAdapter.ping();
@@ -2316,6 +2343,9 @@ export const useStudio = create<StudioState>((set, get) => {
           fallback,
           fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
           bridgeRenderer: backendSettings.bridgeRenderer,
+          ...(backendSettings.selectedBackend === 'cloud'
+            ? { cloudProvider: backendSettings.cloudProvider, cloudModel: backendSettings.cloudModel }
+            : {}),
         };
         const item: GalleryItem = {
           id: uid('render'),

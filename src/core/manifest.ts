@@ -30,6 +30,9 @@ export interface ExportManifest {
     fallback: boolean;
     fallbackReason?: string;
     bridgeRenderer?: string;
+    /** hosted provider + model for a Cloud-backend render (absent otherwise). */
+    cloudProvider?: string;
+    cloudModel?: string;
   };
   /**
    * Present only for a motion-clip render: the animated source clip + sampling

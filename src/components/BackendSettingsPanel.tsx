@@ -1,5 +1,6 @@
 import type { BridgeRenderer, RenderBackendId } from '../turboForge/backends/backendSettings';
 import { useStudio } from '../state/store';
+import { CloudBackendSection } from './CloudBackendSection';
 import { Icon } from './icons';
 
 export function BackendSettingsPanel() {
@@ -30,7 +31,8 @@ export function BackendSettingsPanel() {
     <section className="rail-section backend-panel" aria-labelledby="backend-settings-title">
       <h3 id="backend-settings-title">{Icon.plug()} Backend</h3>
       <p className="turbo-copy">
-        Mock works offline. ComfyUI requires a local ComfyUI server running with API access.
+        Mock works offline. ComfyUI requires a local ComfyUI server running with API access. Cloud
+        calls hosted APIs through the local bridge.
       </p>
 
       <label className="field">
@@ -39,6 +41,7 @@ export function BackendSettingsPanel() {
           <option value="mock">Mock: built-in renderer</option>
           <option value="comfyui">ComfyUI API</option>
           <option value="bridge">Diffusers bridge</option>
+          <option value="cloud">Cloud (hosted APIs)</option>
         </select>
       </label>
 
@@ -115,6 +118,8 @@ export function BackendSettingsPanel() {
           </div>
         </>
       ) : null}
+
+      {backendSettings.selectedBackend === 'cloud' ? <CloudBackendSection /> : null}
 
       <label className="field-inline">
         <span>

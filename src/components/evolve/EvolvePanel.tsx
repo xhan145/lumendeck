@@ -40,6 +40,7 @@ export function EvolvePanel() {
   const runDisabledReason = useMemo(() => {
     if (adapterId === 'mock') return 'Switch to the local Diffusers bridge to evolve — the Mock backend only makes procedural placeholders with no real objective.';
     if (adapterId === 'comfyui') return 'Auto-Evolve needs the local Diffusers bridge (ComfyUI has no CLIP/aesthetic scorer).';
+    if (adapterId === 'cloud') return 'Auto-Evolve runs on the local Diffusers bridge — the Cloud backend renders single images/videos only.';
     if (!bridgeOnline) return 'The local bridge is offline. Start it (Settings → Backend) to evolve.';
     return '';
   }, [adapterId, bridgeOnline]);
