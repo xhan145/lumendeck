@@ -12,6 +12,7 @@ import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { RecipeView } from './components/recipe/RecipeView';
 import { MissionControl } from './components/creative/MissionControl';
+import { ConstellationView } from './components/constellation/ConstellationView';
 import { StudioOverview } from './components/creative/StudioOverview';
 import { CraftInsights } from './components/creative/CraftInsights';
 import { ProjectsView } from './components/creative/ProjectsView';
@@ -30,6 +31,7 @@ import './styles/glass.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
   mission: 'Mission Control',
+  constellation: 'Open Constellation',
   overview: 'Studio Overview',
   craft: 'Craft insights',
   projects: 'Projects',
@@ -102,6 +104,7 @@ export function App() {
 
   const page =
     view === 'mission' ? <MissionControl />
+      : view === 'constellation' ? <ConstellationView />
       : view === 'overview' ? <StudioOverview />
       : view === 'craft' ? <CraftInsights />
       : view === 'projects' ? <ProjectsView />

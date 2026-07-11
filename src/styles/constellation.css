@@ -1,0 +1,272 @@
+/* Open Constellation — every style for the 3D capability universe view.
+   The canvas fills the view; the overlay floats above it with pointer-events
+   disabled except on interactive islands, so orbit gestures reach the scene. */
+
+.constellation-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--rad-2, 10px);
+  /* Deep space behind the canvas — never a bright wall. */
+  background: radial-gradient(120% 90% at 50% 20%, #0b1c33 0%, #071426 55%, #04101f 100%);
+}
+
+.constellation-view canvas {
+  display: block;
+  touch-action: none; /* the canvas owns its gestures — no accidental page scroll */
+}
+
+/* ---- overlay ------------------------------------------------------------ */
+
+.constellation-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: clamp(14px, 3vw, 30px);
+  padding-bottom: max(clamp(14px, 3vw, 30px), env(safe-area-inset-bottom));
+  pointer-events: none; /* orbit gestures pass through… */
+  z-index: 2;
+  color: var(--ld-text, #fbfcfe);
+}
+
+.constellation-overlay .constellation-nav,
+.constellation-overlay .constellation-back {
+  pointer-events: auto; /* …except the interactive islands */
+}
+
+.constellation-eyebrow {
+  margin: 0;
+  font-size: clamp(12px, 1.6vw, 15px);
+  font-weight: 800;
+  letter-spacing: 0.34em;
+  color: var(--ld-cyan, #34d6f4);
+  text-shadow: 0 0 18px rgba(52, 214, 244, 0.45);
+}
+
+.constellation-subline {
+  margin: 6px 0 0;
+  font-size: clamp(10px, 1.2vw, 12.5px);
+  letter-spacing: 0.08em;
+  color: rgba(251, 252, 254, 0.62);
+}
+
+.constellation-focus {
+  max-width: min(480px, 82vw);
+}
+
+.constellation-title {
+  margin: 0;
+  font-size: clamp(22px, 4vw, 40px);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  text-shadow: 0 2px 24px rgba(4, 16, 31, 0.9);
+}
+
+.constellation-desc {
+  margin: 8px 0 0;
+  font-size: clamp(12.5px, 1.5vw, 14.5px);
+  line-height: 1.5;
+  color: rgba(251, 252, 254, 0.8);
+  text-shadow: 0 1px 12px rgba(4, 16, 31, 0.9);
+}
+
+.constellation-meta {
+  margin: 10px 0 0;
+  font-size: clamp(11px, 1.3vw, 12.5px);
+  letter-spacing: 0.05em;
+  color: var(--ld-cyan, #34d6f4);
+  opacity: 0.85;
+}
+
+.constellation-nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.constellation-back:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- canvas host + label layer ------------------------------------------ */
+
+.constellation-canvas-host {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.constellation-canvas-host canvas.constellation-gl {
+  position: absolute;
+  inset: 0;
+}
+
+.constellation-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none; /* individual labels re-enable */
+  overflow: hidden;
+}
+
+.constellation-labels .constellation-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform, opacity;
+}
+
+.constellation-label-count {
+  opacity: 0.6;
+  font-weight: 400;
+}
+
+.constellation-label[data-hovered='true'] {
+  border-color: var(--ld-cyan, #34d6f4);
+  box-shadow: 0 0 16px rgba(52, 214, 244, 0.35);
+}
+
+.constellation-list-toggle {
+  position: absolute;
+  top: clamp(14px, 3vw, 30px);
+  right: clamp(14px, 3vw, 30px);
+  z-index: 4;
+}
+
+.constellation-tree-select {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.constellation-tree-select[aria-current='true'] b {
+  color: var(--ld-cyan, #34d6f4);
+}
+
+.constellation-tree-select:focus-visible {
+  outline: 2px solid var(--ld-cyan, #34d6f4);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---- satellite labels (screen-projected DOM chips) ----------------------- */
+
+.constellation-label {
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--ld-text, #fbfcfe);
+  background: rgba(7, 20, 38, 0.66);
+  border: 1px solid rgba(52, 214, 244, 0.28);
+  backdrop-filter: blur(4px);
+  transform: translateY(-6px);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+  user-select: none;
+  /* Comfortable touch target without visual bulk. */
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.constellation-label:hover,
+.constellation-label:focus-visible {
+  border-color: var(--ld-cyan, #34d6f4);
+  background: rgba(7, 20, 38, 0.9);
+  box-shadow: 0 0 16px rgba(52, 214, 244, 0.35);
+  outline: none;
+}
+
+.constellation-label:focus-visible {
+  outline: 2px solid var(--ld-cyan, #34d6f4);
+  outline-offset: 2px;
+}
+
+/* ---- HTML fallback tree (WebGL-unavailable + non-canvas access) ---------- */
+
+.constellation-fallback {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  overflow: auto;
+  padding: clamp(14px, 3vw, 30px);
+  color: var(--ld-text, #fbfcfe);
+}
+
+.constellation-fallback-note {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: rgba(251, 252, 254, 0.65);
+}
+
+.constellation-tree,
+.constellation-tree ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 18px;
+  border-left: 1px solid rgba(52, 214, 244, 0.18);
+}
+
+.constellation-tree > li {
+  margin: 6px 0;
+}
+
+.constellation-tree-node {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.constellation-tree-node b {
+  font-weight: 600;
+}
+
+.constellation-tree-node small {
+  color: rgba(251, 252, 254, 0.55);
+}
+
+.constellation-tree-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  align-self: center;
+  flex: none;
+}
+
+/* ---- responsive --------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .constellation-subline {
+    display: none; /* keep mobile sparse — the eyebrow carries the statement */
+  }
+  .constellation-focus {
+    max-width: 92vw;
+  }
+  .constellation-label {
+    font-size: 10.5px;
+    padding: 4px 12px; /* larger touch target, smaller text */
+  }
+}
+
+/* ---- reduced motion ------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .constellation-label {
+    transition: none;
+  }
+}
