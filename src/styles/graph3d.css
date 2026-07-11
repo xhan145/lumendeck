@@ -310,11 +310,19 @@
   border-radius: var(--rad-1);
 }
 
-/* One-line honesty note, bottom-left of the 3D stage. */
+/* Bottom-left overlay stack (3D only): the motion-panel tab sits at the very
+   bottom (its own z-8 dock); the graph hint and the ghost honesty-note stack
+   ABOVE it so nothing in the corner overlaps. The diagnostics readout moves to
+   the bottom-right (see .graph3d-stats). Offsets clear the ~34px motion tab. */
+.graph3d-wrap .graph-hint {
+  bottom: calc(var(--sp-3) + 44px);
+}
+
+/* One-line honesty note, raised above the graph hint in the bottom-left stack. */
 .graph3d-ghost-note {
   position: absolute;
   left: var(--sp-3);
-  bottom: var(--sp-3);
+  bottom: calc(var(--sp-3) + 80px);
   z-index: 6;
   max-width: 340px;
   padding: 5px 9px;
@@ -327,11 +335,12 @@
   pointer-events: none;
 }
 
-/* Live frame-stats overlay (shown only when Diagnostics is enabled). */
+/* Live frame-stats overlay (shown only when Diagnostics is enabled). Sits in the
+   bottom-RIGHT so it never collides with the bottom-left motion tab / hint / note. */
 .graph3d-stats {
   position: absolute;
-  bottom: 10px;
-  left: 10px;
+  bottom: var(--sp-3);
+  right: var(--sp-3);
   z-index: 6;
   padding: 4px 8px;
   border-radius: 6px;
