@@ -9,7 +9,7 @@
  */
 
 /** A rendered visual layer that must justify itself with a data source. */
-export type EncodingLayer = 'fabric' | 'anomaly' | 'luminosity';
+export type EncodingLayer = 'fabric' | 'anomaly' | 'luminosity' | 'particles' | 'energyFlow' | 'environment';
 
 export interface EncodingEntry {
   /** Stable id (also the human-facing name in the legend). */
@@ -46,6 +46,34 @@ export const ENCODINGS: readonly EncodingEntry[] = [
     channel: 'orb emissive glow (half-life decay)',
     layer: 'luminosity',
     alwaysOn: true,
+  },
+  {
+    id: 'gravity-dust',
+    datum: 'packWells(nodes) mass field (the same wells that deform the fabric)',
+    channel: 'volumetric particle flow: infall direction, orbital streams, funnel plunge depth',
+    layer: 'particles',
+    alwaysOn: false, // standard tier and up; reduced motion disables
+  },
+  {
+    id: 'dust-energy',
+    datum: 'per-particle energy (gravity pull + |v| from the integration)',
+    channel: 'particle color cool→warm, brightness, sprite size, twinkle',
+    layer: 'particles',
+    alwaysOn: false, // standard tier and up; reduced motion disables
+  },
+  {
+    id: 'workflow-energy',
+    datum: 'workflow.edges topology + nodeMeta endpoint activity + health errors',
+    channel: 'directed pulses along wires: count/speed/brightness by activity; crawl+dim on error',
+    layer: 'energyFlow',
+    alwaysOn: false, // standard tier and up; reduced motion disables
+  },
+  {
+    id: 'environment',
+    datum: 'none — static parallax depth reference (starfield + cinematic backdrop); non-signaling by design',
+    channel: 'background only; carries no product state and never animates',
+    layer: 'environment',
+    alwaysOn: false, // rich tier and up
   },
 ];
 

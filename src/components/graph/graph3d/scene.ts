@@ -58,15 +58,23 @@ export function buildNeonGrid(cyan: string, violet: string): THREE.Group {
   return group;
 }
 
+/**
+ * The quadratic-bezier control point every wire bows through. Exported (pure)
+ * so the energy-flow pulse layer samples the EXACT same curve the line renders.
+ */
+export function wireControl(from: WorldPoint, to: WorldPoint): WorldPoint {
+  return {
+    x: (from.x + to.x) / 2,
+    y: (from.y + to.y) / 2,
+    z: Math.max(from.z, to.z) + WIRE_ARC,
+  };
+}
+
 function wireCurve(from: WorldPoint, to: WorldPoint): THREE.QuadraticBezierCurve3 {
-  const control = new THREE.Vector3(
-    (from.x + to.x) / 2,
-    (from.y + to.y) / 2,
-    Math.max(from.z, to.z) + WIRE_ARC,
-  );
+  const c = wireControl(from, to);
   return new THREE.QuadraticBezierCurve3(
     new THREE.Vector3(from.x, from.y, from.z),
-    control,
+    new THREE.Vector3(c.x, c.y, c.z),
     new THREE.Vector3(to.x, to.y, to.z),
   );
 }
@@ -128,9 +136,35 @@ const ORB_FRAGMENT_SHADER = /* glsl */ `
   uniform vec3 uAccent;
   uniform float uAccentMix;
   uniform float uEmissive;   // 0..1 activity glow (luminosity encoding)
+  uniform float uTime;       // shimmer clock (s); frozen at idle by design
   varying float vT;
   varying vec3 vNormal;
   varying vec3 vViewPos;
+
+  // Cheap 3D value noise (two hash octaves) — enough structure for surface
+  // convection cells without a texture fetch.
+  float hash3(vec3 p) {
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+  }
+  float vnoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = hash3(i);
+    float n100 = hash3(i + vec3(1.0, 0.0, 0.0));
+    float n010 = hash3(i + vec3(0.0, 1.0, 0.0));
+    float n110 = hash3(i + vec3(1.0, 1.0, 0.0));
+    float n001 = hash3(i + vec3(0.0, 0.0, 1.0));
+    float n101 = hash3(i + vec3(1.0, 0.0, 1.0));
+    float n011 = hash3(i + vec3(0.0, 1.0, 1.0));
+    float n111 = hash3(i + vec3(1.0, 1.0, 1.0));
+    return mix(
+      mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+      mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+      f.z
+    );
+  }
+
   void main() {
     // Three-stop vertical gradient (low -> mid -> high), branchless.
     float lowMix = clamp(vT * 2.0, 0.0, 1.0);
@@ -143,9 +177,21 @@ const ORB_FRAGMENT_SHADER = /* glsl */ `
     vec3 viewDir = normalize(-vViewPos);
     float diff = 0.5 + 0.5 * max(dot(n, normalize(vec3(0.35, 0.85, 0.45))), 0.0);
     float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 2.6);
-    vec3 color = base * (0.38 + 0.62 * diff) + base * rim * 0.85;
-    // Luminosity: a recently-touched node energizes toward a brighter, whiter glow.
+    // Surface convection: two noise octaves slowly crawling over the sphere
+    // break the smooth-gradient-ball look. Luminance-only (±9%), so the
+    // node's DATA colors survive untouched. uTime advances only while an
+    // animation loop is already running — a still scene stays still.
+    float conv = vnoise(n * 3.0 + vec3(0.0, uTime * 0.05, 0.0));
+    conv = conv * 0.65 + vnoise(n * 7.0 - vec3(uTime * 0.03)) * 0.35;
+    float surface = 1.0 + (conv - 0.5) * 0.18;
+    // Corona shimmer rides the rim, strengthened by activity (uEmissive).
+    float shimmer = 0.85 + 0.3 * vnoise(n * 5.0 + vec3(uTime * 0.11));
+    vec3 color = base * (0.38 + 0.62 * diff) * surface + base * rim * 0.85 * shimmer;
+    // Luminosity: a recently-touched node energizes toward a brighter, whiter
+    // glow with a hotter internal core (center-weighted boost).
+    float core = pow(max(dot(n, viewDir), 0.0), 2.0);
     color += (base + vec3(0.18)) * uEmissive * 0.55;
+    color += vec3(0.9, 0.95, 1.0) * core * uEmissive * 0.35;
     gl_FragColor = vec4(color, clamp(0.97 + uEmissive * 0.03, 0.0, 1.0));
   }
 `;
@@ -169,6 +215,7 @@ export function makeOrbMaterial(stops: [string, string, string], accent: string,
       uAccent: { value: new THREE.Color(accent) },
       uAccentMix: { value: ORB_ACCENT_MIX },
       uEmissive: { value: 0 },
+      uTime: { value: 0 },
     },
   });
 }
@@ -184,6 +231,15 @@ export function updateOrbMaterial(material: THREE.ShaderMaterial, stops: [string
 /** Set an orb's luminosity glow (0..1) — the activity-recency emissive. */
 export function setOrbEmissive(material: THREE.ShaderMaterial, value: number): void {
   material.uniforms.uEmissive.value = value;
+}
+
+/**
+ * Advance an orb's shimmer clock (seconds). Only the animation loops call this,
+ * so an idle scene's convection/corona stay frozen — the dirty-flag sleep is
+ * preserved by construction.
+ */
+export function setOrbTime(material: THREE.ShaderMaterial, tSec: number): void {
+  material.uniforms.uTime.value = tSec;
 }
 
 /**

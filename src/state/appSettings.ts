@@ -7,7 +7,7 @@ export type StartupBehavior = 'guide' | 'last-view' | 'controls';
 export type VramSafetyMode = 'strict' | 'balanced' | 'off';
 export type GraphMode = '2d' | '3d';
 export type Graph3DStyle = 'orbs' | 'cards';
-export type Graph3DEffects = 'off' | 'minimal' | 'standard' | 'rich';
+export type Graph3DEffects = 'off' | 'minimal' | 'standard' | 'rich' | 'cinematic';
 
 export interface AppSettings {
   themeMode: ThemeMode;
@@ -115,7 +115,8 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
       settings?.graph3dEffects === 'off' ||
       settings?.graph3dEffects === 'minimal' ||
       settings?.graph3dEffects === 'standard' ||
-      settings?.graph3dEffects === 'rich'
+      settings?.graph3dEffects === 'rich' ||
+      settings?.graph3dEffects === 'cinematic'
         ? settings.graph3dEffects
         : undefined,
   };
