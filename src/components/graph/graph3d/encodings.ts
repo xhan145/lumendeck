@@ -9,7 +9,7 @@
  */
 
 /** A rendered visual layer that must justify itself with a data source. */
-export type EncodingLayer = 'fabric' | 'anomaly' | 'luminosity' | 'particles' | 'energyFlow' | 'environment';
+export type EncodingLayer = 'fabric' | 'anomaly' | 'luminosity' | 'particles' | 'energyFlow' | 'environment' | 'mist';
 
 export interface EncodingEntry {
   /** Stable id (also the human-facing name in the legend). */
@@ -74,6 +74,13 @@ export const ENCODINGS: readonly EncodingEntry[] = [
     channel: 'background only; carries no product state and never animates',
     layer: 'environment',
     alwaysOn: false, // rich tier and up
+  },
+  {
+    id: 'mist-steam',
+    datum: 'nodeMeta.lastActiveAt (activity recency, state/nodeMeta.ts — same datum as luminosity)',
+    channel: 'curl-noise smoke emission around the orb: freshly-touched nodes visibly steam, 45s half-life',
+    layer: 'mist',
+    alwaysOn: false, // standard tier and up; reduced motion disables (the glow carries the datum statically)
   },
 ];
 
