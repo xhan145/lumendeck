@@ -45,6 +45,8 @@ import { nodeAnomaly, makeAnomalyRing } from './graph3d/anomaly';
 import { settleShouldRun } from './graph3d/settle';
 import { createFlashLimiter, type FlashLimiter } from './graph3d/flashLimiter';
 import { createParticleField, type ParticleField } from './graph3d/particles';
+import { createMistSmoke, graphEmission, type MistEmitter, type MistSmoke } from './graph3d/mist';
+import type { FlowContext } from './graph3d/flowField';
 import {
   createAdaptiveQuality,
   featuresFor,
@@ -76,7 +78,7 @@ import {
   updateWireLine,
   wireControl,
 } from './graph3d/scene';
-import { emissiveFor } from '../../state/nodeMeta';
+import { emissiveFor, LUMINOSITY_HALF_LIFE_MS } from '../../state/nodeMeta';
 import { estimateFamilyFromModelId, type ControlNetFamily } from '../../core/controlnet';
 import { fieldProfile, type FieldProfile } from '../../core/field/fieldProfile';
 import { applyField } from '../../core/field/applyField';
@@ -250,6 +252,9 @@ const CLICK_SLOP = 5;
  * readout, so a low rate is plenty and avoids a 30Hz write storm that would (a)
  * churn the store and (b) starve the trailing-debounce persistence save.
  */
+/** Graph steam uses only the curl term — wakes/pulses are a Universe feature. */
+const GRAPH_FLOW_CTX: FlowContext = { bodies: [], pulses: [], eddy: null };
+
 const TRANSPORT_WRITE_HZ = 6;
 
 const CATEGORY_FILTERS: ('all' | CapsuleCategory)[] = [
@@ -388,6 +393,11 @@ export function Graph3DView({ onContextFailed }: Props) {
   const healthSeededRef = useRef(false);
   /** Ambient gravity-dust field (standard tier and up); existence == "particles active". */
   const particleFieldRef = useRef<ParticleField | null>(null);
+  /** Activity steam: curl-noise wisps around recently-touched orbs (standard+). */
+  const mistSmokeRef = useRef<MistSmoke | null>(null);
+  /** Pooled steam emitters, one slot per orb (rebuilt when the orb set changes). */
+  const mistEmittersRef = useRef<(MistEmitter & { nodeId: string })[]>([]);
+  const mistColorRef = useRef<THREE.Color | null>(null);
   /** Directed workflow-energy pulses (standard tier and up, motion allowing). */
   const energyFlowRef = useRef<EnergyFlow | null>(null);
   /** Warn once when the pulse capacity drops edges (no silent caps). */
@@ -538,6 +548,36 @@ export function Graph3DView({ onContextFailed }: Props) {
   }, []);
 
   /**
+   * Advance the activity steam: emitter rates track nodeMeta recency (the same
+   * datum as the luminosity glow, same half-life) and wisps curl on the shared
+   * flow field. Called only from loops that are already running (settle /
+   * playback / audio) — the idle-sleep invariant is untouched. The graph passes
+   * an EMPTY flow context: only the curl term stirs steam here (wakes/pulses
+   * are a Universe feature; the fabric already owns graph-mode event ripples).
+   */
+  const advanceMist = useCallback((dt: number) => {
+    const mist = mistSmokeRef.current;
+    if (!mist) return;
+    const meta = useStudio.getState().nodeMeta;
+    const now = Date.now();
+    const emitters = mistEmittersRef.current;
+    for (const e of emitters) {
+      const entry = orbsRef.current.get(e.nodeId);
+      if (!entry) {
+        e.rate = 0;
+        continue;
+      }
+      e.x = entry.group.position.x;
+      e.y = entry.group.position.y;
+      e.z = entry.group.position.z;
+      // Up to ~4 wisps/s at full steam, decaying on the luminosity half-life.
+      const steam = graphEmission(meta[e.nodeId]?.lastActiveAt ?? 0, now, LUMINOSITY_HALF_LIFE_MS);
+      e.rate = steam > 0.03 ? steam * 4 : 0;
+    }
+    mist.advance(dt, performance.now() / 1000, performance.now(), GRAPH_FLOW_CTX, emitters);
+  }, []);
+
+  /**
    * Ensure the idle animator is running while there is idle-time animation to do —
    * live ripples decaying and/or ambient gravity dust (rich tier). Idempotent
    * (no-op if already running). It NEVER starts while playback/audio owns the
@@ -551,6 +591,7 @@ export function Graph3DView({ onContextFailed }: Props) {
     const s = useStudio.getState();
     const decayActive =
       particleFieldRef.current != null ||
+      mistSmokeRef.current != null ||
       (energyFlowRef.current?.active() ?? false) ||
       (fabricRef.current?.ripplesAlive(performance.now()) ?? false);
     if (!settleShouldRun({ decayActive, playing: s.transport.playing, audioRunning: s.audio.running })) return;
@@ -573,13 +614,14 @@ export function Graph3DView({ onContextFailed }: Props) {
         }
         if (pf) pf.advance(dt);
         if (flow) flow.advance(dt);
+        advanceMist(dt);
         const rAlive = fab ? fab.tickRipples(now) : false;
         fab?.setTime(now / 1000); // ambient micro-waves (amp 0 at lower tiers)
         updateEmissive();
         renderScene();
         recordFrame();
-        // Ambient dust/pulses keep it alive; else stop when the ripples die.
-        return pf != null || flowActive || rAlive;
+        // Ambient dust/pulses/steam keep it alive; else stop when ripples die.
+        return pf != null || mistSmokeRef.current != null || flowActive || rAlive;
       },
       {
         requestFrame: (cb) => requestAnimationFrame(cb),
@@ -588,7 +630,7 @@ export function Graph3DView({ onContextFailed }: Props) {
         clearTimer: (id) => clearTimeout(id),
       },
     );
-  }, [recordFrame, updateEmissive, renderScene]);
+  }, [recordFrame, updateEmissive, renderScene, advanceMist]);
 
   const applyCamera = useCallback(() => {
     const t = threeRef.current;
@@ -1056,6 +1098,51 @@ export function Graph3DView({ onContextFailed }: Props) {
       requestRender();
     };
   }, [ready, effectsLevel, requestRender, wakeSettle]);
+
+  // ---- activity steam: curl-noise wisps around recently-touched orbs ---------
+  // Same tier + reduced-motion gates as the dust (standard+); the datum is
+  // nodeMeta activity recency — the luminosity glow carries it statically when
+  // motion is reduced, so disabling the steam loses no information.
+  useEffect(() => {
+    if (!ready) return;
+    const t = threeRef.current;
+    if (!t) return;
+    mistSmokeRef.current?.dispose();
+    mistSmokeRef.current = null;
+    const level = effectsLevel;
+    const counts: Record<string, number> = { standard: 250, rich: 600, cinematic: 1000 };
+    const count = counts[level] ?? 0;
+    const reduced = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (count === 0 || !motionPolicy(reduced).particles) { requestRender(); return; }
+    const host = viewportRef.current ?? document.documentElement;
+    mistColorRef.current = new THREE.Color(resolveCssColor('var(--ld-cyan)', host));
+    // Graph world units are ~45x the Universe's tuned flow domain.
+    const mist = createMistSmoke(count, { size: 180, opacity: 0.12, flowScale: 1 / 45, driftGain: 45 });
+    t.scene.add(mist.points);
+    mistSmokeRef.current = mist;
+    requestRender();
+    wakeSettle(); // steam rides the ambient idle loop
+    return () => {
+      mistSmokeRef.current?.dispose();
+      mistSmokeRef.current = null;
+      requestRender();
+    };
+  }, [ready, effectsLevel, requestRender, wakeSettle]);
+
+  // One steam emitter slot per workflow node (positions/rates sync per frame in
+  // advanceMist; slots for deleted nodes simply stop emitting).
+  useEffect(() => {
+    const color = mistColorRef.current ?? new THREE.Color('#34d6f4');
+    mistEmittersRef.current = workflow.nodes.map((n) => ({
+      nodeId: n.id,
+      x: 0,
+      y: 0,
+      z: 0,
+      radius: ORB_RADIUS * 1.3,
+      rate: 0,
+      color,
+    }));
+  }, [workflow, ready]);
 
   // ---- directed workflow energy: pulses travel each wire source → dest --------
   // Standard tier and up, never under reduced motion. Edge assignments are
@@ -1623,6 +1710,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       fabricRef.current?.tickRipples(now); // ripples animate on the playback frame (no separate driver)
       fabricRef.current?.setTime(now / 1000);
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the playback frame too
+      advanceMist(dt); // activity steam curls on the playback frame too
       energyFlowRef.current?.advance(dt); // wire pulses keep flowing during playback
       updateEmissive(); // luminosity fades smoothly during playback
       renderScene();
@@ -1757,6 +1845,7 @@ export function Graph3DView({ onContextFailed }: Props) {
       fabricRef.current?.tickRipples(nowT); // ripples animate on the audio frame
       fabricRef.current?.setTime(nowT / 1000);
       particleFieldRef.current?.advance(dt); // ambient dust drifts on the audio frame too
+      advanceMist(dt); // activity steam curls on the audio frame too
       energyFlowRef.current?.advance(dt); // wire pulses keep flowing during audio
       updateEmissive(); // luminosity fades smoothly during audio
       renderScene();

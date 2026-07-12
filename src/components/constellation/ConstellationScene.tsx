@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ConstellationNode } from './types';
-import { orbitParamsFor, orbitPosition, type OrbitParams } from './orbits';
+import { hashString, orbitParamsFor, orbitPosition, type OrbitParams } from './orbits';
 import { buildBody, buildBroadcast, buildOrbitLine, type BodyHandle, type BroadcastHandle, type OrbitLineHandle } from './bodies';
 import { createPlaybackDriver, type PlaybackDriver } from '../graph/graph3d/playbackClock';
 import { createStarfield, createBackdrop, type EnvironmentHandle } from '../graph/graph3d/environment';
 import { createPostPipeline, type PostPipeline } from '../graph/graph3d/postprocessing';
 import { createAdaptiveQuality, clampDelta, levelRank, type AdaptiveQuality, type EffectsLevel } from '../graph/graph3d/quality';
 import { createFrameStats, type FrameStatsAccumulator } from '../graph/graph3d/frameStats';
+import { createMistShell, createMistSmoke, universeEmission, type MistEmitter, type MistShell, type MistSmoke } from '../graph/graph3d/mist';
+import { prunePulses, pushPulse, type FlowBody, type FlowEddy, type FlowPulse } from '../graph/graph3d/flowField';
 
 /**
  * The Open Constellation scene: the selected node as a custom-shaded central
@@ -53,13 +55,17 @@ interface TierConfig {
   moonCap: number;
   bloom: boolean;
   dprCap: number;
+  /** Max concurrent mist wisps (one Points layer; 0 = no smoke). */
+  mistCount: number;
+  /** Ambient nebula-bank emitter sites between orbits (rich+ only). */
+  mistBanks: number;
 }
 
 const TIERS: Record<'minimal' | 'standard' | 'rich' | 'cinematic', TierConfig> = {
-  minimal: { starCount: 0, planetSegs: [48, 32], satSegs: [24, 16], moonSegs: [12, 8], moonCap: 2, bloom: false, dprCap: 1.5 },
-  standard: { starCount: 900, planetSegs: [72, 48], satSegs: [32, 20], moonSegs: [14, 10], moonCap: 3, bloom: false, dprCap: 2 },
-  rich: { starCount: 1400, planetSegs: [96, 64], satSegs: [40, 24], moonSegs: [16, 10], moonCap: 4, bloom: false, dprCap: 2 },
-  cinematic: { starCount: 1400, planetSegs: [96, 64], satSegs: [40, 24], moonSegs: [16, 10], moonCap: 4, bloom: true, dprCap: 2 },
+  minimal: { starCount: 0, planetSegs: [48, 32], satSegs: [24, 16], moonSegs: [12, 8], moonCap: 2, bloom: false, dprCap: 1.5, mistCount: 0, mistBanks: 0 },
+  standard: { starCount: 900, planetSegs: [72, 48], satSegs: [32, 20], moonSegs: [14, 10], moonCap: 3, bloom: false, dprCap: 2, mistCount: 350, mistBanks: 0 },
+  rich: { starCount: 1400, planetSegs: [96, 64], satSegs: [40, 24], moonSegs: [16, 10], moonCap: 4, bloom: false, dprCap: 2, mistCount: 900, mistBanks: 3 },
+  cinematic: { starCount: 1400, planetSegs: [96, 64], satSegs: [40, 24], moonSegs: [16, 10], moonCap: 4, bloom: true, dprCap: 2, mistCount: 1500, mistBanks: 3 },
 };
 
 function tierFor(level: EffectsLevel): TierConfig {
@@ -83,6 +89,10 @@ interface SatEntry {
   moons: MoonEntry[];
   orbitLine: OrbitLineHandle;
   baseEnergy: number;
+  /** Data-driven wisp emission (universeEmission of the node's status/strength). */
+  wispRate: number;
+  /** World radius used for wake kernels + emitter spread. */
+  bodyRadius: number;
 }
 
 interface SystemHandle {
@@ -92,6 +102,10 @@ interface SystemHandle {
   satellites: SatEntry[];
   pickables: THREE.Mesh[];
   maxRadius: number;
+  /** Data-driven mist shrouds (center + shrouded satellites), billboarded per frame. */
+  shells: MistShell[];
+  /** Center-body wisp emission rate. */
+  centerWispRate: number;
   dispose(): void;
 }
 
@@ -135,7 +149,18 @@ function buildSystem(node: ConstellationNode, tier: TierConfig, motion: number, 
   const children = node.children ?? [];
   const satellites: SatEntry[] = [];
   const pickables: THREE.Mesh[] = [];
+  const shells: MistShell[] = [];
   let maxRadius = PLANET_R * 2;
+
+  // Mist encodes status: forming = shrouded, dormant = thin haze, active =
+  // light wisps, complete = clear. The shell rides the body's own group.
+  const centerProfile = universeEmission(node.status, node.strength ?? 0.5);
+  if (centerProfile.shellDensity > 0) {
+    const shell = createMistShell(PLANET_R, node.colors[0], node.colors[1], centerProfile);
+    center.group.add(shell.mesh);
+    shells.push(shell);
+  }
+  const centerWispRate = centerProfile.wispRate;
 
   children.forEach((child, i) => {
     const params = orbitParamsFor(i, children.length, child.id, child.strength ?? 0.5);
@@ -185,7 +210,24 @@ function buildSystem(node: ConstellationNode, tier: TierConfig, motion: number, 
     // out correctly before the first tick.
     const p0 = orbitPosition(params, 0);
     satGroup.position.set(p0.x, p0.y, p0.z);
-    satellites.push({ id: child.id, params, group: satGroup, body, moons, orbitLine, baseEnergy });
+    const bodyRadius = SAT_R * params.scale;
+    const profile = universeEmission(child.status, child.strength ?? 0.5);
+    if (profile.shellDensity > 0) {
+      const shell = createMistShell(bodyRadius, child.colors[0], child.colors[1], profile);
+      satGroup.add(shell.mesh);
+      shells.push(shell);
+    }
+    satellites.push({
+      id: child.id,
+      params,
+      group: satGroup,
+      body,
+      moons,
+      orbitLine,
+      baseEnergy,
+      wispRate: profile.wispRate,
+      bodyRadius,
+    });
   });
 
   const broadcast = buildBroadcast(node.colors[0], PLANET_R * 1.5, maxRadius + 3.5);
@@ -199,9 +241,12 @@ function buildSystem(node: ConstellationNode, tier: TierConfig, motion: number, 
     satellites,
     pickables,
     maxRadius,
+    shells,
+    centerWispRate,
     dispose() {
       center.dispose();
       broadcast.dispose();
+      for (const shell of shells) shell.dispose();
       for (const s of satellites) {
         s.body.dispose();
         s.orbitLine.dispose();
@@ -233,6 +278,20 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
   const systemRef = useRef<SystemHandle | null>(null);
   const retiringRef = useRef<Retiring | null>(null);
   const transitionRef = useRef<Transition | null>(null);
+  // ---- fluid mist state ------------------------------------------------------
+  const mistRef = useRef<MistSmoke | null>(null);
+  const pulsesRef = useRef<readonly FlowPulse[]>([]);
+  /** Pooled per-satellite wake bodies (rebuilt on system change, mutated per frame). */
+  const flowBodiesRef = useRef<FlowBody[]>([]);
+  /** Pooled emitters: [0]=center, then satellites, then nebula-bank sites. */
+  const emittersRef = useRef<(MistEmitter & { satIndex?: number })[]>([]);
+  const eddyRef = useRef<FlowEddy>({ x: 0, y: 0, z: 0, strength: 0, radius: 1.5 });
+  /** Mutable flow context (structurally a FlowContext) — mutated per frame, never reallocated. */
+  const flowCtxRef = useRef<{ bodies: FlowBody[]; pulses: readonly FlowPulse[]; eddy: FlowEddy | null }>({
+    bodies: [],
+    pulses: [],
+    eddy: null,
+  });
   const camRef = useRef<CamState>({ theta: 0.65, phi: 1.05, dist: 16, targetTheta: 0.65, targetPhi: 1.05, targetDist: 16 });
   const orbitTimeRef = useRef(0);
   const shaderTimeRef = useRef(0);
@@ -295,6 +354,14 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
       }
 
       const post = tier.bloom ? createPostPipeline(renderer, scene, camera, { strength: 0.5, radius: 0.4, threshold: 0.8 }) : null;
+
+      // Fluid mist smoke: one Points layer for the whole scene, persisting
+      // across promotions so wisps from the old system drift out naturally.
+      if (tier.mistCount > 0) {
+        const mist = createMistSmoke(tier.mistCount, { size: 5, opacity: 0.15 });
+        scene.add(mist.points);
+        mistRef.current = mist;
+      }
 
       const stats = createFrameStats();
       const adaptive = createAdaptiveQuality();
@@ -453,6 +520,8 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
       // ---- the continuous loop (starvation-proof; hidden-tab draw skip) ----
       let last = performance.now();
       const tmpV3 = new THREE.Vector3();
+      const tmpVel = new THREE.Vector3();
+      const VEL_EPS = 0.06; // finite-difference step for orbital velocity (s)
       const tick = (): boolean => {
         const nowMs = performance.now();
         const dt = clampDelta((nowMs - last) / 1000);
@@ -515,6 +584,62 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
             }
           }
 
+          // ---- fluid mist: wakes, pulses, eddies, emission, shrouds ---------
+          const mist = mistRef.current;
+          if (mist) {
+            pulsesRef.current = prunePulses(pulsesRef.current, nowMs);
+            const bodies = flowBodiesRef.current;
+            for (let i = 0; i < sys.satellites.length && i < bodies.length; i++) {
+              const s = sys.satellites[i];
+              const fb = bodies[i];
+              s.group.getWorldPosition(tmpV3);
+              fb.x = tmpV3.x;
+              fb.y = tmpV3.y;
+              fb.z = tmpV3.z;
+              // Analytic orbital velocity via a small time offset (local ≈ world
+              // once the grow transition settles — wakes tolerate the error).
+              orbitPosition(s.params, t + VEL_EPS, tmpVel);
+              fb.vx = (tmpVel.x - s.group.position.x) / VEL_EPS;
+              fb.vy = (tmpVel.y - s.group.position.y) / VEL_EPS;
+              fb.vz = (tmpVel.z - s.group.position.z) / VEL_EPS;
+              fb.radius = s.bodyRadius * 2.4;
+            }
+            // Emitters ride their satellites; the hover eddy stirs locally.
+            for (const e of emittersRef.current) {
+              if (e.satIndex != null) {
+                const s = sys.satellites[e.satIndex];
+                if (s) {
+                  s.group.getWorldPosition(tmpV3);
+                  e.x = tmpV3.x;
+                  e.y = tmpV3.y;
+                  e.z = tmpV3.z;
+                }
+              }
+            }
+            const ctx = flowCtxRef.current;
+            ctx.pulses = pulsesRef.current;
+            const hoveredSat = hoveredRef.current ? sys.satellites.find((x) => x.id === hoveredRef.current) : undefined;
+            if (hoveredSat) {
+              hoveredSat.group.getWorldPosition(tmpV3);
+              const eddy = eddyRef.current;
+              eddy.x = tmpV3.x;
+              eddy.y = tmpV3.y;
+              eddy.z = tmpV3.z;
+              eddy.strength = 1.6;
+              eddy.radius = hoveredSat.bodyRadius * 3;
+              ctx.eddy = eddy;
+            } else {
+              ctx.eddy = null;
+            }
+            // Reduced motion: dt=0 freezes spawning + advection; densities stay.
+            mist.advance(reduced ? 0 : dt, shaderTimeRef.current, nowMs, ctx, emittersRef.current);
+          }
+          // Mist shrouds billboard toward the camera and churn on shader time.
+          for (const shell of sys.shells) {
+            shell.setTime(shaderTimeRef.current);
+            shell.mesh.quaternion.copy(camera.quaternion);
+          }
+
           // Selection transition: the new system grows out of the clicked
           // satellite's position while the old one retracts and dims.
           if (transition) {
@@ -538,6 +663,7 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
           retiring.system.group.scale.setScalar(retiring.startScale * (1 - 0.5 * e));
           retiring.system.center.setEnergy(1 - e);
           for (const s of retiring.system.satellites) s.body.setEnergy(s.baseEnergy * (1 - e));
+          for (const shell of retiring.system.shells) shell.mesh.quaternion.copy(camera.quaternion);
           if (p >= 1) {
             retiring.system.dispose();
             retiringRef.current = null;
@@ -624,6 +750,9 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
         systemRef.current?.dispose();
         systemRef.current = null;
         transitionRef.current = null; // a stale transition must never animate the NEXT mount's system
+        mistRef.current?.dispose();
+        mistRef.current = null;
+        pulsesRef.current = [];
         for (const e of env) e.dispose();
         post?.dispose();
         renderer.dispose();
@@ -684,6 +813,8 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
       // interruptible without compounding.
       retiringRef.current?.system.dispose();
       retiringRef.current = { system: old, start: performance.now(), startScale: old.group.scale.x };
+      // The promotion sends a pressure ring through the mist from the clicked body.
+      pulsesRef.current = pushPulse(pulsesRef.current, { x: from.x, y: from.y, z: from.z, t0: performance.now(), amp: 5 });
     } else if (old && isRefresh) {
       old.dispose();
       retiringRef.current?.system.dispose();
@@ -694,6 +825,25 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
     const sys = buildSystem(node, tier, reduced ? 0 : 1, shaderTimeRef.current);
     ctx.scene.add(sys.group);
     systemRef.current = sys;
+
+    // Rebuild the fluid pools for the new system (allocation happens HERE, not
+    // per frame): wake bodies per satellite + emitters (center, satellites,
+    // deterministic nebula-bank sites at rich+).
+    flowBodiesRef.current = sys.satellites.map(() => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, radius: 1 }));
+    flowCtxRef.current.bodies = flowBodiesRef.current;
+    const emitters: (MistEmitter & { satIndex?: number })[] = [
+      { x: 0, y: 0, z: 0, radius: PLANET_R * 1.5, rate: sys.centerWispRate, color: new THREE.Color(node.colors[0]) },
+    ];
+    sys.satellites.forEach((s, i) => {
+      const childColors = index.get(s.id)?.colors ?? node.colors;
+      emitters.push({ x: 0, y: 0, z: 0, radius: s.bodyRadius * 2.2, rate: s.wispRate, color: new THREE.Color(childColors[0]), satIndex: i });
+    });
+    for (let k = 0; k < tier.mistBanks; k++) {
+      const a = ((hashString(`${node.id}:bank:${k}`) % 1000) / 1000) * Math.PI * 2;
+      const r = sys.maxRadius * (1.12 + 0.18 * k);
+      emitters.push({ x: Math.cos(a) * r, y: (k - 1) * 1.4, z: Math.sin(a) * r, radius: 2.6, rate: 2.2, color: new THREE.Color(node.colors[1]) });
+    }
+    emittersRef.current = emitters;
 
     if (old && !isRefresh) {
       sys.group.position.copy(from);

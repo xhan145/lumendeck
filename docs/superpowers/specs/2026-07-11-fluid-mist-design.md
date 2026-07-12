@@ -63,9 +63,12 @@ the palette-breaking channel.
   (rich+ ambient animator, playback, audio, settle decay). Below those tiers
   it renders as a static deterministic arrangement via the dirty-flag
   scheduler. The "provably sleeps" invariant is untouched.
-- **Reduced motion:** flow time frozen, wakes/pulses/eddies off; static
-  puffs keep their data-driven density — the encoding survives motionless.
-  Live `matchMedia` listener (both surfaces already have the plumbing).
+- **Reduced motion:** Universe — flow time frozen (dt=0: no spawning, no
+  advection), shells keep their data-driven density so the status encoding
+  survives motionless. Graph — steam is disabled entirely under reduce (the
+  same `motionPolicy` gate as the dust); no information is lost because the
+  luminosity glow carries the identical datum statically. Live `matchMedia`
+  plumbing already exists on both surfaces.
 - **Hidden tab:** existing draw-skip + dirty-sync semantics cover mist (it
   ticks with the surface's loop).
 - **Photosensitivity:** mist is low-luminance and moves geometry, not
