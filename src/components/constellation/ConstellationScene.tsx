@@ -8,7 +8,7 @@ import { createStarfield, createBackdrop, type EnvironmentHandle } from '../grap
 import { createPostPipeline, type PostPipeline } from '../graph/graph3d/postprocessing';
 import { createAdaptiveQuality, clampDelta, levelRank, type AdaptiveQuality, type EffectsLevel } from '../graph/graph3d/quality';
 import { createFrameStats, type FrameStatsAccumulator } from '../graph/graph3d/frameStats';
-import { createMistShell, createMistSmoke, universeEmission, type MistEmitter, type MistShell, type MistSmoke } from '../graph/graph3d/mist';
+import { createMistShell, createMistSmoke, universeEmission, type MistEmissionProfile, type MistEmitter, type MistShell, type MistSmoke } from '../graph/graph3d/mist';
 import { prunePulses, pushPulse, type FlowBody, type FlowEddy, type FlowPulse } from '../graph/graph3d/flowField';
 
 /**
@@ -46,6 +46,10 @@ const BACKDROP_R = 240;
 const CLICK_SLOP_PX = 7;
 const AUTO_ORBIT_DELAY_S = 2.5;
 const AUTO_ORBIT_RATE = 0.05; // rad/s — slow, comfortable idle drift
+/** Draw-budget caps: satellite counts are unbounded real data — shells and
+ * wake bodies must not scale with them (spec: ≤13 extra draws, ≤12 wakes). */
+const MAX_SHELLS = 12;
+const MAX_WAKE_BODIES = 12;
 
 interface TierConfig {
   starCount: number;
@@ -154,9 +158,13 @@ function buildSystem(node: ConstellationNode, tier: TierConfig, motion: number, 
 
   // Mist encodes status: forming = shrouded, dormant = thin haze, active =
   // light wisps, complete = clear. The shell rides the body's own group.
+  // Shells are CAPPED at MAX_SHELLS total (spec: ≤13 extra draws — 1 smoke
+  // layer + ≤12 shells) — satellite counts are unbounded real user data, so
+  // when a system exceeds the cap the densest shrouds win.
+  const shellCandidates: { host: THREE.Group; radius: number; node: ConstellationNode; profile: MistEmissionProfile }[] = [];
   const centerProfile = universeEmission(node.status, node.strength ?? 0.5);
   if (centerProfile.shellDensity > 0) {
-    const shell = createMistShell(PLANET_R, node.colors[0], node.colors[1], centerProfile);
+    const shell = createMistShell(PLANET_R, node.colors[0], node.colors[1], centerProfile, hashString(node.id));
     center.group.add(shell.mesh);
     shells.push(shell);
   }
@@ -213,9 +221,7 @@ function buildSystem(node: ConstellationNode, tier: TierConfig, motion: number, 
     const bodyRadius = SAT_R * params.scale;
     const profile = universeEmission(child.status, child.strength ?? 0.5);
     if (profile.shellDensity > 0) {
-      const shell = createMistShell(bodyRadius, child.colors[0], child.colors[1], profile);
-      satGroup.add(shell.mesh);
-      shells.push(shell);
+      shellCandidates.push({ host: satGroup, radius: bodyRadius, node: child, profile });
     }
     satellites.push({
       id: child.id,
@@ -229,6 +235,16 @@ function buildSystem(node: ConstellationNode, tier: TierConfig, motion: number, 
       bodyRadius,
     });
   });
+
+  // Densest-first under the cap (forming shrouds carry the strongest signal).
+  shellCandidates
+    .sort((a, b) => b.profile.shellDensity - a.profile.shellDensity)
+    .slice(0, Math.max(0, MAX_SHELLS - shells.length))
+    .forEach((c) => {
+      const shell = createMistShell(c.radius, c.node.colors[0], c.node.colors[1], c.profile, hashString(c.node.id));
+      c.host.add(shell.mesh);
+      shells.push(shell);
+    });
 
   const broadcast = buildBroadcast(node.colors[0], PLANET_R * 1.5, maxRadius + 3.5);
   broadcast.setTime(now);
@@ -281,10 +297,17 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
   // ---- fluid mist state ------------------------------------------------------
   const mistRef = useRef<MistSmoke | null>(null);
   const pulsesRef = useRef<readonly FlowPulse[]>([]);
-  /** Pooled per-satellite wake bodies (rebuilt on system change, mutated per frame). */
+  /** Pooled wake bodies for the ≤MAX_WAKE_BODIES largest satellites (rebuilt on system change, mutated per frame). */
   const flowBodiesRef = useRef<FlowBody[]>([]);
-  /** Pooled emitters: [0]=center, then satellites, then nebula-bank sites. */
-  const emittersRef = useRef<(MistEmitter & { satIndex?: number })[]>([]);
+  /** Satellite index behind each pooled wake body (largest radii win the cap). */
+  const wakeSatIdxRef = useRef<number[]>([]);
+  /** Pooled emitters: [0]=center, then satellites, then nebula-bank sites.
+   * `baseRate` is the data-driven emission; `rate` is what the shed stage
+   * leaves of it this frame. */
+  const emittersRef = useRef<(MistEmitter & { satIndex?: number; baseRate: number; bank?: boolean })[]>([]);
+  /** Adaptive shed stage for the mist (spec chain): 0 none · ≥1 banks off ·
+   * ≥2 wisp rates halved · ≥3 shells static. */
+  const mistShedRef = useRef(0);
   const eddyRef = useRef<FlowEddy>({ x: 0, y: 0, z: 0, strength: 0, radius: 1.5 });
   /** Mutable flow context (structurally a FlowContext) — mutated per frame, never reallocated. */
   const flowCtxRef = useRef<{ bodies: FlowBody[]; pulses: readonly FlowPulse[]; eddy: FlowEddy | null }>({
@@ -589,9 +612,11 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
           if (mist) {
             pulsesRef.current = prunePulses(pulsesRef.current, nowMs);
             const bodies = flowBodiesRef.current;
-            for (let i = 0; i < sys.satellites.length && i < bodies.length; i++) {
-              const s = sys.satellites[i];
-              const fb = bodies[i];
+            const wakeIdx = wakeSatIdxRef.current;
+            for (let k = 0; k < wakeIdx.length && k < bodies.length; k++) {
+              const s = sys.satellites[wakeIdx[k]];
+              if (!s) continue;
+              const fb = bodies[k];
               s.group.getWorldPosition(tmpV3);
               fb.x = tmpV3.x;
               fb.y = tmpV3.y;
@@ -604,7 +629,9 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
               fb.vz = (tmpVel.z - s.group.position.z) / VEL_EPS;
               fb.radius = s.bodyRadius * 2.4;
             }
-            // Emitters ride their satellites; the hover eddy stirs locally.
+            // Emitters ride their satellites; the shed stage throttles emission
+            // (spec chain: banks off at ≥1, wisp rates halved at ≥2).
+            const shed = mistShedRef.current;
             for (const e of emittersRef.current) {
               if (e.satIndex != null) {
                 const s = sys.satellites[e.satIndex];
@@ -615,10 +642,21 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
                   e.z = tmpV3.z;
                 }
               }
+              e.rate = e.bank && shed >= 1 ? 0 : e.baseRate * (shed >= 2 ? 0.5 : 1);
             }
             const ctx = flowCtxRef.current;
             ctx.pulses = pulsesRef.current;
-            const hoveredSat = hoveredRef.current ? sys.satellites.find((x) => x.id === hoveredRef.current) : undefined;
+            // Indexed scan, no per-frame closure (hot-path allocation rule).
+            let hoveredSat: SatEntry | undefined;
+            const hovId = hoveredRef.current;
+            if (hovId) {
+              for (let i = 0; i < sys.satellites.length; i++) {
+                if (sys.satellites[i].id === hovId) {
+                  hoveredSat = sys.satellites[i];
+                  break;
+                }
+              }
+            }
             if (hoveredSat) {
               hoveredSat.group.getWorldPosition(tmpV3);
               const eddy = eddyRef.current;
@@ -634,9 +672,10 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
             // Reduced motion: dt=0 freezes spawning + advection; densities stay.
             mist.advance(reduced ? 0 : dt, shaderTimeRef.current, nowMs, ctx, emittersRef.current);
           }
-          // Mist shrouds billboard toward the camera and churn on shader time.
+          // Mist shrouds billboard toward the camera and churn on shader time
+          // (frozen — density still encodes status — at shed stage ≥3).
           for (const shell of sys.shells) {
-            shell.setTime(shaderTimeRef.current);
+            if (mistShedRef.current < 3) shell.setTime(shaderTimeRef.current);
             shell.mesh.quaternion.copy(camera.quaternion);
           }
 
@@ -663,7 +702,13 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
           retiring.system.group.scale.setScalar(retiring.startScale * (1 - 0.5 * e));
           retiring.system.center.setEnergy(1 - e);
           for (const s of retiring.system.satellites) s.body.setEnergy(s.baseEnergy * (1 - e));
-          for (const shell of retiring.system.shells) shell.mesh.quaternion.copy(camera.quaternion);
+          // Shrouds fade + keep churning with their dimming bodies — a frozen
+          // full-density shell popping out at dispose reads as a glitch.
+          for (const shell of retiring.system.shells) {
+            shell.setTime(shaderTimeRef.current);
+            shell.setDensityScale(1 - e);
+            shell.mesh.quaternion.copy(camera.quaternion);
+          }
           if (p >= 1) {
             retiring.system.dispose();
             retiringRef.current = null;
@@ -719,6 +764,11 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
             const cap = adaptive.cap();
             if (starfield) starfield.object.visible = levelRank(cap) >= levelRank('rich');
             postDisabled = levelRank(cap) < levelRank('cinematic');
+            // Mist shed chain (spec order): the deeper the cap falls below the
+            // configured tier, the more the mist gives back — nebula banks off
+            // (≥1) → wisp rates halved (≥2) → shells static (≥3). Recovers
+            // symmetrically when the cap climbs back.
+            mistShedRef.current = Math.max(0, levelRank(quality === 'off' ? 'minimal' : quality) - levelRank(cap));
           }
         }
         lastRenderTs = after;
@@ -827,21 +877,26 @@ export function ConstellationScene({ root, centerId, onPromote, reducedMotion, q
     systemRef.current = sys;
 
     // Rebuild the fluid pools for the new system (allocation happens HERE, not
-    // per frame): wake bodies per satellite + emitters (center, satellites,
-    // deterministic nebula-bank sites at rich+).
-    flowBodiesRef.current = sys.satellites.map(() => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, radius: 1 }));
+    // per frame): wake bodies for the largest satellites (capped — satellite
+    // counts are unbounded data, the wake-gaussian CPU budget is not) +
+    // emitters (center, satellites, deterministic nebula-bank sites at rich+).
+    wakeSatIdxRef.current = sys.satellites
+      .map((_s, i) => i)
+      .sort((a, b) => sys.satellites[b].bodyRadius - sys.satellites[a].bodyRadius)
+      .slice(0, MAX_WAKE_BODIES);
+    flowBodiesRef.current = wakeSatIdxRef.current.map(() => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, radius: 1 }));
     flowCtxRef.current.bodies = flowBodiesRef.current;
-    const emitters: (MistEmitter & { satIndex?: number })[] = [
-      { x: 0, y: 0, z: 0, radius: PLANET_R * 1.5, rate: sys.centerWispRate, color: new THREE.Color(node.colors[0]) },
+    const emitters: (MistEmitter & { satIndex?: number; baseRate: number; bank?: boolean })[] = [
+      { x: 0, y: 0, z: 0, radius: PLANET_R * 1.5, rate: sys.centerWispRate, baseRate: sys.centerWispRate, color: new THREE.Color(node.colors[0]) },
     ];
     sys.satellites.forEach((s, i) => {
       const childColors = index.get(s.id)?.colors ?? node.colors;
-      emitters.push({ x: 0, y: 0, z: 0, radius: s.bodyRadius * 2.2, rate: s.wispRate, color: new THREE.Color(childColors[0]), satIndex: i });
+      emitters.push({ x: 0, y: 0, z: 0, radius: s.bodyRadius * 2.2, rate: s.wispRate, baseRate: s.wispRate, color: new THREE.Color(childColors[0]), satIndex: i });
     });
     for (let k = 0; k < tier.mistBanks; k++) {
       const a = ((hashString(`${node.id}:bank:${k}`) % 1000) / 1000) * Math.PI * 2;
       const r = sys.maxRadius * (1.12 + 0.18 * k);
-      emitters.push({ x: Math.cos(a) * r, y: (k - 1) * 1.4, z: Math.sin(a) * r, radius: 2.6, rate: 2.2, color: new THREE.Color(node.colors[1]) });
+      emitters.push({ x: Math.cos(a) * r, y: (k - 1) * 1.4, z: Math.sin(a) * r, radius: 2.6, rate: 2.2, baseRate: 2.2, bank: true, color: new THREE.Color(node.colors[1]) });
     }
     emittersRef.current = emitters;
 

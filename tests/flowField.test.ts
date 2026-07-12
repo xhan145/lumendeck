@@ -133,4 +133,9 @@ describe('pulse queue', () => {
     const pruned = prunePulses(fresh, 1000 + (PULSE_LIFETIME + 1) * 1000);
     expect(pruned.length).toBe(0);
   });
+
+  it('prunePulses is a same-reference no-op on the empty steady state (runs every frame)', () => {
+    const empty: readonly FlowPulse[] = [];
+    expect(prunePulses(empty, 123456)).toBe(empty);
+  });
 });

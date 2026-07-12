@@ -67,8 +67,11 @@ the palette-breaking channel.
   advection), shells keep their data-driven density so the status encoding
   survives motionless. Graph — steam is disabled entirely under reduce (the
   same `motionPolicy` gate as the dust); no information is lost because the
-  luminosity glow carries the identical datum statically. Live `matchMedia`
-  plumbing already exists on both surfaces.
+  luminosity glow carries the identical datum statically. The Universe gate is
+  a LIVE `matchMedia` listener; the graph gate is snapshot-at-mount, matching
+  its host surface's precedent (dust/pulses/fabric all read the preference
+  once per lifecycle effect) — an OS toggle mid-session applies on the next
+  remount or tier change.
 - **Hidden tab:** existing draw-skip + dirty-sync semantics cover mist (it
   ticks with the surface's loop).
 - **Photosensitivity:** mist is low-luminance and moves geometry, not
@@ -83,13 +86,17 @@ the palette-breaking channel.
 ## Performance budget
 
 - Draw calls: Universe ≤13 extra (1 smoke layer + ≤12 shells); Graph +1.
+  Shells are HARD-CAPPED at 12 (densest-first; center always keeps its
+  shroud) because satellite counts are unbounded real user data.
 - Smoke sprite counts per tier — Universe 350/900/1500, Graph 250/600/1000
   (standard/rich/cinematic; minimal & off = none, static shells only at
   standard in Universe).
-- CPU ≤1.2 ms at rich: 1500 × (4 noise evals + ≤12 wake gaussians); the
-  coarse-grid escape hatch is the named fallback if measured over budget.
-- Adaptive governor sheds in order: nebula banks → smoke count halves →
-  shells go static.
+- CPU ≤1.2 ms at rich: 1500 × (4 noise evals + ≤12 wake gaussians); wake
+  bodies are capped at the 12 largest satellites. The coarse-grid escape
+  hatch is the named fallback if measured over budget.
+- Adaptive governor sheds in order (implemented as shed stages = how far the
+  adaptive cap falls below the configured tier): nebula banks off (≥1) →
+  wisp rates halve (≥2) → shells go static (≥3); recovery is symmetric.
 
 ## Testing
 

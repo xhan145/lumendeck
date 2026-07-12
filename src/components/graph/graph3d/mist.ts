@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { velocityAt, type FlowContext, type Vec3Out } from './flowField';
+import { clampDelta } from './quality';
 
 /**
  * Mist rendering for both 3D surfaces: a single soft-sprite smoke layer
@@ -72,7 +73,8 @@ export interface MistSmoke {
   /**
    * Integrate all live wisps along the flow field and spawn from emitters.
    * `tSec` drives the curl swirl (freeze it for reduced motion); `dt` seconds
-   * (already clamped by the caller's loop); `nowMs` only feeds pulse decay.
+   * (clamped internally to MAX_DELTA_S like every animated layer — a restored
+   * tab's huge dt must not fling wisps); `nowMs` only feeds pulse decay.
    */
   advance(dt: number, tSec: number, nowMs: number, ctx: FlowContext, emitters: readonly MistEmitter[]): void;
   /** Live wisp count (for tests/diagnostics). */
@@ -176,7 +178,9 @@ export function createMistSmoke(
   const ageAttr = new THREE.BufferAttribute(ages, 1);
   ageAttr.setUsage(THREE.DynamicDrawUsage);
   const seedAttr = new THREE.BufferAttribute(seeds, 1);
+  seedAttr.setUsage(THREE.DynamicDrawUsage); // rewritten on every spawn, like pos/age
   const tintAttr = new THREE.BufferAttribute(tints, 3);
+  tintAttr.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute('position', posAttr);
   geometry.setAttribute('aAge', ageAttr);
   geometry.setAttribute('aSeed', seedAttr);
@@ -201,10 +205,25 @@ export function createMistSmoke(
   points.renderOrder = 4; // above bodies/atmospheres, below DOM labels
 
   let cursor = 0;
-  let spawnDebt = 0;
   const vel: Vec3Out = { x: 0, y: 0, z: 0 };
+  /**
+   * Fractional spawn debt PER EMITTER, scoped to THIS smoke instance (weakly
+   * keyed — rebuilt emitter pools reset naturally, shared emitter objects
+   * can't leak state between instances). A single shared accumulator would
+   * mis-attribute spawns between emitters (wrong tint and position) and can
+   * phase-lock at vsync-constant dt so one emitter starves its equal-rate twin.
+   */
+  const debts = new WeakMap<MistEmitter, number>();
 
-  const spawn = (e: MistEmitter) => {
+  /**
+   * Spawn one wisp at the emitter, or refuse when the pool is saturated.
+   * Cursor order IS age order (slots are only ever written at the cursor), so
+   * the slot at the cursor is always the oldest wisp — if it is still alive,
+   * every slot is. Saturation caps density instead of hard-cutting a mid-life
+   * wisp (the designed fade-out must never be skipped by a recycle).
+   */
+  const spawn = (e: MistEmitter): boolean => {
+    if (life[cursor] < WISP_LIFETIME) return false;
     const i = cursor;
     cursor = (cursor + 1) % maxCount;
     const a = rand() * Math.PI * 2;
@@ -219,21 +238,28 @@ export function createMistSmoke(
     tints[i * 3 + 2] = e.color.b;
     seedAttr.needsUpdate = true;
     tintAttr.needsUpdate = true;
+    return true;
   };
 
   return {
     points,
     advance(dt, tSec, nowMs, ctx, emitters) {
+      const d = clampDelta(dt);
       material.uniforms.uTime.value = tSec;
-      // Spawning: accumulate fractional debt per emitter so low rates still emit.
-      if (dt > 0) {
+      // Spawning: accumulate fractional debt PER EMITTER so low rates still
+      // emit and every emitter's spawns carry its own tint/position.
+      if (d > 0) {
         for (const e of emitters) {
           if (e.rate <= 0) continue;
-          spawnDebt += e.rate * dt;
-          while (spawnDebt >= 1) {
-            spawn(e);
-            spawnDebt -= 1;
+          let debt = (debts.get(e) ?? 0) + e.rate * d;
+          while (debt >= 1) {
+            debt -= 1;
+            if (!spawn(e)) {
+              debt %= 1; // pool saturated: drop whole spawns, keep the fraction
+              break;
+            }
           }
+          debts.set(e, debt);
         }
       }
       // Advect live wisps along the fluid.
@@ -242,14 +268,14 @@ export function createMistSmoke(
           ages[i] = 1;
           continue;
         }
-        life[i] += dt;
+        life[i] += d;
         const x = positions[i * 3];
         const y = positions[i * 3 + 1];
         const z = positions[i * 3 + 2];
         velocityAt(x * flowScale, y * flowScale, z * flowScale, tSec, ctx, nowMs, vel);
-        positions[i * 3] = x + vel.x * driftGain * dt;
-        positions[i * 3 + 1] = y + vel.y * driftGain * dt;
-        positions[i * 3 + 2] = z + vel.z * driftGain * dt;
+        positions[i * 3] = x + vel.x * driftGain * d;
+        positions[i * 3 + 1] = y + vel.y * driftGain * d;
+        positions[i * 3 + 2] = z + vel.z * driftGain * d;
         ages[i] = Math.min(life[i] / WISP_LIFETIME, 1);
       }
       posAttr.needsUpdate = true;
@@ -316,13 +342,30 @@ export interface MistShell {
   setTime(tSec: number): void;
   /** Re-apply a data-driven profile (density/churn) without a rebuild. */
   setProfile(profile: MistEmissionProfile): void;
+  /**
+   * Multiply the data-driven density by a transient 0..1 factor (retire fades,
+   * adaptive shedding) WITHOUT touching the encoded profile.
+   */
+  setDensityScale(scale: number): void;
   dispose(): void;
 }
 
-/** A camera-facing shroud quad ~2.6× body radius. Caller billboards it per frame. */
-export function createMistShell(bodyRadius: number, colorA: string, colorB: string, profile: MistEmissionProfile): MistShell {
+/**
+ * A camera-facing shroud quad ~2.6× body radius. Caller billboards it per
+ * frame. `seed` de-correlates the noise pattern between shells — pass a
+ * per-node hash; same-status siblings must not render cloned smoke.
+ */
+export function createMistShell(
+  bodyRadius: number,
+  colorA: string,
+  colorB: string,
+  profile: MistEmissionProfile,
+  seed = 0,
+): MistShell {
   const size = bodyRadius * 2.6;
   const geometry = new THREE.PlaneGeometry(size, size);
+  let density = profile.shellDensity;
+  let densityScale = 1;
   const material = new THREE.ShaderMaterial({
     vertexShader: SHELL_VERTEX,
     fragmentShader: SHELL_FRAGMENT,
@@ -332,9 +375,9 @@ export function createMistShell(bodyRadius: number, colorA: string, colorB: stri
     blending: THREE.NormalBlending,
     uniforms: {
       uTime: { value: 0 },
-      uDensity: { value: profile.shellDensity },
+      uDensity: { value: density },
       uChurn: { value: profile.churn },
-      uSeed: { value: (Math.imul(bodyRadius * 1000, 2654435761) >>> 8) % 100 },
+      uSeed: { value: (seed >>> 0) % 1000 },
       uColorA: { value: new THREE.Color(colorA) },
       uColorB: { value: new THREE.Color(colorB) },
     },
@@ -347,8 +390,13 @@ export function createMistShell(bodyRadius: number, colorA: string, colorB: stri
       material.uniforms.uTime.value = tSec;
     },
     setProfile(profile) {
-      material.uniforms.uDensity.value = profile.shellDensity;
+      density = profile.shellDensity;
+      material.uniforms.uDensity.value = density * densityScale;
       material.uniforms.uChurn.value = profile.churn;
+    },
+    setDensityScale(scale) {
+      densityScale = Math.min(Math.max(scale, 0), 1);
+      material.uniforms.uDensity.value = density * densityScale;
     },
     dispose() {
       mesh.parent?.remove(mesh);

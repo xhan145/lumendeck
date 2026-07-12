@@ -76,17 +76,20 @@ mist, with `strength` scaling emission ±30%:
 |---|---|
 | `forming` | dense, slow-churning shroud — still condensing |
 | `dormant` | thin, near-static haze |
-| `active` | light energetic wisps |
+| `active` | light energetic wisps + the faintest haze (kept so the status still reads when reduced motion freezes wisp spawning) |
 | `complete` | clear body, rare faint wisp |
 
 Rendering is one `THREE.Points` smoke layer (procedural soft sprites, normal
 blending — smoke, not glow; wisps tinted by their body's color) plus a bounded
 billboard shell per shrouded body (`graph3d/mist.ts`); no textures, no render
-targets, no raymarch. Wisp counts scale per tier (0/350/900/1500) and nebula
-banks join at rich+. Under reduced motion the flow time freezes (dt = 0 — no
-spawning, no advection) but shells keep their density, so the status encoding
-survives motionless. The graph view reuses the same engine for activity steam
-(`nodeMeta.lastActiveAt`, registered as `mist-steam` in
+targets, no raymarch. Budgets hold against unbounded child counts: shells cap
+at 12 (densest-first), wake bodies at the 12 largest satellites. Wisp counts
+scale per tier (0/350/900/1500), nebula banks join at rich+, and the adaptive
+governor sheds mist in spec order (banks → wisp rates halve → shells static)
+when a machine can't keep up. Under reduced motion the flow time freezes
+(dt = 0 — no spawning, no advection) but shells keep their density, so the
+status encoding survives motionless. The graph view reuses the same engine for
+activity steam (`nodeMeta.lastActiveAt`, registered as `mist-steam` in
 `graph3d/encodings.ts`).
 
 ## Camera & interaction

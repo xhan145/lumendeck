@@ -561,7 +561,11 @@ export function Graph3DView({ onContextFailed }: Props) {
     const meta = useStudio.getState().nodeMeta;
     const now = Date.now();
     const emitters = mistEmittersRef.current;
+    // Tint resolves at sync time, not pool-build time — the pool effect can run
+    // before (or without) the lifecycle effect resolving var(--ld-cyan).
+    const tint = mistColorRef.current;
     for (const e of emitters) {
+      if (tint) e.color = tint;
       const entry = orbsRef.current.get(e.nodeId);
       if (!entry) {
         e.rate = 0;

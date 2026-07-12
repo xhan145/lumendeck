@@ -187,8 +187,20 @@ export function pushPulse(pulses: readonly FlowPulse[], pulse: FlowPulse): FlowP
   return next.length > MAX_PULSES ? next.slice(next.length - MAX_PULSES) : next;
 }
 
-/** Drop expired pulses (returns the same reference when nothing expired). */
+/**
+ * Drop expired pulses. Allocation-free on the steady state (same reference
+ * when nothing expired — and pulse-free IS the steady state, this runs every
+ * animated frame); allocates only in the ≤1.6 s window after an event.
+ */
 export function prunePulses(pulses: readonly FlowPulse[], nowMs: number): readonly FlowPulse[] {
-  const alive = pulses.filter((p) => (nowMs - p.t0) / 1000 <= PULSE_LIFETIME);
-  return alive.length === pulses.length ? pulses : alive;
+  if (pulses.length === 0) return pulses;
+  let expired = false;
+  for (let i = 0; i < pulses.length; i++) {
+    if ((nowMs - pulses[i].t0) / 1000 > PULSE_LIFETIME) {
+      expired = true;
+      break;
+    }
+  }
+  if (!expired) return pulses;
+  return pulses.filter((p) => (nowMs - p.t0) / 1000 <= PULSE_LIFETIME);
 }
