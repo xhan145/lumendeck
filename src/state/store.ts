@@ -157,6 +157,7 @@ export type { CreativeState } from './creative';
 
 export type ViewId =
   | 'mission'
+  | 'constellation'
   | 'overview'
   | 'craft'
   | 'projects'
