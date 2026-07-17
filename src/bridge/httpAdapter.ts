@@ -56,6 +56,17 @@ export interface BridgeModelStatus {
   cacheDir: string;
   installCommand: string;
   installable?: boolean;
+  /**
+   * Hardware detection fields (additive, best-effort). Populated by the worker's
+   * status() VRAM probe; all optional so older bridges and detection failures
+   * still yield a valid status. Never blocks launch.
+   */
+  gpuName?: string;
+  totalVramMb?: number;
+  freeVramMb?: number;
+  computeCapability?: string;
+  cudaInitFailed?: boolean;
+  bf16Supported?: boolean;
   managedRuntime?: {
     path?: string;
     python?: string;
@@ -282,6 +293,7 @@ export class HttpAdapter implements BackendAdapter {
         seed: number;
         fallback?: boolean;
         fallbackReason?: string;
+        fallbackCategory?: string;
         droppedControls?: { type: string; reason: string }[];
       };
       const mediaType = data.mediaType ?? (data.video_base64 ? 'video' : 'image');
@@ -298,6 +310,7 @@ export class HttpAdapter implements BackendAdapter {
         seed: data.seed,
         fallback: data.fallback,
         fallbackReason: data.fallbackReason,
+        fallbackCategory: data.fallbackCategory,
         droppedControls: data.droppedControls,
       };
     } finally {

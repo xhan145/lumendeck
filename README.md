@@ -247,6 +247,13 @@ This matters because creators should not lose control of their work, their chara
 
 Cloud features can exist, but they should enhance the workflow rather than own it.
 
+Local rendering adapts to the GPU it runs on via **hardware profiles**, including
+a dedicated **GTX 1650 4GB** low-VRAM mode that budgets peak GPU memory for the
+4 GB limit (CPU offload, capped resolution, fp16) and recovers from CUDA
+out-of-memory errors with a single safe retry — an estimate-based safety net,
+not a guarantee. See
+[docs/hardware-profiles.md](docs/hardware-profiles.md).
+
 ---
 
 ## 11. User Experience Direction

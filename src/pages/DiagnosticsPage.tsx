@@ -35,6 +35,7 @@ export function DiagnosticsPage() {
     health: state.health,
     queue: state.queue,
     gallery: state.gallery,
+    hardware: state.hardwareDiagnostics(),
   }), [state]);
 
   const copyReport = async () => {

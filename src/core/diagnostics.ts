@@ -5,6 +5,34 @@ import type { HealthIssue } from './health';
 import { fallbackReasonFor, isFallbackRender, renderBackendLabel } from './renderHonesty';
 import { estimateGalleryStorage } from './storageStatus';
 
+/**
+ * Redacted hardware-profile diagnostics. Plain primitives only — NEVER prompts,
+ * negative prompts, images, or image metadata. Optional so callers that don't
+ * have detection yet still produce a valid report.
+ */
+export interface DiagnosticsHardware {
+  selectedProfile: string;
+  effectiveProfile: string;
+  gpuName?: string;
+  totalVramMb?: number;
+  freeVramMb?: number;
+  backend?: string;
+  cuda?: boolean;
+  computeCapability?: string;
+  precision?: string;
+  modelCpuOffload?: boolean;
+  sequentialCpuOffload?: boolean;
+  attentionSlicing?: boolean;
+  vaeSlicing?: boolean;
+  vaeTiling?: boolean;
+  resolutionLimit?: number;
+  requestedResolution?: string;
+  requestedBatch?: number;
+  activeModelFamily?: string;
+  oomCategory?: string;
+  fallbackOccurred?: boolean;
+}
+
 export interface DiagnosticsReportInput {
   appVersion: string;
   now?: Date;
@@ -20,6 +48,7 @@ export interface DiagnosticsReportInput {
   health: HealthIssue[];
   queue: QueueJob[];
   gallery: GalleryItem[];
+  hardware?: DiagnosticsHardware;
 }
 
 const SECRET_PATTERNS = [
@@ -49,6 +78,7 @@ export function formatDiagnosticsReport(input: DiagnosticsReportInput): string {
   const storage = estimateGalleryStorage(input.gallery);
   const healthErrors = input.health.filter((issue) => issue.severity === 'error');
   const healthWarnings = input.health.filter((issue) => issue.severity !== 'error');
+  const hw = input.hardware;
 
   return [
     'LumenDeck Diagnostics',
@@ -100,6 +130,28 @@ export function formatDiagnosticsReport(input: DiagnosticsReportInput): string {
     line('Approximate gallery size', storage.approximateLabel),
     line('Persistence mode', storage.persistenceMode),
     line('Planned desktop gallery path', storage.plannedDesktopPath),
+    '',
+    '[Hardware profile]',
+    line('Selected profile', hw?.selectedProfile ?? 'unknown'),
+    line('Effective profile', hw?.effectiveProfile ?? 'unknown'),
+    line('GPU name', hw?.gpuName ?? 'unknown'),
+    line('Total VRAM', hw?.totalVramMb != null ? `${hw.totalVramMb} MB` : 'unknown'),
+    line('Available VRAM', hw?.freeVramMb != null ? `${hw.freeVramMb} MB` : 'unknown'),
+    line('Backend', hw?.backend ?? 'unknown'),
+    line('CUDA', hw?.cuda ?? 'unknown'),
+    line('Compute capability', hw?.computeCapability ?? 'unknown'),
+    line('Precision', hw?.precision ?? 'unknown'),
+    line('Model CPU offload', hw?.modelCpuOffload ?? 'unknown'),
+    line('Sequential CPU offload', hw?.sequentialCpuOffload ?? 'unknown'),
+    line('Attention slicing', hw?.attentionSlicing ?? 'unknown'),
+    line('VAE slicing', hw?.vaeSlicing ?? 'unknown'),
+    line('VAE tiling', hw?.vaeTiling ?? 'unknown'),
+    line('Resolution limit', hw?.resolutionLimit ?? 'unknown'),
+    line('Requested resolution', hw?.requestedResolution ?? 'unknown'),
+    line('Requested batch', hw?.requestedBatch ?? 'unknown'),
+    line('Active model family', hw?.activeModelFamily ?? 'unknown'),
+    line('OOM category', hw?.oomCategory ?? 'none'),
+    line('Fallback occurred', hw?.fallbackOccurred ?? 'unknown'),
     '',
     '[Local logs]',
     'Bridge worker logs are expected under %LOCALAPPDATA%\\LumenDeck\\diffusers-runtime\\worker.log when the managed runtime writes them.',

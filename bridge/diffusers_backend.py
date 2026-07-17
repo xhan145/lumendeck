@@ -125,6 +125,95 @@ def model_cached():
         return None
 
 
+# --- GTX 1650 4GB low-VRAM helpers (worker copy; module mirror in the outer
+# file: detect_hardware / worker_dtype_name / is_cuda_oom / release_gpu_refs). ---
+_CUDA_OOM_SIGNATURES = (
+    "cuda out of memory", "out of memory", "outofmemoryerror",
+    "cublas_status_alloc_failed", "hip out of memory",
+)
+
+
+def is_cuda_oom(err):
+    text = str(err).lower()
+    return any(sig in text for sig in _CUDA_OOM_SIGNATURES)
+
+
+def worker_dtype(mem, torch):
+    """torch dtype for the load: legacy float16-on-CUDA unless mem overrides it."""
+    try:
+        cuda = bool(torch.cuda.is_available())
+    except Exception:
+        cuda = False
+    if not cuda:
+        return torch.float32
+    prec = str((mem or {}).get("precision", "")).lower()
+    if prec == "fp32":
+        return torch.float32
+    if prec == "bf16":
+        supported = False
+        try:
+            supported = bool(torch.cuda.is_bf16_supported())
+        except Exception:
+            supported = False
+        return torch.bfloat16 if supported else torch.float16
+    return torch.float16
+
+
+def detect_hardware(torch):
+    info = {"cuda": False, "cudaInitFailed": False, "gpuName": None,
+            "totalVramMb": None, "freeVramMb": None, "computeCapability": None,
+            "bf16Supported": False}
+    try:
+        cuda = bool(torch.cuda.is_available())
+    except Exception:
+        info["cudaInitFailed"] = True
+        return info
+    info["cuda"] = cuda
+    if not cuda:
+        return info
+    try:
+        props = torch.cuda.get_device_properties(0)
+        info["gpuName"] = getattr(props, "name", None)
+        total = getattr(props, "total_memory", None)
+        if total:
+            info["totalVramMb"] = int(total) // (1024 * 1024)
+        major = getattr(props, "major", None)
+        minor = getattr(props, "minor", None)
+        if major is not None and minor is not None:
+            info["computeCapability"] = "{}.{}".format(major, minor)
+    except Exception:
+        info["cudaInitFailed"] = True
+    try:
+        free, _total = torch.cuda.mem_get_info()
+        info["freeVramMb"] = int(free) // (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        info["bf16Supported"] = bool(torch.cuda.is_bf16_supported())
+    except Exception:
+        info["bf16Supported"] = False
+    return info
+
+
+def release_gpu_refs(state):
+    for key in ("pipe", "anim_pipe", "svd_pipe"):
+        state[key] = None
+    for key in ("key", "anim_key", "svd_key", "lora_key"):
+        state[key] = None
+    state["controlnets"] = {}
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def status(message=None, loaded=False):
     torch_info = module_info("torch")
     diffusers_info = module_info("diffusers")
@@ -133,12 +222,14 @@ def status(message=None, loaded=False):
     ready = bool(torch_info.get("importable") and diffusers_info.get("importable"))
     device = "unknown"
     cuda = False
+    hardware = {}
     if torch is not None:
-        try:
-            cuda = bool(torch.cuda.is_available())
+        hardware = detect_hardware(torch)
+        cuda = bool(hardware.get("cuda"))
+        if hardware.get("cudaInitFailed"):
+            device = "unknown"
+        else:
             device = "cuda" if cuda else "cpu"
-        except Exception:
-            pass
     if message is None:
         if not ready:
             message = "Install the managed Diffusers runtime, then download SD-Turbo for real photo renders."
@@ -158,6 +249,14 @@ def status(message=None, loaded=False):
         "cacheDir": cache_dir(),
         "installCommand": "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch.",
         "message": message,
+        # Best-effort hardware detection for the hardware-profile system. All
+        # optional — a detection failure leaves them null and never blocks launch.
+        "gpuName": hardware.get("gpuName"),
+        "totalVramMb": hardware.get("totalVramMb"),
+        "freeVramMb": hardware.get("freeVramMb"),
+        "computeCapability": hardware.get("computeCapability"),
+        "cudaInitFailed": bool(hardware.get("cudaInitFailed")),
+        "bf16Supported": bool(hardware.get("bf16Supported")),
         "dependencies": {
             "torch": torch_info,
             "diffusers": diffusers_info,
@@ -185,9 +284,16 @@ def detect_single_file_family(path):
         return None
 
 
-def load_pipe(model_ref=None):
+def load_pipe(model_ref=None, mem=None):
+    """Load a text2img pipe. `mem` is the optional low-VRAM directive from the
+    active hardware profile. When mem['lowVram'] is set (GTX 1650 4GB profile /
+    safe retry) the pipe is loaded with the requested precision and CPU offload
+    instead of a whole-pipe .to('cuda'), so it fits a 4 GB card. Without a
+    low-VRAM directive the path is the unchanged legacy one (byte-for-byte)."""
     import torch
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    mem = mem or {}
+    low_vram = bool(mem.get("lowVram"))
+    dtype = worker_dtype(mem, torch) if low_vram else (torch.float16 if torch.cuda.is_available() else torch.float32)
     ref = model_ref or {"kind": "hub", "id": MODEL_ID}
     if ref.get("kind") == "file":
         path = str(ref.get("path", ""))
@@ -205,14 +311,46 @@ def load_pipe(model_ref=None):
     else:
         from diffusers import AutoPipelineForText2Image
         pipe = AutoPipelineForText2Image.from_pretrained(ref.get("id") or MODEL_ID, torch_dtype=dtype)
-    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
-    # Fit large models (SDXL) into modest VRAM (e.g. 8 GB laptop GPUs).
-    for enable in ("enable_attention_slicing", "enable_vae_slicing", "enable_vae_tiling"):
+    if low_vram and torch.cuda.is_available():
+        # Low-VRAM path: keep only the active submodule resident. Enable the
+        # requested memory optimizations, then offload — NEVER .to('cuda') after
+        # offload (diffusers manages device placement dynamically once offloaded).
+        _apply_slicing(pipe, mem)
+        try:
+            if mem.get("sequentialCpuOffload"):
+                pipe.enable_sequential_cpu_offload()
+            elif mem.get("modelCpuOffload", True):
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe = pipe.to("cuda")
+        except Exception:
+            # Offload not supported by this pipe — fall back to resident + slicing.
+            pipe = pipe.to("cuda")
+    else:
+        # Legacy path (unchanged): resident on the compute device + always slice.
+        pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+        for enable in ("enable_attention_slicing", "enable_vae_slicing", "enable_vae_tiling"):
+            try:
+                getattr(pipe, enable)()
+            except Exception:
+                pass
+    return pipe
+
+
+def _apply_slicing(pipe, mem):
+    """Enable the memory optimizations the directive requests (best-effort)."""
+    wanted = []
+    if mem.get("attentionSlicing", True):
+        wanted.append("enable_attention_slicing")
+    if mem.get("vaeSlicing", True):
+        wanted.append("enable_vae_slicing")
+    if mem.get("vaeTiling", True):
+        wanted.append("enable_vae_tiling")
+    for enable in wanted:
         try:
             getattr(pipe, enable)()
         except Exception:
             pass
-    return pipe
 
 
 def apply_loras(pipe, lora_files):
@@ -629,7 +767,18 @@ def _render_one_image(job, state, report):
     """
     import torch
     model_ref = job.get("modelRef") or {"kind": "hub", "id": MODEL_ID}
-    key = _ref_key(model_ref)
+    # Fold the low-VRAM signature into the cache key so switching into/out of the
+    # offload path (or the safe retry escalating to sequential offload) forces a
+    # reload with the correct device placement. Without a low-VRAM directive the
+    # key is IDENTICAL to before (legacy users: byte-for-byte same cache behavior).
+    _mem = job.get("memoryProfile") or {}
+    _mem_key = ""
+    if _mem.get("lowVram"):
+        _mem_key = "|lv:{}:{}".format(
+            _mem.get("precision", "fp16"),
+            "seq" if _mem.get("sequentialCpuOffload") else "model",
+        )
+    key = _ref_key(model_ref) + _mem_key
     if state.get("key") != key or state.get("pipe") is None:
         report({"phase": "loading"})
         if state.get("pipe") is not None:
@@ -651,7 +800,7 @@ def _render_one_image(job, state, report):
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-        state["pipe"] = load_pipe(model_ref)
+        state["pipe"] = load_pipe(model_ref, job.get("memoryProfile"))
         state["key"] = key
         state["lora_key"] = None
     pipe = state["pipe"]
@@ -848,12 +997,27 @@ def do_generate(job, state):
     `state` persists across calls in serve mode, so the (multi-GB) model loads once
     and only reloads when you switch checkpoints. In one-shot mode it's a fresh dict.
     """
+    import torch
     report = _job_reporter(job)
 
     if str(job.get("output", "image")) == "video":
         return _animate(job, state, report)
 
-    image, seed, dropped = _render_one_image(job, state, report)
+    try:
+        image, seed, dropped = _render_one_image(job, state, report)
+    except Exception as exc:
+        # OOM anywhere in the still path (load / sampling / VAE decode): dispose
+        # partially-loaded resources, release CUDA cache, and return a CATEGORIZED
+        # error so the UI can offer a single safe retry. Unrelated errors are
+        # re-raised untouched (never swallowed as OOM).
+        if isinstance(exc, getattr(torch.cuda, "OutOfMemoryError", tuple())) or is_cuda_oom(exc):
+            release_gpu_refs(state)
+            report({"phase": "error"})
+            return {
+                "error": "CUDA out of memory: the render exceeded the GPU memory budget. {}".format(exc),
+                "errorCategory": "cuda_oom",
+            }
+        raise
 
     buf = io.BytesIO()
     image.save(buf, format="PNG")
@@ -1612,6 +1776,113 @@ def estimate_family(model_ref: dict[str, Any] | None) -> str:
     return "SD1.5"
 
 
+# --- GTX 1650 4GB low-VRAM worker helpers -----------------------------------
+# These four functions are the TESTED module-level mirrors of the copies embedded
+# in _WORKER_SOURCE (the subprocess runs in its own namespace, so the worker
+# cannot import these). Keep the two copies in sync — same pattern as
+# detect_single_file_family (worker) / estimate_family (module).
+
+_CUDA_OOM_SIGNATURES = (
+    "cuda out of memory",
+    "out of memory",
+    "outofmemoryerror",
+    "cublas_status_alloc_failed",
+    "hip out of memory",
+)
+
+
+def is_cuda_oom(err: Any) -> bool:
+    """True when an exception or message is a CUDA out-of-memory. Intentionally
+    precise: unrelated exceptions must NOT be treated as OOM (never swallowed)."""
+    text = str(err).lower()
+    return any(sig in text for sig in _CUDA_OOM_SIGNATURES)
+
+
+def worker_dtype_name(mem: dict | None, cuda: bool, bf16_supported: bool = False) -> str:
+    """Precision the worker loads in: 'float16' | 'bfloat16' | 'float32'.
+
+    Legacy behavior when `mem` is falsy: float16 on CUDA, float32 otherwise.
+    Honors mem['precision'] ('fp16'|'mixed'|'fp32'|'bf16'). bf16 is only ever
+    returned when the profile asked for it AND hardware confirms it (never merely
+    because it 'sounds' memory-efficient)."""
+    if not cuda:
+        return "float32"
+    prec = str((mem or {}).get("precision", "")).lower()
+    if prec == "fp32":
+        return "float32"
+    if prec == "bf16":
+        return "bfloat16" if bf16_supported else "float16"
+    return "float16"
+
+
+def detect_hardware(torch: Any) -> dict[str, Any]:
+    """Best-effort GPU detection from a torch module. NEVER raises — a detection
+    failure returns cuda False + unknowns so the bridge still launches offline and
+    without an NVIDIA GPU. Reports name, total/free VRAM (MB), compute capability,
+    and bf16 support when reliably readable."""
+    info: dict[str, Any] = {
+        "cuda": False,
+        "cudaInitFailed": False,
+        "gpuName": None,
+        "totalVramMb": None,
+        "freeVramMb": None,
+        "computeCapability": None,
+        "bf16Supported": False,
+    }
+    try:
+        cuda = bool(torch.cuda.is_available())
+    except Exception:
+        info["cudaInitFailed"] = True
+        return info
+    info["cuda"] = cuda
+    if not cuda:
+        return info
+    try:
+        props = torch.cuda.get_device_properties(0)
+        info["gpuName"] = getattr(props, "name", None)
+        total = getattr(props, "total_memory", None)
+        if total:
+            info["totalVramMb"] = int(total) // (1024 * 1024)
+        major = getattr(props, "major", None)
+        minor = getattr(props, "minor", None)
+        if major is not None and minor is not None:
+            info["computeCapability"] = f"{major}.{minor}"
+    except Exception:
+        info["cudaInitFailed"] = True
+    try:
+        free, _total = torch.cuda.mem_get_info()
+        info["freeVramMb"] = int(free) // (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        info["bf16Supported"] = bool(torch.cuda.is_bf16_supported())
+    except Exception:
+        info["bf16Supported"] = False
+    return info
+
+
+def release_gpu_refs(state: dict) -> None:
+    """Drop every resident pipe reference BEFORE requesting a CUDA cache release,
+    restoring `state` to a usable empty-model condition after a failed load or OOM
+    (spec: clear references before cache cleanup; restore a usable interface)."""
+    for key in ("pipe", "anim_pipe", "svd_pipe"):
+        state[key] = None
+    for key in ("key", "anim_key", "svd_key", "lora_key"):
+        state[key] = None
+    state["controlnets"] = {}
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _app_data_dir() -> Path:
     base = os.environ.get("LUMENDECK_HOME") or os.environ.get("LOCALAPPDATA")
     if base:
@@ -2176,7 +2447,11 @@ def generate(job: dict) -> dict:
             raise
         out = _worker("generate", job, timeout=1800)
     if isinstance(out, dict) and out.get("error"):
-        raise RuntimeError(out["error"])
+        # Preserve the worker's precise error category (e.g. 'cuda_oom') as an
+        # attribute so server.py can forward it instead of relying on message text.
+        err = RuntimeError(out["error"])
+        err.error_category = out.get("errorCategory")
+        raise err
     return out
 
 

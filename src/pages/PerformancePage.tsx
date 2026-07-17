@@ -4,6 +4,7 @@ import { useStudio } from '../state/store';
 import { TURBO_PRESETS } from '../turboForge/presets';
 import { createRenderPlan } from '../turboForge/renderPlanner';
 import { TurboForgePanel } from '../components/TurboForgePanel';
+import { HardwareProfilePanel } from '../components/HardwareProfilePanel';
 
 const PRESET_COPY: Record<string, string> = {
   safe: 'Safe: most reliable.',
@@ -65,6 +66,8 @@ export function PerformancePage() {
           <article className="card page-card wide">
             <TurboForgePanel />
           </article>
+
+          <HardwareProfilePanel />
 
           <article className="card page-card">
             <div className="page-card-head">

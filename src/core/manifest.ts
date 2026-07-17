@@ -33,6 +33,14 @@ export interface ExportManifest {
     /** hosted provider + model for a Cloud-backend render (absent otherwise). */
     cloudProvider?: string;
     cloudModel?: string;
+    /**
+     * Dimensions that ACTUALLY rendered when they differ from `canvas` (a
+     * hardware-profile clamp or the one-time OOM safe retry shrank the job).
+     */
+    actualWidth?: number;
+    actualHeight?: number;
+    /** True when this image came from the single OOM safe retry. */
+    safeRetryUsed?: boolean;
   };
   /**
    * Present only for a motion-clip render: the animated source clip + sampling

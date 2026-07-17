@@ -4,9 +4,9 @@ import { CloudAdapter } from '../bridge/cloudAdapter';
 import { ComfyAdapter } from '../bridge/comfyAdapter';
 import { HttpAdapter, type BridgeModelFolderStatus, type BridgeModelStatus } from '../bridge/httpAdapter';
 import { MockAdapter } from '../bridge/mockAdapter';
-import { checkHealth, type HealthIssue } from '../core/health';
+import { checkHealth, VRAM_BUDGET_GB, type HealthIssue } from '../core/health';
 import { buildManifest, type ExportManifest } from '../core/manifest';
-import type { ModelAsset } from '../core/shelf';
+import { findAsset, type ModelAsset } from '../core/shelf';
 import type { CapsuleKind, LoraSlot, RackPreset, SocketRef, Workflow } from '../core/types';
 import {
   addNode,
@@ -41,6 +41,22 @@ import {
   type BackendSettings,
   type RenderBackendId,
 } from '../turboForge/backends/backendSettings';
+import {
+  applyProfileToJob,
+  classifyBackendError,
+  classifyModelCompatibility,
+  getHardwareProfile,
+  isConstrainedProfile,
+  planSafeRetry,
+  resolveEffectiveProfile,
+  selectOptimizations,
+  snapshotFromBridgeStatus,
+  type CompatibilityInput,
+  type EffectiveProfileId,
+  type HardwareProfileId,
+  type HardwareSnapshot,
+} from '../core/hardware';
+import type { DiagnosticsHardware } from '../core/diagnostics';
 import { loadPersisted, savePersisted, persistedProjection, takeLegacyGallery, clearLegacyGallery } from './persistence';
 import { resolveGalleryStore, type Collection } from './galleryDb';
 import {
@@ -337,10 +353,24 @@ interface StudioState {
   turboLastBenchmark: BenchmarkResult | null;
   turboBusy: boolean;
   turboError: string | null;
+  /**
+   * Ephemeral last-render hardware event (NEVER persisted). Records whether the
+   * last render hit a CUDA OOM, whether it fell back, and whether the one-time
+   * safe retry ran. Feeds diagnostics + the profile status panel.
+   */
+  hardwareEvent: { oomCategory: 'cuda_oom' | 'other' | 'none'; fallbackOccurred: boolean; safeRetryUsed: boolean };
 
   setView(view: ViewId): void;
   updateAppSettings(settings: Partial<AppSettings>): void;
   resetAppSettings(): void;
+  /** Select the hardware profile (persists via appSettings; never crashes on unknown ids). */
+  setHardwareProfile(id: HardwareProfileId): void;
+  /** Build a hardware snapshot from the current bridge status (null when unknown). */
+  hardwareSnapshot(): HardwareSnapshot | null;
+  /** Resolve the selected profile to a concrete effective profile via detection. */
+  effectiveHardwareProfile(): EffectiveProfileId;
+  /** Assemble redacted hardware diagnostics for the Diagnostics page. */
+  hardwareDiagnostics(): DiagnosticsHardware;
   selectNode(id: string | null): void;
   setWorkflow(wf: Workflow): void;
   updateParam(nodeId: string, paramId: string, value: unknown): void;
@@ -709,6 +739,70 @@ function applyAutoCheckpoint(wf: Workflow, shelf: ModelAsset[], opts?: { upgrade
   return pick && pick !== current ? updateNodeParam(wf, model.id, 'assetId', pick) : wf;
 }
 
+/**
+ * Effective GPU VRAM budget in GB for health checks, from the active hardware
+ * profile. Profiles without a VRAM budget (High Performance / CPU) fall back to
+ * the default 8 GB, so users who did not opt into a constrained profile keep the
+ * existing warning behavior.
+ */
+function hardwareBudgetGB(appSettings: AppSettings, bridgeModelStatus: BridgeModelStatus | null): number {
+  const effective = resolveEffectiveProfile(appSettings.hardwareProfile, snapshotFromBridgeStatus(bridgeModelStatus));
+  const mb = getHardwareProfile(effective).vramBudgetMb;
+  return mb != null ? mb / 1024 : VRAM_BUDGET_GB;
+}
+
+/**
+ * Hardware-profile compatibility issues for the CURRENT workflow: when a
+ * constrained profile is active, surface the classification verdict (video/Flux
+ * unsupported, SDXL needs offload, ...) as a health warning BEFORE a render is
+ * spent. Unconstrained profiles return [] so existing behavior is untouched.
+ */
+function hardwareHealthIssues(
+  wf: Workflow,
+  shelf: ModelAsset[],
+  appSettings: AppSettings,
+  bridgeModelStatus: BridgeModelStatus | null,
+): HealthIssue[] {
+  const profileId = resolveEffectiveProfile(appSettings.hardwareProfile, snapshotFromBridgeStatus(bridgeModelStatus));
+  const profile = getHardwareProfile(profileId);
+  // Only VRAM-BUDGETED constrained profiles surface compatibility issues (the
+  // 4GB profile today): `balanced` carries an advisory budget but never reins
+  // in jobs, and CPU Mode has no VRAM budget to exceed (slow, not OOM-prone) —
+  // this mirrors classifyModelCompatibility's own budget-null => recommended rule.
+  if (!isConstrainedProfile(profileId) || profile.vramBudgetMb == null) return [];
+  const job = buildRenderJob(wf);
+  const family = (findAsset(shelf, job.modelId ?? '')?.family ?? 'Unknown') as CompatibilityInput['modelFamily'];
+  const compat = classifyModelCompatibility({
+    profileId,
+    modelFamily: family,
+    isVideo: job.output === 'video',
+    controlNetCount: job.controlNets?.length ?? 0,
+    loraCount: job.loras.length,
+    refiner: false,
+    upscaler: (job.hiresScale ?? 1) > 1,
+  });
+  if (compat.category === 'recommended' || compat.category === 'compatible-limited') return [];
+  return [{
+    id: 'hardware-compat',
+    severity: 'warning',
+    code: 'hardware-compat',
+    message: `${profile.name}: ${compat.label}. ${compat.reasons.join(' ')}`,
+  }];
+}
+
+/** Health = the graph checks (profile-aware VRAM budget) + hardware compatibility. */
+function computeHealth(
+  wf: Workflow,
+  shelf: ModelAsset[],
+  appSettings: AppSettings,
+  bridgeModelStatus: BridgeModelStatus | null,
+): HealthIssue[] {
+  return [
+    ...checkHealth(wf, shelf, hardwareBudgetGB(appSettings, bridgeModelStatus)),
+    ...hardwareHealthIssues(wf, shelf, appSettings, bridgeModelStatus),
+  ];
+}
+
 function activeAdapter(settings: BackendSettings): BackendAdapter {
   if (settings.selectedBackend === 'bridge') {
     httpAdapter.setBaseUrl(settings.bridgeUrl);
@@ -768,7 +862,7 @@ export const useStudio = create<StudioState>((set, get) => {
       const before = prev.get(n.id);
       if (!before || before.params !== n.params) nodeMeta = touchNode(nodeMeta, n.id, now);
     }
-    set({ workflow: wf, health: checkHealth(wf, get().shelf), turboLastPlan: null, turboError: null, nodeMeta });
+    set({ workflow: wf, health: computeHealth(wf, get().shelf, get().appSettings, get().bridgeModelStatus), turboLastPlan: null, turboError: null, nodeMeta });
   };
 
   // ---- Motion helpers (keep the actions terse; all pure list edits) ----
@@ -880,7 +974,18 @@ export const useStudio = create<StudioState>((set, get) => {
   const buildEvolveJobs = (genomes: Genome[], nodes: { sampler: string; imageLoader?: string }, knobs: KnobDesc[]) => {
     const wf = get().workflow;
     const wildcards = get().promptTools.wildcardSets;
-    return genomes.map((g) => buildRenderJob(applyPatches(wf, genomeToPatches(g, knobs, nodes)), wildcards));
+    // Evolve runs on the local bridge (the UI gates it, and this gate enforces
+    // it in code) — every genome job gets the same hardware-profile treatment as
+    // a single render. Without it, the worker's mem-folded pipe cache key
+    // mismatches and each evolve render forces a full-VRAM legacy reload
+    // (guaranteed OOM on the 4GB profile). Non-bridge callers stay untouched.
+    const isBridge = get().backendSettings.selectedBackend === 'bridge';
+    const snapshot = isBridge ? get().hardwareSnapshot() : null;
+    const profile = resolveEffectiveProfile(get().appSettings.hardwareProfile, snapshot);
+    return genomes.map((g) => {
+      const job = buildRenderJob(applyPatches(wf, genomeToPatches(g, knobs, nodes)), wildcards);
+      return isBridge ? applyProfileToJob(job, profile, snapshot) : job;
+    });
   };
   /**
    * Breed the next generation: elitism (carry the single best parent unchanged) +
@@ -946,7 +1051,7 @@ export const useStudio = create<StudioState>((set, get) => {
     workflow: initialWorkflow,
     shelf: DEMO_SHELF,
     shelfSource: 'demo',
-    health: checkHealth(initialWorkflow, DEMO_SHELF),
+    health: computeHealth(initialWorkflow, DEMO_SHELF, initialAppSettings, null),
     nodeMeta: initialNodeMeta,
     view: initialView,
     selectedNodeId: null,
@@ -998,10 +1103,58 @@ export const useStudio = create<StudioState>((set, get) => {
     turboLastBenchmark: null,
     turboBusy: false,
     turboError: null,
+    hardwareEvent: { oomCategory: 'none', fallbackOccurred: false, safeRetryUsed: false },
 
     setView: (view) => set({ view, appSettings: { ...get().appSettings, lastView: view } }),
     updateAppSettings: (settings) => set({ appSettings: sanitizeAppSettings({ ...get().appSettings, ...settings }) }),
-    resetAppSettings: () => set({ appSettings: DEFAULT_APP_SETTINGS, controlStatus: 'Settings reset to defaults.' }),
+    resetAppSettings: () => set({
+      appSettings: DEFAULT_APP_SETTINGS,
+      // health depends on appSettings (profile budget/compat) — recompute now.
+      health: computeHealth(get().workflow, get().shelf, DEFAULT_APP_SETTINGS, get().bridgeModelStatus),
+      controlStatus: 'Settings reset to defaults.',
+    }),
+    setHardwareProfile: (id) => {
+      // sanitizeAppSettings guards unknown ids → 'auto', so this never crashes.
+      const appSettings = sanitizeAppSettings({ ...get().appSettings, hardwareProfile: id });
+      // Recompute health so VRAM warnings reflect the new profile's budget.
+      set({ appSettings, health: computeHealth(get().workflow, get().shelf, appSettings, get().bridgeModelStatus) });
+    },
+    hardwareSnapshot: () => snapshotFromBridgeStatus(get().bridgeModelStatus),
+    effectiveHardwareProfile: () =>
+      resolveEffectiveProfile(get().appSettings.hardwareProfile, snapshotFromBridgeStatus(get().bridgeModelStatus)),
+    hardwareDiagnostics: () => {
+      const snapshot = snapshotFromBridgeStatus(get().bridgeModelStatus);
+      const selected = get().appSettings.hardwareProfile;
+      const effective = resolveEffectiveProfile(selected, snapshot);
+      const profile = getHardwareProfile(effective);
+      const directive = selectOptimizations(effective, { hw: snapshot });
+      const canvas = findNode(get().workflow, 'canvas');
+      const model = findNode(get().workflow, 'model');
+      const checkpoint = findAsset(get().shelf, String(model?.params.assetId ?? ''));
+      const event = get().hardwareEvent;
+      return {
+        selectedProfile: selected,
+        effectiveProfile: effective,
+        gpuName: snapshot?.deviceName,
+        totalVramMb: snapshot?.totalVramMb,
+        freeVramMb: snapshot?.freeVramMb,
+        backend: snapshot?.backend,
+        cuda: snapshot?.cuda,
+        computeCapability: snapshot?.computeCapability,
+        precision: directive.precision,
+        modelCpuOffload: directive.modelCpuOffload,
+        sequentialCpuOffload: directive.sequentialCpuOffload,
+        attentionSlicing: directive.attentionSlicing,
+        vaeSlicing: directive.vaeSlicing,
+        vaeTiling: directive.vaeTiling,
+        resolutionLimit: profile.defaults.maxResolution,
+        requestedResolution: canvas ? `${Number(canvas.params.width ?? 0)}x${Number(canvas.params.height ?? 0)}` : undefined,
+        requestedBatch: canvas ? Number(canvas.params.batch ?? 1) : undefined,
+        activeModelFamily: checkpoint?.family,
+        oomCategory: event.oomCategory,
+        fallbackOccurred: event.fallbackOccurred,
+      };
+    },
     selectNode: (selectedNodeId) => set({ selectedNodeId }),
     setWorkflow: (wf) => commit(wf),
     updateParam: (nodeId, paramId, value) => {
@@ -1297,12 +1450,21 @@ export const useStudio = create<StudioState>((set, get) => {
       const frames = Math.max(1, Math.floor(opts.frames));
       const { workflow, shelf, backendSettings } = get();
       // Build one RenderJob per animated frame from the CURRENT base workflow.
-      const { jobs, frameTimes } = buildMotionRenderJobs(
+      const { jobs: rawJobs, frameTimes } = buildMotionRenderJobs(
         workflow,
         clip,
         { frames },
         get().promptTools.wildcardSets,
       );
+      // Motion clips render frame-by-frame on the local bridge — give every
+      // frame the same hardware-profile treatment as a single render (and keep
+      // the worker's pipe cache key consistent with still renders). Non-bridge
+      // backends are untouched.
+      const motionSnapshot = backendSettings.selectedBackend === 'bridge' ? get().hardwareSnapshot() : null;
+      const motionProfile = resolveEffectiveProfile(get().appSettings.hardwareProfile, motionSnapshot);
+      const jobs = backendSettings.selectedBackend === 'bridge'
+        ? rawJobs.map((j) => applyProfileToJob(j, motionProfile, motionSnapshot))
+        : rawJobs;
       const adapter = activeAdapter(backendSettings);
       const result = await adapter.renderMotion(
         jobs,
@@ -2020,7 +2182,17 @@ export const useStudio = create<StudioState>((set, get) => {
         const state = get();
         const plan = get().createTurboPlan();
         const adapter = activeAdapter(state.backendSettings);
-        const job = buildRenderJob(state.workflow, state.promptTools.wildcardSets);
+        // Benchmarks measure the REAL render path — include the hardware-profile
+        // treatment when (and only when) benchmarking the local bridge.
+        const benchSnapshot = state.backendSettings.selectedBackend === 'bridge' ? get().hardwareSnapshot() : null;
+        const benchBase = buildRenderJob(state.workflow, state.promptTools.wildcardSets);
+        const job = state.backendSettings.selectedBackend === 'bridge'
+          ? applyProfileToJob(
+              benchBase,
+              resolveEffectiveProfile(state.appSettings.hardwareProfile, benchSnapshot),
+              benchSnapshot,
+            )
+          : benchBase;
         const startedAt = performance.now();
         const result = await adapter.generate(job);
         const elapsedMs = performance.now() - startedAt;
@@ -2101,7 +2273,7 @@ export const useStudio = create<StudioState>((set, get) => {
         const shelf = await httpAdapter.listModels();
         if (Array.isArray(shelf) && shelf.length > 0) {
           const workflow = applyAutoCheckpoint(get().workflow, shelf, { upgrade: !userPinnedModel });
-          set({ shelf, shelfSource: 'bridge', workflow, health: checkHealth(workflow, shelf) });
+          set({ shelf, shelfSource: 'bridge', workflow, health: computeHealth(workflow, shelf, get().appSettings, get().bridgeModelStatus) });
         }
       } catch (err) {
         console.warn('LumenDeck: bridge shelf refresh failed', err);
@@ -2135,7 +2307,7 @@ export const useStudio = create<StudioState>((set, get) => {
           shelf,
           shelfSource: 'bridge',
           workflow,
-          health: checkHealth(workflow, shelf),
+          health: computeHealth(workflow, shelf, get().appSettings, get().bridgeModelStatus),
           turboLastPlan: null,
           turboError: null,
         });
@@ -2153,11 +2325,18 @@ export const useStudio = create<StudioState>((set, get) => {
       try {
         httpAdapter.setBaseUrl(get().backendSettings.bridgeUrl);
         const bridgeModelStatus = await httpAdapter.diffusersStatus();
-        set({ bridgeModelStatus, bridgeModelError: null });
+        // The snapshot can flip auto's effective profile (and the VRAM budget), so
+        // health must be recomputed the moment the new status lands.
+        set({
+          bridgeModelStatus,
+          bridgeModelError: null,
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, bridgeModelStatus),
+        });
       } catch (err) {
         set({
           bridgeModelError: err instanceof Error ? err.message : String(err),
           bridgeModelStatus: null,
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, null),
         });
       }
     },
@@ -2174,13 +2353,16 @@ export const useStudio = create<StudioState>((set, get) => {
           backendSettings: sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge', bridgeRenderer: 'diffusers' }),
           adapterId: 'bridge',
           turboBackendId: settingsBackendToTurboBackend('bridge'),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, bridgeModelStatus),
         });
       } catch (err) {
         const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        const nextStatus = status ?? get().bridgeModelStatus;
         set({
-          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelStatus: nextStatus,
           bridgeModelBusy: false,
           bridgeModelError: err instanceof Error ? err.message : String(err),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, nextStatus),
         });
       }
     },
@@ -2197,13 +2379,16 @@ export const useStudio = create<StudioState>((set, get) => {
           backendSettings: sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge', bridgeRenderer: 'diffusers' }),
           adapterId: 'bridge',
           turboBackendId: settingsBackendToTurboBackend('bridge'),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, bridgeModelStatus),
         });
       } catch (err) {
         const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        const nextStatus = status ?? get().bridgeModelStatus;
         set({
-          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelStatus: nextStatus,
           bridgeModelBusy: false,
           bridgeModelError: err instanceof Error ? err.message : String(err),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, nextStatus),
         });
       }
     },
@@ -2217,7 +2402,26 @@ export const useStudio = create<StudioState>((set, get) => {
       const errors = get().health.filter((i) => i.severity === 'error');
       if (errors.length > 0) return; // UI blocks this path; guard anyway.
 
-      const job = buildRenderJob(workflow, get().promptTools.wildcardSets);
+      // Apply the active hardware profile ONLY when the job renders on the LOCAL
+      // bridge: mock is procedural, cloud runs on datacenter GPUs, and ComfyUI
+      // manages its own VRAM — a local 4GB profile must never clamp those jobs
+      // (or leak its directive into their payloads). On the bridge, constrained
+      // profiles (GTX 1650 4GB / CPU) clamp resolution aspect-preserving, disable
+      // hires, and attach the low-VRAM directive the worker honors; unconstrained
+      // profiles leave the job unchanged.
+      const isLocalBridgeJob = backendSettings.selectedBackend === 'bridge';
+      const baseJob = buildRenderJob(workflow, get().promptTools.wildcardSets);
+      const snapshot = isLocalBridgeJob ? get().hardwareSnapshot() : null;
+      const job = isLocalBridgeJob
+        ? applyProfileToJob(
+            baseJob,
+            resolveEffectiveProfile(get().appSettings.hardwareProfile, snapshot),
+            snapshot,
+          )
+        : baseJob;
+      // Each render owns its hardware event — a stale OOM/retry report from the
+      // previous render must never survive into this one's diagnostics.
+      set({ hardwareEvent: { oomCategory: 'none', fallbackOccurred: false, safeRetryUsed: false } });
       const plan = get().createTurboPlan();
       const queueJob: QueueJob = {
         id: uid('job'),
@@ -2229,6 +2433,12 @@ export const useStudio = create<StudioState>((set, get) => {
       const patch = (p: Partial<QueueJob>) =>
         set({ queue: get().queue.map((q) => (q.id === queueJob.id ? { ...q, ...p } : q)) });
 
+      let oomCategory: 'cuda_oom' | 'other' | 'none' = 'none';
+      let safeRetryUsed = false;
+      // True once the render itself finished and stamped its accurate event —
+      // a later post-render failure (gallery write, history) must not restamp.
+      let renderEventStamped = false;
+      const retryWarning = 'GPU ran out of memory — retried once with safe 4GB settings (512×512, CPU offload).';
       try {
         const profiler = new TurboProfiler();
         profiler.mark('total-start');
@@ -2238,21 +2448,74 @@ export const useStudio = create<StudioState>((set, get) => {
         let result;
         let usedFallback = false;
         let fallbackReason = '';
+        // The dimensions/settings that ACTUALLY rendered (profile clamp already in
+        // `job`; a safe retry swaps this to the 512x512 retry job) — the manifest
+        // must describe this, not the workflow's requested canvas.
+        let executedJob = job;
+        const onProgress = (update: Parameters<RenderProgressCallback>[0]) => {
+          const progress = normalizeProgress(update);
+          patch({ progress: progress.progress, phase: progress.phase, previewDataUrl: progress.previewDataUrl });
+        };
         try {
-          result = await adapter.generate(job, (update) => {
-            const progress = normalizeProgress(update);
-            patch({ progress: progress.progress, phase: progress.phase, previewDataUrl: progress.previewDataUrl });
-          });
+          result = await adapter.generate(job, onProgress);
         } catch (error) {
-          if (!backendSettings.fallbackToMock || backendSettings.selectedBackend === 'mock') throw error;
-          usedFallback = true;
-          fallbackReason = `${error instanceof Error ? error.message : String(error)} Falling back to mock backend.`;
-          patch({ error: fallbackReason, fallback: true, fallbackReason });
-          result = await mockAdapter.generate(job, (update) => {
-            const progress = normalizeProgress(update);
-            patch({ progress: progress.progress, phase: progress.phase, previewDataUrl: progress.previewDataUrl });
-          });
+          const message = error instanceof Error ? error.message : String(error);
+          // bridgeRenderer='diffusers' surfaces a CUDA OOM as a thrown 503 instead
+          // of a fallback result — give those users the same single safe retry
+          // BEFORE any mock substitution.
+          const thrownRetry = isLocalBridgeJob && classifyBackendError(message) === 'cuda_oom'
+            ? planSafeRetry(job, 0, 'cuda_oom')
+            : null;
+          if (thrownRetry) {
+            oomCategory = 'cuda_oom';
+            safeRetryUsed = true; // set BEFORE the await: a retry that throws still ran
+            patch({ phase: 'retrying', warning: retryWarning });
+            try {
+              result = await adapter.generate(thrownRetry, onProgress);
+              executedJob = thrownRetry;
+            } catch {
+              // retry failed too — fall through to the mock fallback / rethrow below
+            }
+          }
+          if (!result) {
+            if (!backendSettings.fallbackToMock || backendSettings.selectedBackend === 'mock') throw error;
+            usedFallback = true;
+            fallbackReason = `${message} Falling back to mock backend.`;
+            patch({ error: fallbackReason, fallback: true, fallbackReason });
+            result = await mockAdapter.generate(job, onProgress);
+          }
         }
+        // Classify a fallback result's reason (the worker's own errorCategory wins
+        // when the bridge forwarded one; otherwise precise OOM signatures).
+        if (!usedFallback && result.fallback && oomCategory === 'none') {
+          oomCategory = classifyBackendError(result.fallbackReason, result.fallbackCategory);
+        }
+        // One-time safe retry (LOCAL bridge only): when a real GPU render exhausts
+        // VRAM the bridge returns a procedural placeholder with the OOM reason.
+        // Retry EXACTLY once with conservative 4GB settings (512x512, hires off,
+        // aggressive offload). This never persists settings — it is a transient
+        // job override. attempt is fixed at 0, so planSafeRetry cannot loop.
+        if (!usedFallback && !safeRetryUsed && result.fallback && oomCategory === 'cuda_oom' && isLocalBridgeJob) {
+          const retryJob = planSafeRetry(job, 0, 'cuda_oom');
+          if (retryJob) {
+            safeRetryUsed = true; // BEFORE the await: a retry that throws still ran
+            patch({ phase: 'retrying', warning: retryWarning });
+            try {
+              const retryResult = await adapter.generate(retryJob, onProgress);
+              // Keep the retry only if it actually rendered (didn't OOM again).
+              if (!retryResult.fallback) {
+                result = retryResult;
+                executedJob = retryJob;
+              }
+            } catch {
+              // Retry failed too — keep the original procedural placeholder below.
+            }
+          }
+        }
+        set({
+          hardwareEvent: { oomCategory, fallbackOccurred: Boolean(result.fallback) || usedFallback, safeRetryUsed },
+        });
+        renderEventStamped = true;
         // Bridge produced a procedural placeholder when a real render was expected —
         // surface it loudly instead of pretending the render succeeded.
         if (result.fallback) {
@@ -2373,6 +2636,12 @@ export const useStudio = create<StudioState>((set, get) => {
           ...(backendSettings.selectedBackend === 'cloud' && !fallback
             ? { cloudProvider: backendSettings.cloudProvider, cloudModel: backendSettings.cloudModel }
             : {}),
+          // Honesty: what actually rendered can differ from the workflow canvas
+          // (hardware-profile clamp, or the 512x512 safe retry) — record it.
+          ...(manifest.canvas.width !== executedJob.width || manifest.canvas.height !== executedJob.height
+            ? { actualWidth: executedJob.width, actualHeight: executedJob.height }
+            : {}),
+          ...(safeRetryUsed ? { safeRetryUsed: true } : {}),
         };
         if (result.mediaType === 'video' && manifest.media.type !== 'video') {
           // A provider returned a video for an image-mode workflow (e.g. a Cloud
@@ -2403,17 +2672,25 @@ export const useStudio = create<StudioState>((set, get) => {
           turboLastBenchmark: enrichedBenchmark,
         });
         patch({
-          status: fallback || droppedMessage ? 'done_with_warning' : 'done',
+          status: fallback || droppedMessage || safeRetryUsed ? 'done_with_warning' : 'done',
           progress: 1,
-          phase: fallback || droppedMessage ? 'done with warning' : 'done',
+          phase: fallback || droppedMessage || safeRetryUsed ? 'done with warning' : 'done',
           previewDataUrl: result.dataUrl,
           fallback,
           fallbackReason: fallback ? fallbackReason || result.fallbackReason : undefined,
-          warning: droppedMessage || undefined,
+          // A successful safe retry shrank the render — that must stay visible.
+          warning: droppedMessage || (safeRetryUsed ? retryWarning : undefined),
           actualBackend,
         });
       } catch (err) {
-        patch({ status: 'error', error: err instanceof Error ? err.message : String(err) });
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        // A thrown RENDER must stamp this render's hardware event (a stale OOM
+        // report from the previous render would mislead diagnostics) — but a
+        // post-render failure must not overwrite the accurate stamp.
+        if (!renderEventStamped) {
+          set({ hardwareEvent: { oomCategory: classifyBackendError(errorMessage), fallbackOccurred: false, safeRetryUsed } });
+        }
+        patch({ status: 'error', error: errorMessage });
       }
     },
 
