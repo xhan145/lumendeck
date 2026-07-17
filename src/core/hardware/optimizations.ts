@@ -25,16 +25,12 @@ export interface MemoryProfileDirective {
   attentionSlicing: boolean;
   vaeSlicing: boolean;
   vaeTiling: boolean;
-  unloadInactive: boolean;
-  livePreviews: boolean;
 }
 
 export interface OptimizationOptions {
   hw?: HardwareSnapshot | null;
   /** Escalate to sequential CPU offload (slower, used by the one-time safe retry). */
   sequentialOffload?: boolean;
-  /** Force live previews off (safe retry). */
-  disablePreviews?: boolean;
 }
 
 /**
@@ -59,8 +55,6 @@ export function selectOptimizations(
     attentionSlicing: mem.attentionSlicing,
     vaeSlicing: mem.vaeSlicing,
     vaeTiling: mem.vaeTiling,
-    unloadInactive: profile.defaults.autoUnloadInactive,
-    livePreviews: opts.disablePreviews ? false : profile.defaults.livePreviews !== 'off',
   };
 }
 
@@ -75,7 +69,5 @@ export function aggressiveRetryDirective(precision: PrecisionPref = 'fp16'): Mem
     attentionSlicing: true,
     vaeSlicing: true,
     vaeTiling: true,
-    unloadInactive: true,
-    livePreviews: false,
   };
 }

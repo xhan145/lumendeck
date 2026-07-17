@@ -55,12 +55,16 @@ export function isApproximately4gb(totalVramMb?: number): boolean {
 
 /**
  * Deterministically pick the effective profile for a hardware snapshot.
- * No CUDA / non-NVIDIA / failed init → cpu. ~4 GB (or smaller) NVIDIA → the
- * low-VRAM profile. Mid → balanced, big → high_performance. When CUDA is up but
- * VRAM is unreadable, fall back to `balanced` (today's default behavior).
+ * AUTO never selects a CONSTRAINED profile without affirmative evidence: an
+ * absent snapshot (bridge offline / status not yet fetched), a non-CUDA or
+ * non-NVIDIA machine, or unreadable VRAM all resolve to `balanced` — the
+ * unconstrained pre-profile default — so users who never touched the setting
+ * keep exactly their existing behavior (mock/cloud/comfy renders included).
+ * Only a detected ~4 GB (or smaller) NVIDIA CUDA card triggers the low-VRAM
+ * profile. `cpu` remains an EXPLICIT user choice, never an auto result.
  */
 export function selectAutoProfile(hw: HardwareSnapshot | null | undefined): EffectiveProfileId {
-  if (!hw || !hw.cuda || !hw.nvidia || hw.cudaInitFailed) return 'cpu';
+  if (!hw || !hw.cuda || !hw.nvidia || hw.cudaInitFailed) return 'balanced';
   const cls = classifyVram(hw.totalVramMb);
   switch (cls) {
     case 'low':
@@ -80,8 +84,8 @@ export function selectAutoProfile(hw: HardwareSnapshot | null | undefined): Effe
 /**
  * Resolve a user selection to a concrete profile. Explicit profiles pass through
  * (manual selection wins regardless of hardware); `auto` runs detection. A null
- * snapshot (detection failed / no GPU) resolves `auto` to cpu so startup never
- * depends on a GPU being present.
+ * snapshot (detection failed / bridge offline) resolves `auto` to the
+ * unconstrained `balanced` profile — auto must never clamp anything it cannot see.
  */
 export function resolveEffectiveProfile(
   selected: HardwareProfileId,
@@ -102,6 +106,11 @@ export function resolvePrecision(
   hw: HardwareSnapshot | null | undefined,
 ): PrecisionPref {
   const order = getHardwareProfile(profileId).precisionOrder;
+  // Unknown hardware (no snapshot at all): trust the profile's own first
+  // preference. An EXPLICITLY selected 4GB profile with the bridge offline must
+  // not silently degrade to fp32 — fp32 doubles memory and mismatches the
+  // worker's fp16-loaded ControlNets, defeating the profile's purpose.
+  if (!hw) return order[0] ?? 'fp32';
   const cuda = Boolean(hw?.cuda) && !hw?.cudaInitFailed;
   const supports = (p: PrecisionPref): boolean => {
     switch (p) {

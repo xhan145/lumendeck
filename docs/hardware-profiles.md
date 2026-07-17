@@ -26,9 +26,19 @@ low-VRAM profile. You can also select **GTX 1650 4GB** manually on any similar
 
 **Users who do nothing keep their existing behavior.** With `auto`, a healthy
 8 GB GPU resolves to Balanced (today's defaults) and a big GPU to High
-Performance. Only the constrained profiles (GTX 1650 4GB / CPU) change the job.
+Performance; unknown hardware (bridge offline, no CUDA) also stays Balanced.
+Only the constrained profiles (GTX 1650 4GB / CPU) change the job — and they
+apply to **local Diffusers bridge renders only**. Mock, ComfyUI, and Cloud
+renders are never clamped by a local GPU profile. Constrained resolution caps
+preserve aspect ratio (1216×832 → 768×528, never 768×768). The same treatment
+covers single renders, batches, Auto-Evolve, motion-clip frames, and TurboForge
+benchmarks; SVD video is gated by the compatibility warning instead.
 
 ## GTX 1650 4GB defaults
+
+The rows below are the profile's design targets. The enforced ones at render
+time are the resolution cap, hires-off, precision, and the offload/slicing
+directive; batch/queue concurrency is already serial in the app.
 
 | Setting | Value |
 | --- | --- |
@@ -39,8 +49,6 @@ Performance. Only the constrained profiles (GTX 1650 4GB / CPU) change the job.
 | Max resolution (cap) | 768×768 |
 | Hires fix | disabled |
 | Large upscale | warn (tiled) |
-| Live previews | reduced |
-| Auto-unload inactive models | enabled |
 | Model cache size | 1 (active model only) |
 | Preload checkpoints | disabled |
 | VRAM budget | 4096 MB |
@@ -101,20 +109,27 @@ If a real GPU render exhausts VRAM, the bridge worker:
 3. returns a **categorized** OOM error (never swallowing unrelated exceptions).
 
 The UI then performs **exactly one** safe retry with conservative settings
-(512×512, hires off, aggressive CPU offload, previews off, sequential offload).
+(512×512, hires off, aggressive sequential CPU offload).
 The retry is a transient job override — it **never overwrites your saved
 profile**. It runs at most once; there is no retry loop.
 
-Message shown:
+Message shown on the queue item:
 
-> The generation exceeded the GTX 1650 4GB memory budget. LumenDeck stopped it
-> safely. Try 512×512, batch size 1, fewer additional models, or CPU offload.
+> GPU ran out of memory — retried once with safe 4GB settings (512×512, CPU
+> offload).
+
+A render that succeeded via the safe retry finishes **done with warning** (the
+shrunk size stays visible) and its manifest records the dimensions that
+actually rendered plus a `safeRetryUsed` flag.
 
 ## Detection & diagnostics
 
-Detection is best-effort and **never blocks launch** — no GPU, no CUDA, or a
-CUDA init failure all degrade gracefully (Automatic → CPU Mode). No internet
-access, driver install, or package install is triggered.
+Detection is best-effort and **never blocks launch** — no GPU, no CUDA, an
+absent bridge status, or a CUDA init failure all degrade gracefully to
+**Balanced** (unconstrained: existing behavior, no clamps). `Automatic` only
+ever constrains a job on affirmative evidence of a ~4 GB CUDA card; **CPU
+Mode** is an explicit choice, never an automatic one. No internet access,
+driver install, or package install is triggered.
 
 The **Diagnostics** page includes a redacted `[Hardware profile]` section
 (selected/effective profile, GPU, VRAM, backend, CUDA, precision, active

@@ -12,9 +12,31 @@ import type { HardwareSnapshot } from './detection';
 import { selectOptimizations, type OptimizationOptions } from './optimizations';
 import { getHardwareProfile, type EffectiveProfileId } from './profiles';
 
-function clampTo8(value: number, max: number): number {
-  const capped = Math.min(value, max);
-  return Math.max(64, Math.floor(capped / 8) * 8);
+function to8(value: number): number {
+  return Math.max(64, Math.round(value / 8) * 8);
+}
+
+/**
+ * Clamp a canvas to the profile cap PRESERVING aspect ratio: when the longest
+ * side exceeds the cap, both sides scale by the same factor (then snap to
+ * multiples of 8). A per-axis clamp would turn 1216x832 into 768x768 —
+ * destroying the composition and stretching img2img init images.
+ */
+function clampCanvas(width: number, height: number, cap: number): { width: number; height: number } {
+  const longest = Math.max(width, height);
+  if (longest <= cap) return { width: to8(width), height: to8(height) };
+  const scale = cap / longest;
+  return { width: to8(width * scale), height: to8(height * scale) };
+}
+
+/**
+ * Constrained = the profile actively reins in jobs (forces offload) or is CPU
+ * mode. Only constrained profiles clamp resolution / disable hires; the UI uses
+ * this same predicate so it never displays an unenforced limit as active.
+ */
+export function isConstrainedProfile(profileId: EffectiveProfileId): boolean {
+  const profile = getHardwareProfile(profileId);
+  return profile.memoryOptimizations.modelCpuOffload || profileId === 'cpu';
 }
 
 export function applyProfileToJob(
@@ -26,18 +48,16 @@ export function applyProfileToJob(
   const profile = getHardwareProfile(profileId);
   const directive = selectOptimizations(profileId, { hw, ...opts });
 
-  // Constrained = the profile actively reins in the job (forces offload) or CPU
-  // mode. Only then do we clamp resolution / disable hires.
-  const constrained = profile.memoryOptimizations.modelCpuOffload || profileId === 'cpu';
-  if (!constrained) {
+  if (!isConstrainedProfile(profileId)) {
     return { ...job, memoryProfile: directive };
   }
 
   const cap = profile.defaults.maxResolution;
+  const canvas = clampCanvas(job.width, job.height, cap);
   return {
     ...job,
-    width: clampTo8(job.width, cap),
-    height: clampTo8(job.height, cap),
+    width: canvas.width,
+    height: canvas.height,
     hiresScale: profile.defaults.hiresFix ? job.hiresScale : 1,
     memoryProfile: directive,
   };

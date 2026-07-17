@@ -101,14 +101,16 @@ describe('automatic profile selection (test 4, 6, 7)', () => {
     expect(selectAutoProfile(rtxA2000)).toBe('gtx_1650_4gb');
   });
 
-  it('selects cpu when CUDA is unavailable (test 6)', () => {
+  it('selects the UNCONSTRAINED balanced profile when CUDA is unavailable (test 6)', () => {
+    // Auto must never constrain without affirmative low-VRAM evidence: a
+    // non-CUDA machine keeps existing behavior; CPU Mode is explicit-only.
     const noCuda: HardwareSnapshot = { ...gtx1650, cuda: false, nvidia: false };
-    expect(selectAutoProfile(noCuda)).toBe('cpu');
+    expect(selectAutoProfile(noCuda)).toBe('balanced');
   });
 
-  it('selects cpu when CUDA initialization failed (test 7)', () => {
+  it('selects balanced when CUDA initialization failed (test 7)', () => {
     const initFail: HardwareSnapshot = { ...gtx1650, cudaInitFailed: true };
-    expect(selectAutoProfile(initFail)).toBe('cpu');
+    expect(selectAutoProfile(initFail)).toBe('balanced');
   });
 
   it('selects balanced for a healthy 8 GB GPU and high_performance for 16 GB', () => {
@@ -132,8 +134,8 @@ describe('effective profile resolution', () => {
     expect(resolveEffectiveProfile('auto', gtx1650)).toBe('gtx_1650_4gb');
   });
 
-  it('resolves auto to cpu when hardware detection is unavailable (test 24: startup without GPU)', () => {
-    expect(resolveEffectiveProfile('auto', null)).toBe('cpu');
+  it('resolves auto to UNCONSTRAINED balanced when detection is unavailable (test 24: startup without GPU)', () => {
+    expect(resolveEffectiveProfile('auto', null)).toBe('balanced');
   });
 });
 

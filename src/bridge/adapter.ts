@@ -67,6 +67,8 @@ export interface RenderResult {
   /** true when a real render was expected but the backend fell back to procedural */
   fallback?: boolean;
   fallbackReason?: string;
+  /** the worker's precise error category behind a fallback (e.g. 'cuda_oom'), when known */
+  fallbackCategory?: string;
   /** controls the backend skipped because the loaded model family has no weights for them */
   droppedControls?: { type: string; reason: string }[];
 }

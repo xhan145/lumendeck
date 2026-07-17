@@ -21,20 +21,20 @@ describe('snapshotFromBridgeStatus', () => {
     expect(resolveEffectiveProfile('auto', snap)).toBe('gtx_1650_4gb');
   });
 
-  it('resolves auto to cpu when the bridge reports no CUDA (test 6)', () => {
+  it('resolves auto to balanced (unconstrained) when the bridge reports no CUDA (test 6)', () => {
     const snap = snapshotFromBridgeStatus({ cuda: false, device: 'cpu' });
     expect(snap?.cuda).toBe(false);
-    expect(resolveEffectiveProfile('auto', snap)).toBe('cpu');
+    expect(resolveEffectiveProfile('auto', snap)).toBe('balanced');
   });
 
-  it('resolves auto to cpu when CUDA initialization failed (test 7)', () => {
+  it('resolves auto to balanced (unconstrained) when CUDA initialization failed (test 7)', () => {
     const snap = snapshotFromBridgeStatus({ cuda: true, cudaInitFailed: true, gpuName: 'NVIDIA GeForce GTX 1650', totalVramMb: 4096 });
-    expect(resolveEffectiveProfile('auto', snap)).toBe('cpu');
+    expect(resolveEffectiveProfile('auto', snap)).toBe('balanced');
   });
 
   it('returns null for a missing status (startup without a bridge, test 24)', () => {
     expect(snapshotFromBridgeStatus(null)).toBeNull();
     expect(snapshotFromBridgeStatus(undefined)).toBeNull();
-    expect(resolveEffectiveProfile('auto', snapshotFromBridgeStatus(null))).toBe('cpu');
+    expect(resolveEffectiveProfile('auto', snapshotFromBridgeStatus(null))).toBe('balanced');
   });
 });

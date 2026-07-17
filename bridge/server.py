@@ -785,6 +785,7 @@ def build_response(method: str, path: str, body: bytes, origin: str = ""):
             job["progressPath"] = _progress_path(job_id)
             _write_progress(job_id, {"phase": "loading"})
         fallback_reason = None
+        fallback_category = None
         if str(job.get("output", "image")) == "video":
             # Real video (AnimateDiff on the selected model) when the bridge can;
             # otherwise a procedural GIF, never a silent placeholder.
@@ -819,10 +820,16 @@ def build_response(method: str, path: str, body: bytes, origin: str = ""):
                 print(f"[diffusers] render failed, falling back to procedural: {exc}", flush=True)
                 traceback.print_exc()
                 fallback_reason = str(exc)
+                # Forward the worker's precise error category (e.g. 'cuda_oom') so
+                # the app's OOM safe-retry never depends on message-text matching.
+                fallback_category = getattr(exc, "error_category", None)
                 if mode == "diffusers":
                     if track:
                         _write_progress(job_id, {"phase": "error"})
-                    return 503, headers, json.dumps({"error": f"diffusers failed: {exc}"}).encode()
+                    payload = {"error": f"diffusers failed: {exc}"}
+                    if fallback_category:
+                        payload["errorCategory"] = fallback_category
+                    return 503, headers, json.dumps(payload).encode()
         if mode == "diffusers" and not _diffusers_available():
             if track:
                 _write_progress(job_id, {"phase": "error"})
@@ -834,6 +841,8 @@ def build_response(method: str, path: str, body: bytes, origin: str = ""):
         if fallback_reason:
             result["fallback"] = True
             result["fallbackReason"] = fallback_reason
+            if fallback_category:
+                result["fallbackCategory"] = fallback_category
         if track:
             _write_progress(job_id, {"phase": "done"})
         return 200, headers, json.dumps(result).encode()

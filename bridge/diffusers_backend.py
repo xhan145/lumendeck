@@ -2447,7 +2447,11 @@ def generate(job: dict) -> dict:
             raise
         out = _worker("generate", job, timeout=1800)
     if isinstance(out, dict) and out.get("error"):
-        raise RuntimeError(out["error"])
+        # Preserve the worker's precise error category (e.g. 'cuda_oom') as an
+        # attribute so server.py can forward it instead of relying on message text.
+        err = RuntimeError(out["error"])
+        err.error_category = out.get("errorCategory")
+        raise err
     return out
 
 

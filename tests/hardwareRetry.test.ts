@@ -77,7 +77,6 @@ describe('safe retry configuration (safe retry section)', () => {
     expect(retry.memoryProfile?.modelCpuOffload).toBe(true);
     expect(retry.memoryProfile?.sequentialCpuOffload).toBe(true);
     expect(retry.memoryProfile?.vaeTiling).toBe(true);
-    expect(retry.memoryProfile?.livePreviews).toBe(false);
     expect(retry.memoryProfile?.lowVram).toBe(true);
   });
 });

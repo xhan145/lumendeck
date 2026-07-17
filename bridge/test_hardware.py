@@ -153,6 +153,65 @@ def test_release_gpu_refs_clears_all_model_references():
     assert state["controlnets"] == {}
 
 
+# --- two-copy sync guards: the code that RUNS lives inside _WORKER_SOURCE; the
+# --- module-level mirrors are what these tests exercise. Guard against drift.
+
+def test_worker_and_module_oom_signatures_in_sync():
+    import ast
+    import re
+    m = re.search(r"_CUDA_OOM_SIGNATURES = \(([^)]*)\)", db._WORKER_SOURCE)
+    assert m, "worker copy of _CUDA_OOM_SIGNATURES not found in _WORKER_SOURCE"
+    worker_sigs = set(ast.literal_eval("(" + m.group(1) + ")"))
+    assert worker_sigs == set(db._CUDA_OOM_SIGNATURES), (
+        "worker and module OOM signature sets drifted: "
+        f"worker={sorted(worker_sigs)} module={sorted(db._CUDA_OOM_SIGNATURES)}"
+    )
+
+
+def test_mirrored_helpers_exist_in_worker_source():
+    # Every module-level mirror the suite tests must have its worker-string twin;
+    # a helper renamed or removed in one copy but not the other is a real bug.
+    for name in ("def is_cuda_oom(", "def detect_hardware(", "def release_gpu_refs(",
+                 "def worker_dtype(", "def _apply_slicing("):
+        assert name in db._WORKER_SOURCE, f"{name} missing from _WORKER_SOURCE"
+    # The pipe cache key must fold the low-VRAM signature (a directive-less job
+    # after a directive-ful one must not silently reuse the offloaded pipe).
+    assert "|lv:{}:{}" in db._WORKER_SOURCE, "low-VRAM cache-key fold missing from _WORKER_SOURCE"
+
+
+def test_worker_low_vram_branch_never_moves_to_cuda_after_offload():
+    # Structural guard on the branch that only runs in the subprocess: the
+    # low-VRAM path must offload (model or sequential) and must not fall through
+    # to an unconditional .to("cuda") except in its explicit fallbacks.
+    src = db._WORKER_SOURCE
+    assert "enable_sequential_cpu_offload()" in src
+    assert "enable_model_cpu_offload()" in src
+    lv_idx = src.index("if low_vram and torch.cuda.is_available():")
+    legacy_idx = src.index("# Legacy path (unchanged): resident on the compute device + always slice.")
+    assert lv_idx < legacy_idx, "low-VRAM branch must precede the legacy path"
+
+
+def test_generate_attaches_error_category_to_raised_error():
+    # server.py forwards exc.error_category so the app's safe retry never
+    # depends on matching English message text.
+    original_status = db.model_status
+    original_request = db._persistent_worker.request
+    db.model_status = lambda: {"dependenciesReady": True}
+    db._persistent_worker.request = lambda cmd, payload, timeout=0: {
+        "error": "render failed with an opaque driver message",
+        "errorCategory": "cuda_oom",
+    }
+    try:
+        try:
+            db.generate({"prompt": "x"})
+            assert False, "expected RuntimeError"
+        except RuntimeError as exc:
+            assert getattr(exc, "error_category", None) == "cuda_oom"
+    finally:
+        db.model_status = original_status
+        db._persistent_worker.request = original_request
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

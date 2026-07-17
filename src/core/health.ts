@@ -14,6 +14,7 @@ export type HealthCode =
   | 'lora-compat'
   | 'controlnet-compat'
   | 'controlnet-stack'
+  | 'hardware-compat'
   | 'disconnected';
 
 export interface HealthIssue {
