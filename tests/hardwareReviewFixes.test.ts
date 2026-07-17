@@ -169,6 +169,26 @@ describe('hardware compatibility surfaces in health', () => {
     expect(issue!.message).toMatch(/Unsupported/i);
   });
 
+  it('resetAppSettings recomputes health (no stale constrained warnings survive a reset)', () => {
+    useStudio.getState().resetWorkflow();
+    const video = findNode(useStudio.getState().workflow, 'video');
+    useStudio.getState().updateParam(video!.id, 'enabled', true);
+    useStudio.getState().setHardwareProfile('gtx_1650_4gb');
+    expect(useStudio.getState().health.some((i) => i.code === 'hardware-compat')).toBe(true);
+    useStudio.getState().resetAppSettings();
+    // Back to auto (-> balanced, unconstrained): the warning must clear NOW,
+    // not on the next workflow edit.
+    expect(useStudio.getState().health.some((i) => i.code === 'hardware-compat')).toBe(false);
+  });
+
+  it('CPU Mode clamps but emits no compat warnings (no VRAM budget to exceed)', () => {
+    useStudio.getState().resetWorkflow();
+    const video = findNode(useStudio.getState().workflow, 'video');
+    useStudio.getState().updateParam(video!.id, 'enabled', true);
+    useStudio.getState().setHardwareProfile('cpu');
+    expect(useStudio.getState().health.some((i) => i.code === 'hardware-compat')).toBe(false);
+  });
+
   it('unconstrained profiles add no hardware-compat issues (even for SDXL on balanced)', () => {
     useStudio.getState().resetWorkflow();
     // ckpt-lumen-xl is an SDXL demo checkpoint: `balanced` carries an ADVISORY

@@ -765,10 +765,11 @@ function hardwareHealthIssues(
 ): HealthIssue[] {
   const profileId = resolveEffectiveProfile(appSettings.hardwareProfile, snapshotFromBridgeStatus(bridgeModelStatus));
   const profile = getHardwareProfile(profileId);
-  // Only CONSTRAINED profiles surface compatibility issues — `balanced` carries
-  // an advisory 8GB budget but never reins in jobs, and warning ordinary 8GB
-  // SDXL users would break "unconstrained behavior is unchanged".
-  if (!isConstrainedProfile(profileId)) return [];
+  // Only VRAM-BUDGETED constrained profiles surface compatibility issues (the
+  // 4GB profile today): `balanced` carries an advisory budget but never reins
+  // in jobs, and CPU Mode has no VRAM budget to exceed (slow, not OOM-prone) —
+  // this mirrors classifyModelCompatibility's own budget-null => recommended rule.
+  if (!isConstrainedProfile(profileId) || profile.vramBudgetMb == null) return [];
   const job = buildRenderJob(wf);
   const family = (findAsset(shelf, job.modelId ?? '')?.family ?? 'Unknown') as CompatibilityInput['modelFamily'];
   const compat = classifyModelCompatibility({
@@ -973,15 +974,18 @@ export const useStudio = create<StudioState>((set, get) => {
   const buildEvolveJobs = (genomes: Genome[], nodes: { sampler: string; imageLoader?: string }, knobs: KnobDesc[]) => {
     const wf = get().workflow;
     const wildcards = get().promptTools.wildcardSets;
-    // Evolve runs on the local bridge only (the UI gates it) — every genome job
-    // gets the same hardware-profile treatment as a single render. Without it,
-    // the worker's mem-folded pipe cache key mismatches and each evolve render
-    // forces a full-VRAM legacy reload (guaranteed OOM on the 4GB profile).
-    const snapshot = get().hardwareSnapshot();
+    // Evolve runs on the local bridge (the UI gates it, and this gate enforces
+    // it in code) — every genome job gets the same hardware-profile treatment as
+    // a single render. Without it, the worker's mem-folded pipe cache key
+    // mismatches and each evolve render forces a full-VRAM legacy reload
+    // (guaranteed OOM on the 4GB profile). Non-bridge callers stay untouched.
+    const isBridge = get().backendSettings.selectedBackend === 'bridge';
+    const snapshot = isBridge ? get().hardwareSnapshot() : null;
     const profile = resolveEffectiveProfile(get().appSettings.hardwareProfile, snapshot);
-    return genomes.map((g) =>
-      applyProfileToJob(buildRenderJob(applyPatches(wf, genomeToPatches(g, knobs, nodes)), wildcards), profile, snapshot),
-    );
+    return genomes.map((g) => {
+      const job = buildRenderJob(applyPatches(wf, genomeToPatches(g, knobs, nodes)), wildcards);
+      return isBridge ? applyProfileToJob(job, profile, snapshot) : job;
+    });
   };
   /**
    * Breed the next generation: elitism (carry the single best parent unchanged) +
@@ -1103,7 +1107,12 @@ export const useStudio = create<StudioState>((set, get) => {
 
     setView: (view) => set({ view, appSettings: { ...get().appSettings, lastView: view } }),
     updateAppSettings: (settings) => set({ appSettings: sanitizeAppSettings({ ...get().appSettings, ...settings }) }),
-    resetAppSettings: () => set({ appSettings: DEFAULT_APP_SETTINGS, controlStatus: 'Settings reset to defaults.' }),
+    resetAppSettings: () => set({
+      appSettings: DEFAULT_APP_SETTINGS,
+      // health depends on appSettings (profile budget/compat) — recompute now.
+      health: computeHealth(get().workflow, get().shelf, DEFAULT_APP_SETTINGS, get().bridgeModelStatus),
+      controlStatus: 'Settings reset to defaults.',
+    }),
     setHardwareProfile: (id) => {
       // sanitizeAppSettings guards unknown ids → 'auto', so this never crashes.
       const appSettings = sanitizeAppSettings({ ...get().appSettings, hardwareProfile: id });
@@ -2327,6 +2336,7 @@ export const useStudio = create<StudioState>((set, get) => {
         set({
           bridgeModelError: err instanceof Error ? err.message : String(err),
           bridgeModelStatus: null,
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, null),
         });
       }
     },
@@ -2343,13 +2353,16 @@ export const useStudio = create<StudioState>((set, get) => {
           backendSettings: sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge', bridgeRenderer: 'diffusers' }),
           adapterId: 'bridge',
           turboBackendId: settingsBackendToTurboBackend('bridge'),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, bridgeModelStatus),
         });
       } catch (err) {
         const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        const nextStatus = status ?? get().bridgeModelStatus;
         set({
-          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelStatus: nextStatus,
           bridgeModelBusy: false,
           bridgeModelError: err instanceof Error ? err.message : String(err),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, nextStatus),
         });
       }
     },
@@ -2366,13 +2379,16 @@ export const useStudio = create<StudioState>((set, get) => {
           backendSettings: sanitizeBackendSettings({ ...get().backendSettings, selectedBackend: 'bridge', bridgeRenderer: 'diffusers' }),
           adapterId: 'bridge',
           turboBackendId: settingsBackendToTurboBackend('bridge'),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, bridgeModelStatus),
         });
       } catch (err) {
         const status = err instanceof Error && 'status' in err ? (err as Error & { status?: BridgeModelStatus }).status : undefined;
+        const nextStatus = status ?? get().bridgeModelStatus;
         set({
-          bridgeModelStatus: status ?? get().bridgeModelStatus,
+          bridgeModelStatus: nextStatus,
           bridgeModelBusy: false,
           bridgeModelError: err instanceof Error ? err.message : String(err),
+          health: computeHealth(get().workflow, get().shelf, get().appSettings, nextStatus),
         });
       }
     },
@@ -2419,6 +2435,9 @@ export const useStudio = create<StudioState>((set, get) => {
 
       let oomCategory: 'cuda_oom' | 'other' | 'none' = 'none';
       let safeRetryUsed = false;
+      // True once the render itself finished and stamped its accurate event —
+      // a later post-render failure (gallery write, history) must not restamp.
+      let renderEventStamped = false;
       const retryWarning = 'GPU ran out of memory — retried once with safe 4GB settings (512×512, CPU offload).';
       try {
         const profiler = new TurboProfiler();
@@ -2496,6 +2515,7 @@ export const useStudio = create<StudioState>((set, get) => {
         set({
           hardwareEvent: { oomCategory, fallbackOccurred: Boolean(result.fallback) || usedFallback, safeRetryUsed },
         });
+        renderEventStamped = true;
         // Bridge produced a procedural placeholder when a real render was expected —
         // surface it loudly instead of pretending the render succeeded.
         if (result.fallback) {
@@ -2664,9 +2684,12 @@ export const useStudio = create<StudioState>((set, get) => {
         });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        // A thrown render must still stamp this render's hardware event (a stale
-        // OOM report from the previous render would mislead diagnostics).
-        set({ hardwareEvent: { oomCategory: classifyBackendError(errorMessage), fallbackOccurred: false, safeRetryUsed } });
+        // A thrown RENDER must stamp this render's hardware event (a stale OOM
+        // report from the previous render would mislead diagnostics) — but a
+        // post-render failure must not overwrite the accurate stamp.
+        if (!renderEventStamped) {
+          set({ hardwareEvent: { oomCategory: classifyBackendError(errorMessage), fallbackOccurred: false, safeRetryUsed } });
+        }
         patch({ status: 'error', error: errorMessage });
       }
     },

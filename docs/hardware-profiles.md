@@ -32,7 +32,9 @@ apply to **local Diffusers bridge renders only**. Mock, ComfyUI, and Cloud
 renders are never clamped by a local GPU profile. Constrained resolution caps
 preserve aspect ratio (1216×832 → 768×528, never 768×768). The same treatment
 covers single renders, batches, Auto-Evolve, motion-clip frames, and TurboForge
-benchmarks; SVD video is gated by the compatibility warning instead.
+benchmarks. On the 4GB profile, SVD video / Flux / SDXL-refiner workflows are
+gated by a compatibility health warning instead; CPU Mode has no VRAM budget to
+exceed (slow, not OOM-prone), so it clamps jobs but emits no compat warnings.
 
 ## GTX 1650 4GB defaults
 
