@@ -34,6 +34,10 @@ const PY_DIR = join(RESOURCES, 'python');
 const VERSION_MARKER = join(PY_DIR, 'VERSION');
 const PLATFORM = 'x86_64-pc-windows-msvc';
 const PY_MINOR = process.env.LUMENDECK_PBS_PYVER || '3.12';
+// Pin a known-good pbs release by default so rebuilding a given commit bundles
+// the SAME Python it was tested with (release builds run this via
+// beforeBuildCommand). Set LUMENDECK_PBS_TAG=latest to opt into the newest.
+const PBS_TAG = process.env.LUMENDECK_PBS_TAG || '20260718';
 const FORCE = process.argv.includes('--force');
 const API = 'https://api.github.com/repos/astral-sh/python-build-standalone/releases';
 
@@ -52,8 +56,7 @@ async function resolveAsset() {
     const url = process.env.LUMENDECK_PBS_URL;
     return { tarUrl: url, shaUrl: `${url}.sha256`, name: url.split('/').pop() };
   }
-  const tag = process.env.LUMENDECK_PBS_TAG;
-  const rel = tag ? `${API}/tags/${tag}` : `${API}/latest`;
+  const rel = PBS_TAG === 'latest' ? `${API}/latest` : `${API}/tags/${PBS_TAG}`;
   const res = await fetch(rel, { headers: ghHeaders() });
   if (!res.ok) fail(`GitHub API ${res.status} resolving the pbs release (${rel})`);
   const release = await res.json();
@@ -95,14 +98,14 @@ function sha256(file) {
 }
 
 async function main() {
-  const asset = await resolveAsset();
-  if (!FORCE && existsSync(VERSION_MARKER)) {
-    const have = readFileSync(VERSION_MARKER, 'utf8').trim();
-    if (have === asset.name && existsSync(join(PY_DIR, 'python.exe'))) {
-      log(`already present: ${asset.name} (use --force to re-fetch)`);
-      return;
-    }
+  // Cache-first: reuse a valid bundled interpreter WITHOUT touching the network,
+  // so cached/offline rebuilds succeed even when GitHub is down or rate-limited.
+  // (Bumping the pin or a corrupt bundle → run with --force to re-fetch.)
+  if (!FORCE && existsSync(VERSION_MARKER) && existsSync(join(PY_DIR, 'python.exe'))) {
+    log(`already present: ${readFileSync(VERSION_MARKER, 'utf8').trim()} (use --force to re-fetch)`);
+    return;
   }
+  const asset = await resolveAsset();
   mkdirSync(RESOURCES, { recursive: true });
   const tmpName = `.${asset.name}`;
   const tmpTar = join(RESOURCES, tmpName);

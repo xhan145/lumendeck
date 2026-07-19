@@ -26,7 +26,9 @@ const OUT = join(OUT_ROOT, NAME);
 function log(m) { console.log(`  [portable] ${m}`); }
 function fail(m) { console.error(`\n✗ [portable] ${m}`); process.exit(1); }
 function npm(args) {
-  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { cwd: ROOT, stdio: 'inherit' });
+  // shell:true on Windows — Node 26 rejects spawning npm.cmd directly (EINVAL,
+  // the CVE-2024-27980 hardening). Matches scripts/release.mjs.
+  execFileSync('npm', args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' });
 }
 
 const LAUNCHER = `@echo off
@@ -34,11 +36,33 @@ REM LumenDeck portable — real local rendering in your browser, no install.
 cd /d "%~dp0"
 REM Use the bundled Python (so Install runtime + model needs nothing preinstalled).
 set "LUMENDECK_PYTHON=%~dp0python\\python.exe"
-echo Freeing port 8787 if something is using it...
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":8787 " ^| findstr LISTENING') do taskkill /PID %%p /F >nul 2>&1
+REM If LumenDeck is ALREADY serving on 8787, just open the browser — never
+REM force-kill whatever holds the port (it could be an unrelated app).
+"%~dp0python\\python.exe" "%~dp0_probe.py" >nul 2>&1
+if %errorlevel%==0 (
+  echo LumenDeck is already running — opening the browser.
+  start "" http://127.0.0.1:8787
+  exit /b 0
+)
 echo Starting LumenDeck at http://127.0.0.1:8787 ...
 start "" http://127.0.0.1:8787
 "%~dp0python\\python.exe" "%~dp0bridge\\server.py" --port 8787
+if %errorlevel% neq 0 (
+  echo.
+  echo Could not start on port 8787 — is another app using it? Close it and retry.
+  pause
+)
+`;
+
+// Exits 0 only when a LumenDeck bridge is already answering on 8787, so the
+// launcher can reuse it instead of killing whatever occupies the port.
+const PROBE = `import json, sys, urllib.request
+try:
+    with urllib.request.urlopen("http://127.0.0.1:8787/health", timeout=1) as r:
+        data = json.load(r)
+    sys.exit(0 if data.get("status") == "ok" and "adapter" in data else 1)
+except Exception:
+    sys.exit(1)
 `;
 
 const README = `LumenDeck ${VERSION} — Portable (Windows x64)
@@ -87,10 +111,10 @@ function main() {
     log('bundled Python missing — fetching');
     npm(['run', 'fetch:python']);
   }
-  if (!existsSync(join(DIST_SRC, 'index.html'))) {
-    log('dist missing — building the web app');
-    npm(['run', 'build']);
-  }
+  // Always rebuild the SPA so the bundle can never ship a stale/older dist that
+  // happens to be lying around from a prior checkout.
+  log('building the web app (fresh)');
+  npm(['run', 'build']);
   log(`assembling ${NAME}`);
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
@@ -98,6 +122,7 @@ function main() {
   copyBridge(join(OUT, 'bridge'));
   cpSync(DIST_SRC, join(OUT, 'dist'), { recursive: true });
   writeFileSync(join(OUT, 'LumenDeck.bat'), LAUNCHER, 'utf8');
+  writeFileSync(join(OUT, '_probe.py'), PROBE, 'utf8');
   writeFileSync(join(OUT, 'README.txt'), README, 'utf8');
 
   // Zip via PowerShell Compress-Archive (always present on Windows; GNU tar in
