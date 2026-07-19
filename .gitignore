@@ -36,3 +36,6 @@ __pycache__/
 
 # Bundled python-build-standalone runtime (fetched at build time, not committed)
 src-tauri/resources/
+
+# Portable bundle output (build artifact)
+dist-portable/
