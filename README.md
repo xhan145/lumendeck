@@ -254,6 +254,11 @@ out-of-memory errors with a single safe retry — an estimate-based safety net,
 not a guarantee. See
 [docs/hardware-profiles.md](docs/hardware-profiles.md).
 
+LumenDeck bundles its own Python (python-build-standalone), so real GPU
+rendering installs with **nothing preinstalled** — the desktop app and a
+**portable, browser-served bundle** (`npm run build:portable`) both run without a
+system Python. See [docs/portable.md](docs/portable.md).
+
 ---
 
 ## 11. User Experience Direction
