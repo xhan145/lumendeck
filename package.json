@@ -1,7 +1,7 @@
 {
   "name": "lumendeck",
   "private": true,
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "LumenDeck — local-first, node-native generative image studio",
   "license": "Apache-2.0",
   "type": "module",
@@ -13,7 +13,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "fetch:python": "node scripts/fetch-python.mjs",
+    "build:portable": "node scripts/build-portable.mjs"
   },
   "dependencies": {
     "@tauri-apps/plugin-opener": "^2",
