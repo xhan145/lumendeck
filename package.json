@@ -13,7 +13,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "fetch:python": "node scripts/fetch-python.mjs",
+    "build:portable": "node scripts/build-portable.mjs"
   },
   "dependencies": {
     "@tauri-apps/plugin-opener": "^2",

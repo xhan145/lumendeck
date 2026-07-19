@@ -33,3 +33,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Bundled python-build-standalone runtime (fetched at build time, not committed)
+src-tauri/resources/
