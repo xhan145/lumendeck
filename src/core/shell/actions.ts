@@ -52,8 +52,8 @@ export const SHELL_ACTIONS = {
   focusWindow: {
     id: 'window.focus',
     risk: 'reversible',
-    execute: ({ handle }: { handle: number }) => shellClient.focusWindow(handle),
-  } satisfies ActionDefinition<{ handle: number }, void>,
+    execute: ({ handle }: { handle: string }) => shellClient.focusWindow(handle),
+  } satisfies ActionDefinition<{ handle: string }, void>,
 
   launchExplorer: {
     id: 'recovery.explorer.launch',
