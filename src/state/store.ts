@@ -175,6 +175,7 @@ export type ViewId =
   | 'controls'
   | 'settings'
   | 'diagnostics'
+  | 'shell'
   | 'performance'
   | 'support'
   | 'credits';
