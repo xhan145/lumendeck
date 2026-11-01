@@ -3,7 +3,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowInfo {
-    pub handle: u64,
+    pub handle: String,
     pub process_id: u32,
     pub title: String,
     pub visible: bool,
@@ -48,7 +48,7 @@ mod platform {
         GetWindowThreadProcessId(hwnd, &mut process_id);
 
         windows.push(WindowInfo {
-            handle: hwnd as usize as u64,
+            handle: (hwnd as usize).to_string(),
             process_id,
             title,
             visible: IsWindowVisible(hwnd) != 0,
@@ -79,8 +79,11 @@ mod platform {
         Ok(windows)
     }
 
-    pub fn focus_window(handle: u64) -> Result<(), String> {
-        let hwnd = handle as usize as HWND;
+    pub fn focus_window(handle: String) -> Result<(), String> {
+        let raw = handle
+            .parse::<usize>()
+            .map_err(|_| "Invalid window handle".to_string())?;
+        let hwnd = raw as HWND;
 
         if unsafe { IsWindow(hwnd) } == 0 {
             return Err("Window handle is no longer valid".to_string());
@@ -113,7 +116,7 @@ mod platform {
         Err("LumenDeck shell controls are currently Windows-only".to_string())
     }
 
-    pub fn focus_window(_handle: u64) -> Result<(), String> {
+    pub fn focus_window(_handle: String) -> Result<(), String> {
         Err("LumenDeck shell controls are currently Windows-only".to_string())
     }
 
@@ -128,7 +131,7 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
 }
 
 #[tauri::command]
-pub fn focus_window(handle: u64) -> Result<(), String> {
+pub fn focus_window(handle: String) -> Result<(), String> {
     platform::focus_window(handle)
 }
 
