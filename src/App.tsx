@@ -24,6 +24,7 @@ import { CreditsPage } from './pages/CreditsPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { PerformancePage } from './pages/PerformancePage';
 import { SettingsPage } from './pages/SettingsPage';
+import { ShellRuntimePage } from './pages/ShellRuntimePage';
 import { SupportPage } from './pages/SupportPage';
 import './styles/base.css';
 import './styles/app.css';
@@ -46,6 +47,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   controls: 'Controls',
   settings: 'Settings',
   diagnostics: 'Diagnostics',
+  shell: 'Shell Runtime',
   performance: 'Performance',
   support: 'Support',
   credits: 'Credits',
@@ -119,6 +121,7 @@ export function App() {
       : view === 'controls' ? <ControlsPage />
       : view === 'settings' ? <SettingsPage />
       : view === 'diagnostics' ? <DiagnosticsPage />
+      : view === 'shell' ? <ShellRuntimePage />
       : view === 'performance' ? <PerformancePage />
       : view === 'support' ? <SupportPage />
       : view === 'credits' ? <CreditsPage />
