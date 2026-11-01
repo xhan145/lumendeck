@@ -1,5 +1,5 @@
 export interface ShellWindowInfo {
-  handle: number;
+  handle: string;
   processId: number;
   title: string;
   visible: boolean;
@@ -20,7 +20,7 @@ export const shellClient = {
     return getInvoke()<ShellWindowInfo[]>('list_windows');
   },
 
-  focusWindow(handle: number): Promise<void> {
+  focusWindow(handle: string): Promise<void> {
     return getInvoke()<void>('focus_window', { handle });
   },
 
