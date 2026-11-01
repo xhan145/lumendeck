@@ -1,6 +1,8 @@
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod shell;
+
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
@@ -10,6 +12,11 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            shell::list_windows,
+            shell::focus_window,
+            shell::launch_explorer
+        ])
         .setup(|app| {
             // Auto-start the bundled render bridge sidecar on port 8787.
             let handle = app.handle().clone();
