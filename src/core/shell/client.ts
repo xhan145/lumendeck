@@ -15,13 +15,37 @@ function getInvoke(): TauriInvoke {
   return invoke;
 }
 
+function windowCommand(command: string, handle: string): Promise<void> {
+  return getInvoke()<void>(command, { handle });
+}
+
 export const shellClient = {
   listWindows(): Promise<ShellWindowInfo[]> {
     return getInvoke()<ShellWindowInfo[]>('list_windows');
   },
 
   focusWindow(handle: string): Promise<void> {
-    return getInvoke()<void>('focus_window', { handle });
+    return windowCommand('focus_window', handle);
+  },
+
+  minimizeWindow(handle: string): Promise<void> {
+    return windowCommand('minimize_window', handle);
+  },
+
+  maximizeWindow(handle: string): Promise<void> {
+    return windowCommand('maximize_window', handle);
+  },
+
+  restoreWindow(handle: string): Promise<void> {
+    return windowCommand('restore_window', handle);
+  },
+
+  closeWindow(handle: string): Promise<void> {
+    return windowCommand('close_window', handle);
+  },
+
+  isWindowAlive(handle: string): Promise<boolean> {
+    return getInvoke()<boolean>('is_window_alive', { handle });
   },
 
   launchExplorer(): Promise<void> {
