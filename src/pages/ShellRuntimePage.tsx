@@ -3,6 +3,7 @@ import {
   SHELL_ACTIONS,
   shellActionBroker,
   type ActionAuditEntry,
+  type ActionDefinition,
 } from '../core/shell/actions';
 import { shellWorkflowRunner } from '../core/shell/automation';
 import type { ShellWindowInfo } from '../core/shell/client';
@@ -45,7 +46,7 @@ export function ShellRuntimePage() {
   );
 
   const runWindowAction = async (
-    action: typeof SHELL_ACTIONS.focusWindow,
+    action: ActionDefinition<{ handle: string }, void>,
     handle: string,
     label: string,
   ) => {
