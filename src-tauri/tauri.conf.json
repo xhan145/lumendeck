@@ -24,7 +24,8 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "plugins": {
     "updater": {
@@ -36,9 +37,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/lumendeck-bridge"],
+    "externalBin": [
+      "binaries/lumendeck-bridge"
+    ],
     "publisher": "LumenDeck",
     "category": "GraphicsAndDesign",
     "shortDescription": "Local-first node-native generative image studio",

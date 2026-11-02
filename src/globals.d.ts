@@ -6,3 +6,12 @@
  * version. `storeConstants.ts` guards its absence for non-Vite import paths.
  */
 declare const __APP_VERSION__: string;
+
+
+interface Window {
+  __TAURI__?: {
+    core?: {
+      invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+    };
+  };
+}
