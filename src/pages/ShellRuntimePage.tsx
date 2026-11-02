@@ -6,13 +6,14 @@ import {
   type ActionDefinition,
 } from '../core/shell/actions';
 import { shellWorkflowRunner } from '../core/shell/automation';
-import type { ShellWindowInfo } from '../core/shell/client';
+import type { RecoveryStatus, ShellWindowInfo } from '../core/shell/client';
 
 export function ShellRuntimePage() {
   const [windows, setWindows] = useState<ShellWindowInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>('Ready');
   const [audit, setAudit] = useState<ActionAuditEntry[]>([]);
+  const [recovery, setRecovery] = useState<RecoveryStatus | null>(null);
 
   const syncAudit = useCallback(() => {
     setAudit(shellActionBroker.audit.slice(-16).reverse());
@@ -21,12 +22,20 @@ export function ShellRuntimePage() {
   const refresh = useCallback(async () => {
     setBusy(true);
     try {
-      const result = await shellActionBroker.run(
-        SHELL_ACTIONS.listWindows,
-        undefined,
-        { source: 'user' },
-      );
+      const [result, recoveryStatus] = await Promise.all([
+        shellActionBroker.run(
+          SHELL_ACTIONS.listWindows,
+          undefined,
+          { source: 'user' },
+        ),
+        shellActionBroker.run(
+          SHELL_ACTIONS.recoveryStatus,
+          undefined,
+          { source: 'user' },
+        ),
+      ]);
       setWindows(result);
+      setRecovery(recoveryStatus);
       setStatus(`Found ${result.length} user-facing windows.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -201,6 +210,30 @@ export function ShellRuntimePage() {
               <dt>Close</dt><dd>stateful · explicit approval required</dd>
               <dt>Destructive / security-sensitive</dt><dd>denied</dd>
             </dl>
+          </article>
+
+          <article className="card page-card">
+            <div className="page-card-head">
+              <h2>Recovery watchdog</h2>
+              <span className={`chip ${recovery?.watchdogPid ? 'clean' : 'warnings'}`}>
+                {recovery?.watchdogPid ? 'Armed' : 'Not running'}
+              </span>
+            </div>
+            <p className="field-help">
+              Independent watchdog status. Desktop mode records failures only. Explorer fallback
+              is enabled only when LumenDeck is explicitly started in shell mode.
+            </p>
+            <dl>
+              <dt>Watchdog PID</dt><dd>{recovery?.watchdogPid ?? 'not installed / not started'}</dd>
+              <dt>Shell mode</dt><dd>{recovery?.shellMode ? 'enabled' : 'disabled'}</dd>
+              <dt>Heartbeat</dt><dd>{recovery?.heartbeatPath ?? 'unavailable'}</dd>
+              <dt>Watchdog log</dt><dd>{recovery?.logPath ?? 'unavailable'}</dd>
+            </dl>
+            {!recovery?.watchdogPid ? (
+              <p className="field-help">
+                Build the development watchdog with <code>npm run recovery:build</code>, then restart LumenDeck.
+              </p>
+            ) : null}
           </article>
 
           <article className="card page-card">
