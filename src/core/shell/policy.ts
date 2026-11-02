@@ -29,10 +29,10 @@ export function sanitizeShellPolicy(value: unknown): PersistedShellPolicy {
       'read-only': isDecision(risks['read-only']) ? risks['read-only'] : DEFAULT_SHELL_POLICY['read-only'],
       reversible: isDecision(risks.reversible) ? risks.reversible : DEFAULT_SHELL_POLICY.reversible,
       stateful: isDecision(risks.stateful) ? risks.stateful : DEFAULT_SHELL_POLICY.stateful,
-      destructive: isDecision(risks.destructive) ? risks.destructive : DEFAULT_SHELL_POLICY.destructive,
-      'security-sensitive': isDecision(risks['security-sensitive'])
-        ? risks['security-sensitive']
-        : DEFAULT_SHELL_POLICY['security-sensitive'],
+      // These classes are architectural hard-denies in the current shell runtime.
+      // Persisted settings, localStorage edits, automation, or AI cannot relax them.
+      destructive: 'deny',
+      'security-sensitive': 'deny',
     },
   };
 }
