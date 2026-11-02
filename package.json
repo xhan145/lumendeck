@@ -13,7 +13,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "recovery:build": "cargo build --manifest-path src-tauri/Cargo.toml --bin lumendeck-recovery",
+    "recovery:build:release": "cargo build --manifest-path src-tauri/Cargo.toml --release --bin lumendeck-recovery"
   },
   "dependencies": {
     "@tauri-apps/plugin-opener": "^2",
