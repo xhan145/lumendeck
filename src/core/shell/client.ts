@@ -1,3 +1,10 @@
+export interface RecoveryStatus {
+  watchdogPid: number | null;
+  heartbeatPath: string;
+  logPath: string;
+  shellMode: boolean;
+}
+
 export interface ShellWindowInfo {
   handle: string;
   processId: number;
@@ -50,5 +57,9 @@ export const shellClient = {
 
   launchExplorer(): Promise<void> {
     return getInvoke()<void>('launch_explorer');
+  },
+
+  recoveryStatus(): Promise<RecoveryStatus> {
+    return getInvoke()<RecoveryStatus>('recovery_status');
   },
 };
