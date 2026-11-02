@@ -15,6 +15,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             shell::list_windows,
             shell::focus_window,
+            shell::minimize_window,
+            shell::maximize_window,
+            shell::restore_window,
+            shell::close_window,
+            shell::is_window_alive,
             shell::launch_explorer
         ])
         .setup(|app| {
