@@ -37,7 +37,7 @@ mod platform {
             return false;
         }
 
-        if unsafe { GetWindow(hwnd, GW_OWNER) } != 0 {
+        if !unsafe { GetWindow(hwnd, GW_OWNER) }.is_null() {
             return false;
         }
 
