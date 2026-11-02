@@ -1,6 +1,7 @@
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audit;
 mod recovery;
 mod shell;
 
@@ -22,7 +23,9 @@ fn main() {
             shell::close_window,
             shell::is_window_alive,
             shell::launch_explorer,
-            recovery::recovery_status
+            recovery::recovery_status,
+            audit::append_action_audit,
+            audit::action_audit_path
         ])
         .setup(|app| {
             recovery::start_heartbeat();
