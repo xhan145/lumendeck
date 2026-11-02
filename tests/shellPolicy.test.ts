@@ -60,4 +60,20 @@ describe('shell policy persistence', () => {
       'security-sensitive': 'deny',
     });
   });
+
+  it('never relaxes hard-denied risk classes from persisted input', () => {
+    const result = sanitizeShellPolicy({
+      version: 1,
+      risks: {
+        'read-only': 'allow',
+        reversible: 'allow',
+        stateful: 'ask',
+        destructive: 'allow',
+        'security-sensitive': 'allow',
+      },
+    });
+
+    expect(result.risks.destructive).toBe('deny');
+    expect(result.risks['security-sensitive']).toBe('deny');
+  });
 });
