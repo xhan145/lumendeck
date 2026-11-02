@@ -1,5 +1,6 @@
 [package]
 name = "lumendeck"
+default-run = "lumendeck"
 version = "0.35.0"
 description = "LumenDeck — local-first, node-native generative image studio"
 authors = ["LumenDeck"]
@@ -30,3 +31,12 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+
+[[bin]]
+name = "lumendeck"
+path = "src/main.rs"
+
+[[bin]]
+name = "lumendeck-recovery"
+path = "src/bin/lumendeck-recovery.rs"
