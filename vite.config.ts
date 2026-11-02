@@ -73,7 +73,8 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(PKG_VERSION),
   },
   server: {
-    port: Number(process.env.PORT) || 5178,
+    host: '127.0.0.1',
+    port: Number(process.env.PORT) || 14200,
     // Same-origin API: the browser calls /health etc. on the dev server, which
     // forwards to the bridge. Avoids all cross-origin / private-network blocks.
     proxy: {
