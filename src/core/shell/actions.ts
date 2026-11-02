@@ -1,4 +1,4 @@
-import { shellClient, type ShellWindowInfo } from './client';
+import { shellClient, type RecoveryStatus, type ShellWindowInfo } from './client';
 
 export type ActionRisk =
   | 'read-only'
@@ -101,6 +101,14 @@ export const SHELL_ACTIONS = {
     risk: 'stateful',
     execute: ({ handle }: { handle: string }) => shellClient.closeWindow(handle),
   } satisfies ActionDefinition<{ handle: string }, void>,
+
+  recoveryStatus: {
+    id: 'recovery.status',
+    title: 'Recovery status',
+    capability: 'recovery.read',
+    risk: 'read-only',
+    execute: () => shellClient.recoveryStatus(),
+  } satisfies ActionDefinition<void, RecoveryStatus>,
 
   launchExplorer: {
     id: 'recovery.explorer.launch',
