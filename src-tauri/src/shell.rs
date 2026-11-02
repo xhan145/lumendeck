@@ -13,16 +13,44 @@ pub struct WindowInfo {
 mod platform {
     use super::WindowInfo;
     use std::process::Command;
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-        IsWindow, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, SetForegroundWindow,
+        ShowWindow, GWL_EXSTYLE, GW_OWNER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+        WM_CLOSE, WS_EX_TOOLWINDOW,
     };
 
-    unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let windows = &mut *(lparam as *mut Vec<WindowInfo>);
+    fn parse_handle(handle: &str) -> Result<HWND, String> {
+        let raw = handle
+            .parse::<usize>()
+            .map_err(|_| "Invalid window handle".to_string())?;
+        let hwnd = raw as HWND;
+        if unsafe { IsWindow(hwnd) } == 0 {
+            return Err("Window handle is no longer valid".to_string());
+        }
+        Ok(hwnd)
+    }
 
-        if IsWindow(hwnd) == 0 {
+    fn is_user_window(hwnd: HWND) -> bool {
+        if unsafe { IsWindow(hwnd) } == 0 || unsafe { IsWindowVisible(hwnd) } == 0 {
+            return false;
+        }
+
+        if unsafe { GetWindow(hwnd, GW_OWNER) } != 0 {
+            return false;
+        }
+
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        if ex_style & WS_EX_TOOLWINDOW != 0 {
+            return false;
+        }
+
+        true
+    }
+
+    unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        if !is_user_window(hwnd) {
             return 1;
         }
 
@@ -47,11 +75,12 @@ mod platform {
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, &mut process_id);
 
+        let windows = &mut *(lparam as *mut Vec<WindowInfo>);
         windows.push(WindowInfo {
             handle: (hwnd as usize).to_string(),
             process_id,
             title,
-            visible: IsWindowVisible(hwnd) != 0,
+            visible: true,
         });
 
         1
@@ -70,34 +99,52 @@ mod platform {
             return Err("EnumWindows failed".to_string());
         }
 
-        windows.sort_by(|a, b| {
-            b.visible
-                .cmp(&a.visible)
-                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-        });
-
+        windows.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         Ok(windows)
     }
 
     pub fn focus_window(handle: String) -> Result<(), String> {
-        let raw = handle
-            .parse::<usize>()
-            .map_err(|_| "Invalid window handle".to_string())?;
-        let hwnd = raw as HWND;
-
-        if unsafe { IsWindow(hwnd) } == 0 {
-            return Err("Window handle is no longer valid".to_string());
-        }
-
-        unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
-        }
+        let hwnd = parse_handle(&handle)?;
+        unsafe { ShowWindow(hwnd, SW_RESTORE); }
 
         if unsafe { SetForegroundWindow(hwnd) } == 0 {
             return Err("Windows refused the foreground activation request".to_string());
         }
-
         Ok(())
+    }
+
+    pub fn show_window(handle: String, mode: i32) -> Result<(), String> {
+        let hwnd = parse_handle(&handle)?;
+        unsafe { ShowWindow(hwnd, mode); }
+        Ok(())
+    }
+
+    pub fn minimize_window(handle: String) -> Result<(), String> {
+        show_window(handle, SW_MINIMIZE)
+    }
+
+    pub fn maximize_window(handle: String) -> Result<(), String> {
+        show_window(handle, SW_MAXIMIZE)
+    }
+
+    pub fn restore_window(handle: String) -> Result<(), String> {
+        show_window(handle, SW_RESTORE)
+    }
+
+    pub fn close_window(handle: String) -> Result<(), String> {
+        let hwnd = parse_handle(&handle)?;
+        let posted = unsafe { PostMessageW(hwnd, WM_CLOSE, 0 as WPARAM, 0) };
+        if posted == 0 {
+            return Err("Failed to request window close".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn is_window_alive(handle: String) -> Result<bool, String> {
+        match handle.parse::<usize>() {
+            Ok(raw) => Ok(unsafe { IsWindow(raw as HWND) } != 0),
+            Err(_) => Ok(false),
+        }
     }
 
     pub fn launch_explorer() -> Result<(), String> {
@@ -112,30 +159,42 @@ mod platform {
 mod platform {
     use super::WindowInfo;
 
-    pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
+    fn unsupported<T>() -> Result<T, String> {
         Err("LumenDeck shell controls are currently Windows-only".to_string())
     }
 
-    pub fn focus_window(_handle: String) -> Result<(), String> {
-        Err("LumenDeck shell controls are currently Windows-only".to_string())
-    }
-
+    pub fn list_windows() -> Result<Vec<WindowInfo>, String> { unsupported() }
+    pub fn focus_window(_handle: String) -> Result<(), String> { unsupported() }
+    pub fn minimize_window(_handle: String) -> Result<(), String> { unsupported() }
+    pub fn maximize_window(_handle: String) -> Result<(), String> { unsupported() }
+    pub fn restore_window(_handle: String) -> Result<(), String> { unsupported() }
+    pub fn close_window(_handle: String) -> Result<(), String> { unsupported() }
+    pub fn is_window_alive(_handle: String) -> Result<bool, String> { unsupported() }
     pub fn launch_explorer() -> Result<(), String> {
         Err("Explorer recovery is only available on Windows".to_string())
     }
 }
 
 #[tauri::command]
-pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
-    platform::list_windows()
-}
+pub fn list_windows() -> Result<Vec<WindowInfo>, String> { platform::list_windows() }
 
 #[tauri::command]
-pub fn focus_window(handle: String) -> Result<(), String> {
-    platform::focus_window(handle)
-}
+pub fn focus_window(handle: String) -> Result<(), String> { platform::focus_window(handle) }
 
 #[tauri::command]
-pub fn launch_explorer() -> Result<(), String> {
-    platform::launch_explorer()
-}
+pub fn minimize_window(handle: String) -> Result<(), String> { platform::minimize_window(handle) }
+
+#[tauri::command]
+pub fn maximize_window(handle: String) -> Result<(), String> { platform::maximize_window(handle) }
+
+#[tauri::command]
+pub fn restore_window(handle: String) -> Result<(), String> { platform::restore_window(handle) }
+
+#[tauri::command]
+pub fn close_window(handle: String) -> Result<(), String> { platform::close_window(handle) }
+
+#[tauri::command]
+pub fn is_window_alive(handle: String) -> Result<bool, String> { platform::is_window_alive(handle) }
+
+#[tauri::command]
+pub fn launch_explorer() -> Result<(), String> { platform::launch_explorer() }
