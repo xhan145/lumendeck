@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ActionBroker,
   DEFAULT_ACTION_POLICY,
+  SHELL_ACTION_REGISTRY,
   type ActionDefinition,
 } from '../src/core/shell/actions';
 
@@ -54,5 +55,26 @@ describe('shell ActionBroker', () => {
     ).rejects.toThrow('denied by policy');
 
     expect(destructive.execute).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('shell action registry', () => {
+  it('registers recovery status as read-only and Explorer fallback as reversible', () => {
+    expect(SHELL_ACTION_REGISTRY.get('recovery.status')).toMatchObject({
+      capability: 'recovery.read',
+      risk: 'read-only',
+    });
+    expect(SHELL_ACTION_REGISTRY.get('recovery.explorer.launch')).toMatchObject({
+      capability: 'recovery.explorer',
+      risk: 'reversible',
+    });
+  });
+
+  it('keeps window close behind the stateful approval class', () => {
+    expect(SHELL_ACTION_REGISTRY.get('window.close')).toMatchObject({
+      capability: 'window.control',
+      risk: 'stateful',
+    });
   });
 });
