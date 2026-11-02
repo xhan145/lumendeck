@@ -1,6 +1,7 @@
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod recovery;
 mod shell;
 
 use tauri_plugin_shell::process::CommandEvent;
@@ -20,9 +21,13 @@ fn main() {
             shell::restore_window,
             shell::close_window,
             shell::is_window_alive,
-            shell::launch_explorer
+            shell::launch_explorer,
+            recovery::recovery_status
         ])
         .setup(|app| {
+            recovery::start_heartbeat();
+            recovery::start_watchdog_if_available();
+
             // Auto-start the bundled render bridge sidecar on port 8787.
             let handle = app.handle().clone();
             if let Ok(cmd) = handle.shell().sidecar("lumendeck-bridge") {
