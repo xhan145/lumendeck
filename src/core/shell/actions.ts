@@ -1,4 +1,6 @@
 import { shellClient, type RecoveryStatus, type ShellWindowInfo } from './client';
+import { persistActionAudit } from './audit';
+import { DEFAULT_SHELL_POLICY, loadShellPolicy, saveShellPolicy } from './policy';
 
 export type ActionRisk =
   | 'read-only'
@@ -37,13 +39,7 @@ export interface ActionAuditEntry {
 
 export type ActionPolicy = Record<ActionRisk, ActionDecision>;
 
-export const DEFAULT_ACTION_POLICY: ActionPolicy = {
-  'read-only': 'allow',
-  reversible: 'allow',
-  stateful: 'ask',
-  destructive: 'deny',
-  'security-sensitive': 'deny',
-};
+export const DEFAULT_ACTION_POLICY: ActionPolicy = { ...DEFAULT_SHELL_POLICY };
 
 export const SHELL_ACTIONS = {
   listWindows: {
@@ -124,10 +120,24 @@ export type RegisteredShellAction = (typeof SHELL_ACTIONS)[keyof typeof SHELL_AC
 export class ActionBroker {
   readonly audit: ActionAuditEntry[] = [];
 
-  constructor(private readonly policy: ActionPolicy = DEFAULT_ACTION_POLICY) {}
+  constructor(private policy: ActionPolicy = loadShellPolicy().risks) {}
 
   decisionFor(risk: ActionRisk): ActionDecision {
     return this.policy[risk];
+  }
+
+  getPolicy(): ActionPolicy {
+    return { ...this.policy };
+  }
+
+  setPolicy(policy: ActionPolicy, persist = true): void {
+    this.policy = { ...policy };
+    if (persist) saveShellPolicy(this.policy);
+  }
+
+  private record(entry: ActionAuditEntry): void {
+    this.audit.push(entry);
+    persistActionAudit(entry);
   }
 
   async run<Input, Output>(
@@ -143,7 +153,7 @@ export class ActionBroker {
         ? `Action ${action.id} is denied by policy.`
         : `Action ${action.id} requires explicit approval.`;
 
-      this.audit.push({
+      this.record({
         id: crypto.randomUUID(),
         actionId: action.id,
         source: context.source,
@@ -159,7 +169,7 @@ export class ActionBroker {
 
     try {
       const result = await action.execute(input);
-      this.audit.push({
+      this.record({
         id: crypto.randomUUID(),
         actionId: action.id,
         source: context.source,
@@ -172,7 +182,7 @@ export class ActionBroker {
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.audit.push({
+      this.record({
         id: crypto.randomUUID(),
         actionId: action.id,
         source: context.source,
