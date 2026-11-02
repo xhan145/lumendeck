@@ -1,6 +1,6 @@
 import { shellClient, type RecoveryStatus, type ShellWindowInfo } from './client';
 import { persistActionAudit } from './audit';
-import { DEFAULT_SHELL_POLICY, loadShellPolicy, saveShellPolicy } from './policy';
+import { DEFAULT_SHELL_POLICY, loadShellPolicy, sanitizeShellPolicy, saveShellPolicy } from './policy';
 
 export type ActionRisk =
   | 'read-only'
@@ -131,7 +131,7 @@ export class ActionBroker {
   }
 
   setPolicy(policy: ActionPolicy, persist = true): void {
-    this.policy = { ...policy };
+    this.policy = sanitizeShellPolicy({ version: 1, risks: policy }).risks;
     if (persist) saveShellPolicy(this.policy);
   }
 
