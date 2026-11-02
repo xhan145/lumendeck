@@ -17,6 +17,8 @@ export interface ActionContext {
 
 export interface ActionDefinition<Input, Output> {
   id: string;
+  title: string;
+  capability: string;
   risk: ActionRisk;
   execute(input: Input): Promise<Output>;
 }
@@ -25,6 +27,7 @@ export interface ActionAuditEntry {
   id: string;
   actionId: string;
   source: ActionSource;
+  capability: string;
   risk: ActionRisk;
   decision: ActionDecision;
   ok: boolean;
@@ -45,22 +48,70 @@ export const DEFAULT_ACTION_POLICY: ActionPolicy = {
 export const SHELL_ACTIONS = {
   listWindows: {
     id: 'window.list',
+    title: 'List windows',
+    capability: 'window.read',
     risk: 'read-only',
     execute: () => shellClient.listWindows(),
   } satisfies ActionDefinition<void, ShellWindowInfo[]>,
 
+  isWindowAlive: {
+    id: 'window.isAlive',
+    title: 'Check window',
+    capability: 'window.read',
+    risk: 'read-only',
+    execute: ({ handle }: { handle: string }) => shellClient.isWindowAlive(handle),
+  } satisfies ActionDefinition<{ handle: string }, boolean>,
+
   focusWindow: {
     id: 'window.focus',
+    title: 'Focus window',
+    capability: 'window.control',
     risk: 'reversible',
     execute: ({ handle }: { handle: string }) => shellClient.focusWindow(handle),
   } satisfies ActionDefinition<{ handle: string }, void>,
 
+  minimizeWindow: {
+    id: 'window.minimize',
+    title: 'Minimize window',
+    capability: 'window.control',
+    risk: 'reversible',
+    execute: ({ handle }: { handle: string }) => shellClient.minimizeWindow(handle),
+  } satisfies ActionDefinition<{ handle: string }, void>,
+
+  maximizeWindow: {
+    id: 'window.maximize',
+    title: 'Maximize window',
+    capability: 'window.control',
+    risk: 'reversible',
+    execute: ({ handle }: { handle: string }) => shellClient.maximizeWindow(handle),
+  } satisfies ActionDefinition<{ handle: string }, void>,
+
+  restoreWindow: {
+    id: 'window.restore',
+    title: 'Restore window',
+    capability: 'window.control',
+    risk: 'reversible',
+    execute: ({ handle }: { handle: string }) => shellClient.restoreWindow(handle),
+  } satisfies ActionDefinition<{ handle: string }, void>,
+
+  closeWindow: {
+    id: 'window.close',
+    title: 'Close window',
+    capability: 'window.control',
+    risk: 'stateful',
+    execute: ({ handle }: { handle: string }) => shellClient.closeWindow(handle),
+  } satisfies ActionDefinition<{ handle: string }, void>,
+
   launchExplorer: {
     id: 'recovery.explorer.launch',
+    title: 'Launch Explorer',
+    capability: 'recovery.explorer',
     risk: 'reversible',
     execute: () => shellClient.launchExplorer(),
   } satisfies ActionDefinition<void, void>,
 };
+
+export type RegisteredShellAction = (typeof SHELL_ACTIONS)[keyof typeof SHELL_ACTIONS];
 
 export class ActionBroker {
   readonly audit: ActionAuditEntry[] = [];
@@ -88,6 +139,7 @@ export class ActionBroker {
         id: crypto.randomUUID(),
         actionId: action.id,
         source: context.source,
+        capability: action.capability,
         risk: action.risk,
         decision,
         ok: false,
@@ -103,6 +155,7 @@ export class ActionBroker {
         id: crypto.randomUUID(),
         actionId: action.id,
         source: context.source,
+        capability: action.capability,
         risk: action.risk,
         decision,
         ok: true,
@@ -115,6 +168,7 @@ export class ActionBroker {
         id: crypto.randomUUID(),
         actionId: action.id,
         source: context.source,
+        capability: action.capability,
         risk: action.risk,
         decision,
         ok: false,
@@ -127,3 +181,7 @@ export class ActionBroker {
 }
 
 export const shellActionBroker = new ActionBroker();
+
+export const SHELL_ACTION_REGISTRY = new Map<string, RegisteredShellAction>(
+  Object.values(SHELL_ACTIONS).map((action) => [action.id, action]),
+);
