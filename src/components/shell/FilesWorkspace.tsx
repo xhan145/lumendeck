@@ -100,6 +100,9 @@ export function FilesWorkspace() {
       setSelectedPath((prev) => prev && folder.entries.some((item) => item.path === prev) ? prev : null);
     }).catch((reason) => {
       if (!active || id !== requestId.current) return;
+      // Never show stale files under a failed address/navigation target.
+      setListing(null);
+      setSelectedPath(null);
       setError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
       if (active && id === requestId.current) setLoading(false);
@@ -303,7 +306,7 @@ export function FilesWorkspace() {
 
             <div className="files-results" aria-busy={loading}>
               {loading && !listing ? <p className="files-empty">Reading local files…</p> : null}
-              {!loading && shown.length === 0 ? <p className="files-empty">
+              {!loading && listing && shown.length === 0 ? <p className="files-empty">
                 {query ? 'No matching files in this folder.' : 'This folder is empty.'}
               </p> : null}
 
