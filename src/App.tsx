@@ -11,6 +11,7 @@ import { BrandMark, Icon } from './components/icons';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { DesktopHome } from './components/shell/DesktopHome';
+import { FilesWorkspace } from './components/shell/FilesWorkspace';
 import { ShellLauncher } from './components/shell/ShellLauncher';
 import { ShellDock } from './components/shell/ShellDock';
 import { RecipeView } from './components/recipe/RecipeView';
@@ -34,6 +35,7 @@ import './styles/glass.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
   desktop: 'Desktop',
+  files: 'Files',
   mission: 'Mission Control',
   constellation: 'Open Constellation',
   overview: 'Studio Overview',
@@ -121,6 +123,7 @@ export function App() {
 
   const page =
     view === 'desktop' ? <DesktopHome />
+      : view === 'files' ? <FilesWorkspace />
       : view === 'mission' ? <MissionControl />
       : view === 'constellation' ? <ConstellationView />
       : view === 'overview' ? <StudioOverview />
