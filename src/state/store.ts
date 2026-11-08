@@ -160,6 +160,7 @@ export type { CreativeState } from './creative';
 
 export type ViewId =
   | 'desktop'
+  | 'files'
   | 'mission'
   | 'constellation'
   | 'overview'
