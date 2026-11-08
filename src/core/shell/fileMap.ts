@@ -24,19 +24,37 @@ export interface FileStar {
 /** Stable, non-destructive projection of real paths into spatial constellations. */
 export function makeFileStars(entries: FileEntry[], max = 180): FileStar[] {
   const results: FileStar[] = [];
-  const kinds = FILE_GROUPS.filter((g) => entries.some((entry) => entry.kind === g.kind));
-  if (!kinds.length) return results;
+  const groups = FILE_GROUPS.map((group) => ({
+    ...group, members: entries.filter((entry) => entry.kind === group.kind),
+  })).filter((group) => group.members.length > 0);
+  if (!groups.length || max <= 0) return results;
 
-  for (const [groupIndex, group] of kinds.entries()) {
-    const members = entries.filter((entry) => entry.kind === group.kind)
-      .slice(0, Math.max(0, max - results.length));
-    const angle = -Math.PI / 2 + (groupIndex / kinds.length) * Math.PI * 2;
+  // Reserve representation for multiple file types before filling remaining
+  // stars. A crowded image folder must not completely hide audio/code clusters.
+  const initialShare = Math.floor(max / groups.length);
+  const allotted = groups.map((group) => Math.min(group.members.length, initialShare));
+  let remainder = max - allotted.reduce((sum, count) => sum + count, 0);
+  while (remainder > 0) {
+    let extended = false;
+    for (let i = 0; i < groups.length && remainder > 0; i++) {
+      if (allotted[i] < groups[i].members.length) {
+        allotted[i]++;
+        remainder--;
+        extended = true;
+      }
+    }
+    if (!extended) break;
+  }
+
+  for (const [groupIndex, group] of groups.entries()) {
+    const members = group.members.slice(0, allotted[groupIndex]);
+    const angle = -Math.PI / 2 + (groupIndex / groups.length) * Math.PI * 2;
     const distance = 7.4;
     const centerX = Math.cos(angle) * distance;
     const centerY = Math.sin(angle) * distance * 0.67;
     const centerZ = Math.sin(angle * 1.75) * 2.2;
     for (const [index, entry] of members.entries()) {
-      const phi = index * 2.399963229728653; // golden angle, stable under zoom
+      const phi = index * 2.399963229728653; // golden angle
       const ring = Math.sqrt(index + 1) * 0.56;
       results.push({
         entry, group: group.kind, color: group.color,
@@ -45,7 +63,6 @@ export function makeFileStars(entries: FileEntry[], max = 180): FileStar[] {
         z: centerZ + Math.sin(phi * 0.65) * ring * 0.42,
       });
     }
-    if (results.length >= max) break;
   }
   return results;
 }
