@@ -176,7 +176,7 @@ export function DesktopHome() {
               <div>
                 <p className="page-kicker">Recovery</p>
                 <h2>Never trap the desktop.</h2>
-                <p>LumenDeck can hand control back to Windows Explorer or open Task Manager without exposing arbitrary command execution to the UI.</p>
+                <p>LumenDeck can launch Windows Explorer or Task Manager without exposing arbitrary command execution to the UI.</p>
                 {recoveryStatus ? <p className="desktop-recovery-status" role="status">{recoveryStatus}</p> : null}
               </div>
               <div className="desktop-recovery-actions">
