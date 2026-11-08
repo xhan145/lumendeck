@@ -140,7 +140,7 @@ export function App() {
             <span className="lumen">Lumen</span><span className="deck">Deck</span>
             <span className="ver">v{APP_VERSION}</span>
           </div>
-          <span className="view-title">{VIEW_TITLES[view] ?? 'Guide'}</span>
+          <span className="view-title">{VIEW_TITLES[view] ?? 'Desktop'}</span>
           <div className="topbar-right">
             <BridgeStatus />
             <HealthChip />
