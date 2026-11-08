@@ -99,13 +99,13 @@ export function ControlsPage() {
   };
 
   return (
-    <main className="studio-page controls-page scroll" aria-label="Controls">
+    <main className="studio-page controls-page scroll" aria-label="Create">
       <div className="studio-page-inner">
         <header className="page-hero">
           <div>
-            <p className="page-kicker">Controls</p>
-            <h1>Render Command Center</h1>
-            <p>Start renders, check the plan, tune TurboForge, and manage the queue from one place.</p>
+            <p className="page-kicker">Create</p>
+            <h1>Create</h1>
+            <p>Render from the current setup. Advanced planning, acceleration, and queue controls stay available below.</p>
           </div>
           <div className="page-hero-actions">
             <button className="btn primary" type="button" disabled={errors.length > 0 || queuePaused} onClick={() => void enqueueRender()}>
