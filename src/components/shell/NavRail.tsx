@@ -18,6 +18,7 @@ const GROUPS: NavGroup[] = [
     label: 'Daily',
     items: [
       { id: 'desktop', label: 'Desktop', icon: () => Icon.home({ size: 22 }) },
+      { id: 'files', label: 'Files', icon: () => Icon.folder({ size: 22 }) },
       { id: 'mission', label: 'Studio', icon: () => Icon.compass({ size: 22 }) },
       { id: 'projects', label: 'Projects', icon: () => Icon.layers({ size: 22 }) },
       { id: 'gallery', label: 'Gallery', icon: () => Icon.image({ size: 22 }) },
