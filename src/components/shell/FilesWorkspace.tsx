@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type React from 'react';
 import {
   canPreview, createDirectory, filesAvailable, getPreviewUrl, listDirectory,
   listLocations, openFile, renameFile,
