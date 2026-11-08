@@ -1795,3 +1795,91 @@
   font-size: 10.5px;
 }
 .shell-launcher-error { color: var(--ld-danger); }
+
+
+/* ===== Desktop shell chrome ===== */
+.shell.desktop-shell {
+  grid-template-rows: 1fr;
+}
+.workspace.desktop-workspace {
+  grid-template-columns: 1fr;
+  padding-bottom: 62px;
+}
+.shell-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 10px;
+  z-index: 80;
+  transform: translateX(-50%);
+  width: min(860px, calc(100vw - 20px));
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--ld-border-strong);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--md-surface) 94%, transparent);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+}
+.shell-dock button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--ld-text-dim);
+  cursor: pointer;
+}
+.shell-dock button:hover,
+.shell-dock button:focus-visible {
+  outline: none;
+  color: var(--ld-text);
+  border-color: var(--ld-border);
+  background: var(--md-surface-2);
+}
+.shell-dock-brand {
+  width: 42px;
+  padding: 0 !important;
+  color: var(--md-primary-light) !important;
+}
+.shell-dock-spacer { flex: 1; }
+.shell-dock-clock {
+  min-width: 72px;
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  color: var(--ld-text);
+  font-size: 11px;
+  line-height: 1.15;
+  padding: 0 6px;
+}
+.shell-dock-clock small {
+  color: var(--ld-text-faint);
+  font-size: 9.5px;
+}
+.shell-dock-toast {
+  position: fixed;
+  right: 14px;
+  bottom: 76px;
+  z-index: 82;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 92, 92, 0.45);
+  border-radius: 10px;
+  background: var(--md-surface);
+  color: var(--ld-danger);
+  cursor: pointer;
+  box-shadow: var(--shadow-2);
+}
+
+@media (max-width: 680px) {
+  .shell-dock button span { display: none; }
+  .shell-dock .shell-dock-label-optional { display: none; }
+  .shell-dock button { width: 42px; padding: 0; }
+  .shell-dock-clock { min-width: 64px; }
+}
