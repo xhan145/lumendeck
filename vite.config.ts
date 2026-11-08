@@ -75,6 +75,12 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: Number(process.env.PORT) || 14200,
+    // Cargo frequently creates and locks .exe build scripts on Windows. Vite
+    // must not watch Rust build artifacts or its FSWatcher can crash with EBUSY.
+    // Tauri/Cargo watch Rust sources independently, so HMR remains unaffected.
+    watch: {
+      ignored: ['**/src-tauri/target/**'],
+    },
     // Same-origin API: the browser calls /health etc. on the dev server, which
     // forwards to the bridge. Avoids all cross-origin / private-network blocks.
     proxy: {
