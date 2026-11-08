@@ -5,6 +5,8 @@ use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use std::process::Command;
 
+mod files;
+
 #[tauri::command]
 fn open_explorer() -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -41,7 +43,16 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![open_explorer, open_task_manager])
+        .invoke_handler(tauri::generate_handler![
+            open_explorer,
+            open_task_manager,
+            files::files_locations,
+            files::files_list,
+            files::files_create_folder,
+            files::files_rename,
+            files::files_open,
+            files::files_preview,
+        ])
         .setup(|app| {
             // Auto-start the bundled render bridge sidecar on port 8787.
             let handle = app.handle().clone();
