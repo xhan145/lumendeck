@@ -1688,3 +1688,110 @@
   color: var(--ld-text);
   font-weight: 600;
 }
+
+
+/* ===== Global shell launcher ===== */
+.shell-launcher-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: start center;
+  padding-top: min(14vh, 120px);
+  background: rgba(3, 9, 18, 0.58);
+  backdrop-filter: blur(8px);
+}
+.shell-launcher {
+  width: min(680px, calc(100vw - 28px));
+  max-height: min(680px, 72vh);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border: 1px solid var(--ld-border-strong);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--md-surface) 96%, black);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+.shell-launcher-search {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--ld-border);
+}
+.shell-launcher-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ld-text);
+  font-size: 16px;
+}
+.shell-launcher-search kbd {
+  color: var(--ld-text-faint);
+  border: 1px solid var(--ld-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 10px;
+}
+.shell-launcher-results {
+  overflow-y: auto;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+.shell-launcher-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ld-text);
+  text-align: left;
+  cursor: pointer;
+}
+.shell-launcher-item:hover,
+.shell-launcher-item:focus-visible {
+  outline: none;
+  border-color: var(--ld-border);
+  background: var(--md-surface-2);
+}
+.shell-launcher-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--md-primary-light);
+  background: color-mix(in srgb, var(--md-primary) 12%, transparent);
+}
+.shell-launcher-item > span:last-child {
+  display: grid;
+  gap: 3px;
+}
+.shell-launcher-item b { font-size: 13px; }
+.shell-launcher-item small {
+  color: var(--ld-text-dim);
+  font-size: 11.5px;
+}
+.shell-launcher-empty {
+  padding: 22px;
+  color: var(--ld-text-faint);
+  text-align: center;
+}
+.shell-launcher-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--ld-border);
+  color: var(--ld-text-faint);
+  font-size: 10.5px;
+}
+.shell-launcher-error { color: var(--ld-danger); }
