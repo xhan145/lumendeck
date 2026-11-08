@@ -13,6 +13,7 @@ interface Destination {
 }
 
 const PRIMARY: Destination[] = [
+  { id: 'files', label: 'Files', description: 'Browse real folders or navigate them as a 3D Constellation.', keywords: 'files folders explorer constellation drives browse', icon: () => Icon.folder({ size: 22 }) },
   { id: 'projects', label: 'Projects', description: 'Open and manage active creative work.', keywords: 'projects work recent', icon: () => Icon.layers({ size: 22 }) },
   { id: 'gallery', label: 'Gallery', description: 'Browse renders and exported media.', keywords: 'gallery images video renders media', icon: () => Icon.image({ size: 22 }) },
   { id: 'controls', label: 'Create', description: 'Jump directly into generation controls.', keywords: 'create controls render generate', icon: () => Icon.play({ size: 22 }) },
@@ -125,11 +126,6 @@ export function DesktopHome() {
                 <span>{projects.length} projects · {gallery.length} renders</span>
               </div>
               <div className="desktop-primary-grid">
-                <button type="button" className="desktop-primary-card" onClick={() => void recover('explorer')} disabled={recoveryBusy !== null}>
-                  <span className="desktop-primary-icon">{Icon.folder({ size: 22 })}</span>
-                  <span className="desktop-primary-copy"><b>Files</b><small>Open Windows Explorer while LumenDeck grows its own file surface.</small></span>
-                  <span className="desktop-primary-go" aria-hidden="true">{Icon.play({ size: 13 })}</span>
-                </button>
                 {PRIMARY.map((item) => (
                   <button key={item.id} type="button" className="desktop-primary-card" onClick={() => setView(item.id)}>
                     <span className="desktop-primary-icon">{item.icon()}</span>
