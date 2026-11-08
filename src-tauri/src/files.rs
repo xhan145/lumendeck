@@ -252,11 +252,20 @@ pub fn files_open(app: tauri::AppHandle, path: String) -> Result<(), String> {
     }
     let ext = source.extension().and_then(|e| e.to_str())
         .unwrap_or("").to_ascii_lowercase();
-    if matches!(ext.as_str(),
-        "exe" | "com" | "bat" | "cmd" | "ps1" | "psm1" | "vbs" | "vbe"
-        | "wsf" | "wsh" | "msi" | "msp" | "scr" | "lnk" | "url" | "hta" | "reg"
+    // An unknown/default Windows file association may EXECUTE a program
+    // (.js can invoke Node, .py can invoke Python, and shortcuts are commands).
+    // This first slice only passes common passive document/media formats to
+    // the OS. The user may deliberately open other types via Explorer fallback.
+    if !matches!(ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff"
+        | "wav" | "mp3" | "flac" | "ogg" | "aiff" | "m4a" | "mid"
+        | "mp4" | "mov" | "mkv" | "webm" | "avi"
+        | "txt" | "md" | "pdf" | "rtf" | "docx" | "xlsx" | "pptx"
+        | "csv" | "log" | "json" | "toml" | "yaml" | "yml"
     ) {
-        return Err("Executable files and shortcuts must be opened through Windows Explorer for now.".into());
+        return Err(
+            "This file type may launch code or an untrusted association. Open it explicitly through Windows Explorer.".into(),
+        );
     }
     app.opener().open_path(display(&source), None::<&str>)
         .map_err(|e| format!("Windows could not open this file: {e}"))
