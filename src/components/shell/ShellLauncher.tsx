@@ -10,7 +10,8 @@ type LauncherItem =
 
 const ITEMS: LauncherItem[] = [
   { kind: 'view', id: 'desktop', label: 'Desktop', description: 'Return to the LumenDeck desktop.', keywords: 'home desktop shell', icon: () => Icon.home({ size: 19 }) },
-  { kind: 'recovery', id: 'explorer', label: 'Files', description: 'Open Windows Explorer.', keywords: 'files folders explorer', icon: () => Icon.folder({ size: 19 }) },
+  { kind: 'view', id: 'files', label: 'Files', description: 'Browse Windows files inside LumenDeck.', keywords: 'files folders drives constellation', icon: () => Icon.folder({ size: 19 }) },
+  { kind: 'recovery', id: 'explorer', label: 'Windows Explorer (fallback)', description: 'Launch the original Windows file manager.', keywords: 'explorer fallback recovery files', icon: () => Icon.folder({ size: 19 }) },
   { kind: 'view', id: 'controls', label: 'Create', description: 'Open generation controls.', keywords: 'create render generate controls', icon: () => Icon.play({ size: 19 }) },
   { kind: 'view', id: 'projects', label: 'Projects', description: 'Open creative projects.', keywords: 'projects work', icon: () => Icon.layers({ size: 19 }) },
   { kind: 'view', id: 'gallery', label: 'Gallery', description: 'Browse rendered media.', keywords: 'gallery images video media', icon: () => Icon.image({ size: 19 }) },
