@@ -43,6 +43,7 @@ function SecretField({
 }
 
 export function SettingsPage() {
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const {
     appSettings,
     backendSettings,
@@ -107,12 +108,12 @@ export function SettingsPage() {
         <header className="page-hero">
           <div>
             <p className="page-kicker">Settings</p>
-            <h1>Preferences & Diagnostics</h1>
-            <p>Configure local paths, render behavior, privacy defaults, diagnostics, and optional integration keys.</p>
+            <h1>Settings</h1>
+            <p>Everyday preferences first. Rendering internals, performance tuning, diagnostics, and integrations stay under Advanced.</p>
           </div>
           <div className="page-hero-actions">
-            <button className="btn" type="button" onClick={() => void testSelectedBackend()}>
-              {Icon.pulse()} Test backend
+            <button className="btn" type="button" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>
+              {showAdvanced ? 'Hide advanced' : 'Advanced settings'}
             </button>
             <button className="btn" type="button" onClick={confirmResetSettings}>
               Reset settings
@@ -127,19 +128,22 @@ export function SettingsPage() {
 
           <article className="card page-card">
             <div className="page-card-head">
-              <h2>Backend</h2>
+              <h2>Rendering</h2>
               <span className="chip">{backendSettings.selectedBackend}</span>
             </div>
             <label className="field">
-              <span className="field-label">Selected backend</span>
+              <span className="field-label">Rendering engine</span>
               <select value={backendSettings.selectedBackend} onChange={(event) => setPreferredBackend(event.target.value as RenderBackendId)}>
-                <option value="mock">Mock / built-in demo renderer</option>
-                <option value="bridge">Diffusers bridge: local Python model renderer</option>
-                <option value="comfyui">ComfyUI API: your running ComfyUI server</option>
+                <option value="mock">Built-in demo renderer</option>
+                <option value="bridge">Local model renderer</option>
+                <option value="comfyui">ComfyUI (advanced)</option>
               </select>
-              <span className="field-help">Mock is a placeholder/demo path. Bridge and ComfyUI are the real model-backed paths when configured.</span>
+              <span className="field-help">Built-in works without setup. Local model rendering is the normal offline path; ComfyUI is available for advanced setups.</span>
             </label>
-            <label className="field">
+            <details className="settings-details">
+              <summary>Connection & fallback options</summary>
+              <div className="settings-details-body">
+                <label className="field">
               <span className="field-label">ComfyUI URL</span>
               <input value={backendSettings.comfyUrl} placeholder="http://127.0.0.1:8188"
                 onChange={(event) => updateBackendSettings({ comfyUrl: event.target.value })} />
@@ -171,9 +175,11 @@ export function SettingsPage() {
               <button className="btn" type="button" onClick={() => updateBackendSettings({ selectedBackend: 'mock', fallbackToMock: true })}>Reset to Mock</button>
               <button className="btn" type="button" onClick={() => updateBackendSettings({ lastHealth: undefined })}>Clear health</button>
             </div>
+              </div>
+            </details>
           </article>
 
-          <article className="card page-card">
+          <article className={`card page-card settings-advanced ${showAdvanced ? 'shown' : ''}`}>
             <div className="page-card-head">
               <h2>Runtime / Model</h2>
               <span className={`chip ${bridgeModelStatus?.cuda ? 'clean' : 'warnings'}`}>{bridgeModelStatus?.device ?? 'unknown'}</span>
@@ -219,13 +225,13 @@ export function SettingsPage() {
               <span className="field-label">Startup behavior</span>
               <select value={appSettings.startupBehavior} onChange={(event) => updateAppSettings({ startupBehavior: event.target.value as AppSettings['startupBehavior'] })}>
                 <option value="guide">Open Desktop</option>
-                <option value="controls">Open Controls</option>
+                <option value="controls">Open Create</option>
                 <option value="last-view">Restore last view</option>
               </select>
             </label>
           </article>
 
-          <article className="card page-card">
+          <article className={`card page-card settings-advanced ${showAdvanced ? 'shown' : ''}`}>
             <div className="page-card-head">
               <h2>Paths</h2>
               <span className="chip">{bridgeModelFolderStatus?.usingDemo ? 'demo' : 'local'}</span>
@@ -253,7 +259,7 @@ export function SettingsPage() {
             <p className="field-help">Directory text fields are saved locally. Native folder pickers are not connected yet.</p>
           </article>
 
-          <article className="card page-card">
+          <article className={`card page-card settings-advanced ${showAdvanced ? 'shown' : ''}`}>
             <div className="page-card-head">
               <h2>Performance</h2>
               <span className="chip">{appSettings.vramSafetyMode}</span>
@@ -308,7 +314,7 @@ export function SettingsPage() {
             </button>
           </article>
 
-          <article className="card page-card">
+          <article className={`card page-card settings-advanced ${showAdvanced ? 'shown' : ''}`}>
             <div className="page-card-head">
               <h2>Developer / Diagnostics</h2>
               <span className={`chip ${appSettings.showDiagnostics ? 'warnings' : ''}`}>{appSettings.showDiagnostics ? 'shown' : 'hidden'}</span>
@@ -338,7 +344,7 @@ export function SettingsPage() {
             ) : null}
           </article>
 
-          <article className="card page-card wide">
+          <article className={`card page-card wide settings-advanced ${showAdvanced ? 'shown' : ''}`}>
             <div className="page-card-head">
               <h2>API / Integrations</h2>
               <span className="chip">masked</span>
