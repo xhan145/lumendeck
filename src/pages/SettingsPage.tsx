@@ -218,7 +218,7 @@ export function SettingsPage() {
             <label className="field">
               <span className="field-label">Startup behavior</span>
               <select value={appSettings.startupBehavior} onChange={(event) => updateAppSettings({ startupBehavior: event.target.value as AppSettings['startupBehavior'] })}>
-                <option value="guide">Open Guide</option>
+                <option value="guide">Open Desktop</option>
                 <option value="controls">Open Controls</option>
                 <option value="last-view">Restore last view</option>
               </select>
