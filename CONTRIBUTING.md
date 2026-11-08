@@ -13,9 +13,21 @@ npm install
 npm run dev -- --host 127.0.0.1
 ```
 
-Open `http://127.0.0.1:5178/`. The dev server auto-starts the local render bridge, so real
-rendering works in dev without extra terminals. For desktop-shell work see the
-"Desktop app (Windows MSI)" section of the [README](README.md).
+Open `http://127.0.0.1:14200/`. The Vite server auto-starts the local Python
+render bridge on port 8787, so a separate backend terminal is not required.
+
+For the native Windows desktop app, use a Visual Studio C++ developer shell
+(with the Windows SDK installed) and run:
+
+```bash
+npm run tauri:dev
+```
+
+The `tauri:dev` script uses `src-tauri/tauri.dev.conf.json` to skip the
+frozen Python sidecar during development; Vite already runs `bridge/server.py`.
+For a distributable `tauri build`, first create the packaged sidecar with
+`python -m pip install pyinstaller` and `python bridge/build_sidecar.py`.
+The production configuration still requires that binary.
 
 Validate your changes before opening a PR:
 
