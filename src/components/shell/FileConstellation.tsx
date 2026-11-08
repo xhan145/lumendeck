@@ -20,6 +20,9 @@ export function FileConstellation({
   onUnavailable: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const meshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const selectedRef = useRef(selectedPath);
+  selectedRef.current = selectedPath;
   const onSelectRef = useRef(onSelect);
   const onOpenRef = useRef(onOpen);
   const unavailableRef = useRef(onUnavailable);
@@ -94,13 +97,14 @@ export function FileConstellation({
     for (const star of stars) {
       const point = new THREE.Vector3(star.x, star.y, star.z);
       const color = new THREE.Color(star.color);
-      const selected = star.entry.path === selectedPath;
+      const selected = star.entry.path === selectedRef.current;
       const mesh = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({
         color: selected ? '#ffffff' : color,
       }));
       mesh.scale.setScalar(selected ? 0.31 : star.entry.isDirectory ? 0.25 : 0.15);
       mesh.position.copy(point);
       mesh.userData.path = star.entry.path;
+      mesh.userData.baseColor = star.color;
       scene.add(mesh);
       pickables.push(mesh);
 
@@ -117,6 +121,8 @@ export function FileConstellation({
         groupCenters.set(star.group, point.clone());
       }
     }
+
+    meshesRef.current = new Map(pickables.map((mesh) => [mesh.userData.path as string, mesh]));
 
     // A few section labels keep the spatial map readable at any orbit angle.
     for (const group of FILE_GROUPS) {
@@ -224,10 +230,23 @@ export function FileConstellation({
         }
       });
       sphere.dispose();
+      meshesRef.current.clear();
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [stars, selectedPath, folderName]);
+  }, [stars, folderName]);
+
+  // Selection should not destroy and recreate WebGL or reset the camera orbit.
+  useEffect(() => {
+    for (const [path, mesh] of meshesRef.current) {
+      const chosen = path === selectedPath;
+      (mesh.material as THREE.MeshBasicMaterial).color.set(
+        chosen ? '#ffffff' : (mesh.userData.baseColor as string),
+      );
+      const file = stars.find((star) => star.entry.path === path);
+      mesh.scale.setScalar(chosen ? 0.31 : file?.entry.isDirectory ? 0.25 : 0.15);
+    }
+  }, [selectedPath, stars]);
 
   return (
     <div className="files-constellation" ref={hostRef} role="img"
