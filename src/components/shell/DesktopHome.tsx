@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import type React from 'react';
 import { useStudio, type ViewId } from '../../state/store';
 import { Icon } from '../icons';
 
