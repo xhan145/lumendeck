@@ -3,6 +3,37 @@
 
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use std::process::Command;
+
+#[tauri::command]
+fn open_explorer() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("Failed to open Windows Explorer: {err}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Windows Explorer recovery is only available on Windows.".into())
+    }
+}
+
+#[tauri::command]
+fn open_task_manager() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("taskmgr.exe")
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("Failed to open Task Manager: {err}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Task Manager recovery is only available on Windows.".into())
+    }
+}
 
 fn main() {
     tauri::Builder::default()
@@ -10,6 +41,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![open_explorer, open_task_manager])
         .setup(|app| {
             // Auto-start the bundled render bridge sidecar on port 8787.
             let handle = app.handle().clone();
