@@ -10,6 +10,7 @@ import { GraphWorkspace } from './components/graph/GraphWorkspace';
 import { BrandMark, Icon } from './components/icons';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
+import { DesktopHome } from './components/shell/DesktopHome';
 import { RecipeView } from './components/recipe/RecipeView';
 import { MissionControl } from './components/creative/MissionControl';
 import { ConstellationView } from './components/constellation/ConstellationView';
@@ -30,6 +31,7 @@ import './styles/app.css';
 import './styles/glass.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
+  desktop: 'Desktop',
   mission: 'Mission Control',
   constellation: 'Open Constellation',
   overview: 'Studio Overview',
@@ -103,7 +105,8 @@ export function App() {
   useEffect(() => { void probeBridge(); }, [probeBridge]);
 
   const page =
-    view === 'mission' ? <MissionControl />
+    view === 'desktop' ? <DesktopHome />
+      : view === 'mission' ? <MissionControl />
       : view === 'constellation' ? <ConstellationView />
       : view === 'overview' ? <StudioOverview />
       : view === 'craft' ? <CraftInsights />
