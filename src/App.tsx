@@ -11,6 +11,7 @@ import { BrandMark, Icon } from './components/icons';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { DesktopHome } from './components/shell/DesktopHome';
+import { ShellLauncher } from './components/shell/ShellLauncher';
 import { RecipeView } from './components/recipe/RecipeView';
 import { MissionControl } from './components/creative/MissionControl';
 import { ConstellationView } from './components/constellation/ConstellationView';
@@ -88,6 +89,7 @@ export function App() {
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   // The launch splash plays fully on EVERY launch; the app boots behind it.
   const [splashDone, setSplashDone] = useState(false);
+  const [launcherOpen, setLauncherOpen] = useState(false);
   // Bars stay revealed while the splash plays (no hidden chrome on arrival).
   const autohideArmed = chromeAutohide && splashDone;
   const top = useAutoHide('top', autohideArmed);
@@ -103,6 +105,17 @@ export function App() {
   }, [splashDone]);
 
   useEffect(() => { void probeBridge(); }, [probeBridge]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.code === 'Space') {
+        event.preventDefault();
+        setLauncherOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const page =
     view === 'desktop' ? <DesktopHome />
@@ -142,8 +155,11 @@ export function App() {
           </div>
           <span className="view-title">{VIEW_TITLES[view] ?? 'Desktop'}</span>
           <div className="topbar-right">
-            <BridgeStatus />
-            <HealthChip />
+            {view !== 'desktop' ? <BridgeStatus /> : null}
+            {view !== 'desktop' ? <HealthChip /> : null}
+            <button className="btn controls-toggle" type="button" aria-label="Open launcher" onClick={() => setLauncherOpen(true)}>
+              {Icon.target({ size: 18 })} Search
+            </button>
             <button className="btn controls-toggle" type="button" aria-label="Open Create" onClick={() => setView('controls')}>
               {Icon.play({ size: 18 })} Create
             </button>
@@ -178,6 +194,7 @@ export function App() {
       </div>
       {autohideArmed && !top.visible && <div className="chrome-strip top" aria-hidden="true" />}
       {autohideArmed && !left.visible && <div className="chrome-strip left" aria-hidden="true" />}
+      <ShellLauncher open={launcherOpen && splashDone} onClose={() => setLauncherOpen(false)} />
       {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
     </>
   );
