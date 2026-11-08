@@ -12,6 +12,7 @@ import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
 import { DesktopHome } from './components/shell/DesktopHome';
 import { ShellLauncher } from './components/shell/ShellLauncher';
+import { ShellDock } from './components/shell/ShellDock';
 import { RecipeView } from './components/recipe/RecipeView';
 import { MissionControl } from './components/creative/MissionControl';
 import { ConstellationView } from './components/constellation/ConstellationView';
@@ -90,8 +91,9 @@ export function App() {
   // The launch splash plays fully on EVERY launch; the app boots behind it.
   const [splashDone, setSplashDone] = useState(false);
   const [launcherOpen, setLauncherOpen] = useState(false);
-  // Bars stay revealed while the splash plays (no hidden chrome on arrival).
-  const autohideArmed = chromeAutohide && splashDone;
+  const desktopMode = view === 'desktop';
+  // Desktop owns its own dock; studio chrome only auto-hides in tool views.
+  const autohideArmed = chromeAutohide && splashDone && !desktopMode;
   const top = useAutoHide('top', autohideArmed);
   const left = useAutoHide('left', autohideArmed);
   // While the splash covers the app, the shell is `inert`: the overlay blocks
@@ -143,8 +145,8 @@ export function App() {
   return (
     <>
       <StarfieldCanvas />
-      <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''}`}>
-        <header
+      <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''} ${desktopMode ? 'desktop-shell' : ''}`}>
+        {!desktopMode ? <header
           className={`topbar ${autohideArmed && !top.visible ? 'chrome-hidden' : ''}`}
           {...top.barProps}
         >
@@ -177,14 +179,14 @@ export function App() {
               {Icon.layers({ size: 18 })}
             </button>
           </div>
-        </header>
-        <div className="workspace">
-          <div
+        </header> : null}
+        <div className={`workspace ${desktopMode ? 'desktop-workspace' : ''}`}>
+          {!desktopMode ? <div
             className={`chrome-left ${autohideArmed && !left.visible ? 'chrome-hidden' : ''}`}
             {...left.barProps}
           >
             <NavRail view={view} setView={setView} />
-          </div>
+          </div> : null}
           <div className="main-pane">
             <div className="view-fade" key={view}>
               {page}
@@ -194,6 +196,7 @@ export function App() {
       </div>
       {autohideArmed && !top.visible && <div className="chrome-strip top" aria-hidden="true" />}
       {autohideArmed && !left.visible && <div className="chrome-strip left" aria-hidden="true" />}
+      {desktopMode && splashDone ? <ShellDock onOpenLauncher={() => setLauncherOpen(true)} /> : null}
       <ShellLauncher open={launcherOpen && splashDone} onClose={() => setLauncherOpen(false)} />
       {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
     </>
