@@ -1676,3 +1676,15 @@
   .desktop-recovery { align-items: flex-start; flex-direction: column; }
   .desktop-recovery-actions { justify-content: flex-start; }
 }
+
+
+.desktop-primary-card:disabled,
+.desktop-recovery-actions .btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+  transform: none;
+}
+.desktop-recovery-status {
+  color: var(--ld-text);
+  font-weight: 600;
+}
