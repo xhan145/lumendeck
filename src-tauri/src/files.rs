@@ -2,6 +2,9 @@
 //! Real Windows paths are never copied into a proprietary store. Directory
 //! enumeration is bounded; all writes are explicit, single-item operations.
 use std::fs;
+use std::io::Read;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri_plugin_opener::OpenerExt;
@@ -113,6 +116,7 @@ fn entry_from(dir_entry: fs::DirEntry) -> Result<FileEntry, std::io::Error> {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetLogicalDrives() -> u32;
+    fn MoveFileW(existing: *const u16, destination: *const u16) -> i32;
 }
 
 /// Common user places plus actual mounted drive letters (not synthetic demos).
@@ -216,8 +220,26 @@ pub fn files_rename(path: String, new_name: String) -> Result<(), String> {
     fs::symlink_metadata(&source).map_err(|e| format!("Cannot access item: {e}"))?;
     let target = parent.join(new_name);
     if target == source { return Ok(()); }
-    if target.exists() { return Err("An item with that name already exists.".into()); }
-    fs::rename(&source, target).map_err(|e| format!("Could not rename item: {e}"))
+    // symlink_metadata also sees dangling symlink destinations.
+    if fs::symlink_metadata(&target).is_ok() {
+        return Err("An item with that name already exists.".into());
+    }
+    // On Windows, MoveFileW fails if the target exists. Unlike a separate
+    // exists() check followed by fs::rename, it cannot replace a file created
+    // between the check and the rename.
+    #[cfg(target_os = "windows")]
+    {
+        let from: Vec<u16> = source.as_os_str().encode_wide().chain([0]).collect();
+        let to: Vec<u16> = target.as_os_str().encode_wide().chain([0]).collect();
+        if unsafe { MoveFileW(from.as_ptr(), to.as_ptr()) } == 0 {
+            return Err(format!("Could not rename item: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(&source, target).map_err(|e| format!("Could not rename item: {e}"))
+    }
 }
 
 /// Explicit external opening uses the already-installed Tauri opener plugin.
@@ -254,7 +276,15 @@ pub fn files_preview(path: String) -> Result<Vec<u8>, String> {
     if !meta.is_file() || meta.len() > MAX_PREVIEW_BYTES {
         return Err("Preview unavailable for images over 3 MB.".into());
     }
-    fs::read(file).map_err(|e| format!("Cannot read preview: {e}"))
+    // Bound the actual read even if the file grows after the metadata check.
+    let input = fs::File::open(file).map_err(|e| format!("Cannot read preview: {e}"))?;
+    let mut data = Vec::new();
+    input.take(MAX_PREVIEW_BYTES + 1)
+        .read_to_end(&mut data).map_err(|e| format!("Cannot read preview: {e}"))?;
+    if data.len() as u64 > MAX_PREVIEW_BYTES {
+        return Err("Preview unavailable for images over 3 MB.".into());
+    }
+    Ok(data)
 }
 
 #[cfg(test)]
