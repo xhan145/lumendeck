@@ -125,7 +125,7 @@ export function App() {
       : view === 'performance' ? <PerformancePage />
       : view === 'support' ? <SupportPage />
       : view === 'credits' ? <CreditsPage />
-      : <MissionControl />;
+      : <DesktopHome />;
 
   return (
     <>
@@ -144,8 +144,8 @@ export function App() {
           <div className="topbar-right">
             <BridgeStatus />
             <HealthChip />
-            <button className="btn controls-toggle" type="button" aria-label="Open Controls" onClick={() => setView('controls')}>
-              {Icon.gear({ size: 18 })} Controls
+            <button className="btn controls-toggle" type="button" aria-label="Open Create" onClick={() => setView('controls')}>
+              {Icon.play({ size: 18 })} Create
             </button>
             <button className="btn icon controls-toggle" type="button" aria-label="Open Settings" onClick={() => setView('settings')}>
               {Icon.gear({ size: 18 })}
