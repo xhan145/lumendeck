@@ -1,15 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
+import { recoveryCommand, type RecoveryAction } from '../core/shell/recovery';
 
-export type RecoveryAction = 'explorer' | 'task-manager';
-
-async function invokeRecovery(command: string): Promise<void> {
-  await invoke(command);
-}
+export type { RecoveryAction } from '../core/shell/recovery';
 
 export async function runRecoveryAction(action: RecoveryAction): Promise<void> {
-  if (action === 'explorer') {
-    await invokeRecovery('open_explorer');
-    return;
-  }
-  await invokeRecovery('open_task_manager');
+  await invoke(recoveryCommand(action));
 }
