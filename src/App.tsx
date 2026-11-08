@@ -160,8 +160,8 @@ export function App() {
           </div>
           <span className="view-title">{VIEW_TITLES[view] ?? 'Desktop'}</span>
           <div className="topbar-right">
-            {view !== 'desktop' ? <BridgeStatus /> : null}
-            {view !== 'desktop' ? <HealthChip /> : null}
+            <BridgeStatus />
+            <HealthChip />
             <button className="btn controls-toggle" type="button" aria-label="Open launcher" onClick={() => setLauncherOpen(true)}>
               {Icon.target({ size: 18 })} Search
             </button>
