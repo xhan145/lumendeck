@@ -34,5 +34,7 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Rust check
+      - name: Rust check (development config without packaged sidecar)
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
         run: cargo check --manifest-path src-tauri/Cargo.toml
