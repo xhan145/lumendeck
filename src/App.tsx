@@ -47,7 +47,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   graph: 'Graph',
   shelf: 'Model Shelf',
   gallery: 'Gallery',
-  controls: 'Controls',
+  controls: 'Create',
   settings: 'Settings',
   diagnostics: 'Diagnostics',
   performance: 'Performance',
@@ -63,7 +63,7 @@ function HealthChip() {
   const cls = errors > 0 ? 'errors' : warnings > 0 ? 'warnings' : 'clean';
   const label = errors > 0 ? `${errors} error${errors === 1 ? '' : 's'}` : warnings > 0 ? `${warnings} warning${warnings === 1 ? '' : 's'}` : 'Healthy';
   return (
-    <button className={`chip health-chip ${cls}`} type="button" onClick={() => setView('graph')} title="Open Graph Health">
+    <button className={`chip health-chip ${cls}`} type="button" onClick={() => setView('diagnostics')} title="Open Diagnostics">
       {errors > 0 ? Icon.error({ size: 14 }) : warnings > 0 ? Icon.warning({ size: 14 }) : Icon.ok({ size: 14 })}
       {label}
     </button>
