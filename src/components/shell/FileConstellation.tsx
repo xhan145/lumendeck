@@ -521,7 +521,7 @@ export function FileConstellation({
         unit.updateMatrix();
         cores.setMatrixAt(index, unit.matrix);
         tint.set(focused ? '#ffffff' : star.color);
-        if (contextual && !focused) {
+        if (contextual && lens && !focused) {
           const score = lens.scoreByPath.get(star.entry.path) ?? 0;
           if (score > 0) tint.lerp(contextualWhite, 0.17 + score / 260);
           else if (!isHover) tint.multiplyScalar(mode === 'focus' ? 0.21 : 0.49);
@@ -643,7 +643,12 @@ export function FileConstellation({
         const k = i * 3;
         const point = projectMiniMapPoint(currentXYZ[k], currentXYZ[k + 1], miniMapBounds);
         const active = selectedRef.current === stars[i].entry.path;
-        ctx.globalAlpha = laterModified[i] && !active ? 0.38 : 0.94;
+        const { lens, mode } = contextViewRef.current;
+        const related = mode !== 'off' && lens?.scoreByPath.has(stars[i].entry.path);
+        const contextual = mode !== 'off' && lens?.anchor.path === selectedRef.current;
+        const contextDim = contextual && !active && !related
+          ? mode === 'focus' ? 0.25 : 0.55 : 1;
+        ctx.globalAlpha = (laterModified[i] && !active ? 0.38 : 0.94) * contextDim;
         ctx.fillStyle = active ? '#ffffff' : stars[i].color;
         ctx.beginPath();
         ctx.arc(point.x, point.y, active ? 4.6 : stars[i].entry.isDirectory ? 3 : 2.1,
