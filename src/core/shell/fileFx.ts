@@ -11,7 +11,7 @@ export interface FileFxPreset {
 
 export const FILE_FX_PRESETS: Readonly<Record<FileFxMode, FileFxPreset>> = {
   off: {
-    backgroundStars: 280, ambientDust: 0, clusterMist: 0,
+    backgroundStars: 0, ambientDust: 0, clusterMist: 0,
     bloom: false, bloomStrength: 0, pixelRatioCap: 1.25,
   },
   balanced: {
