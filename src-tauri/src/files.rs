@@ -339,4 +339,63 @@ mod tests {
         assert_eq!(kind_of(Path::new("cover.png"), false).0, "image");
         assert_eq!(kind_of(Path::new("folder"), true).0, "folder");
     }
+
+    fn test_folder(name: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let folder = std::env::temp_dir()
+            .join(format!("lumendeck-files-test-{name}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&folder).unwrap();
+        folder
+    }
+
+    #[test]
+    fn directory_listing_reads_real_files_without_recursive_crawl() {
+        let root = test_folder("listing");
+        std::fs::write(root.join("song.wav"), b"hello").unwrap();
+        std::fs::create_dir(root.join("Subfolder")).unwrap();
+        std::fs::write(root.join("Subfolder").join("child.txt"), b"child").unwrap();
+
+        let list = super::files_list_sync(Some(super::display(&root))).unwrap();
+        assert_eq!(list.entries.len(), 2);
+        assert_eq!(list.entries[0].name, "Subfolder");
+        assert_eq!(list.entries[0].kind, "folder");
+        assert_eq!(list.entries[1].kind, "audio");
+        assert!(!list.truncated);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn creates_folder_and_prevents_overwriting_existing_rename_target() {
+        let root = test_folder("rename");
+        let root_text = super::display(&root);
+        super::create_folder_sync(root_text, "Created".into()).unwrap();
+        assert!(root.join("Created").is_dir());
+        assert!(super::create_folder_sync(super::display(&root), "../escape".into()).is_err());
+        std::fs::write(root.join("source.txt"), b"source").unwrap();
+        std::fs::write(root.join("existing.txt"), b"existing").unwrap();
+
+        assert!(super::rename_sync(super::display(&root.join("source.txt")), "existing.txt".into()).is_err());
+        assert_eq!(std::fs::read(root.join("existing.txt")).unwrap(), b"existing");
+        assert_eq!(std::fs::read(root.join("source.txt")).unwrap(), b"source");
+        super::rename_sync(super::display(&root.join("source.txt")), "renamed.txt".into()).unwrap();
+        assert_eq!(std::fs::read(root.join("renamed.txt")).unwrap(), b"source");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preview_is_bounded_and_rejects_non_image_extensions() {
+        let root = test_folder("preview");
+        let image = root.join("cover.png");
+        std::fs::write(&image, b"\x89PNG").unwrap();
+        assert_eq!(super::preview_sync(super::display(&image)).unwrap(), b"\x89PNG");
+        std::fs::write(root.join("notes.txt"), b"note").unwrap();
+        assert!(super::preview_sync(super::display(&root.join("notes.txt"))).is_err());
+
+        std::fs::write(&image, vec![0u8; (super::MAX_PREVIEW_BYTES + 1) as usize]).unwrap();
+        assert!(super::preview_sync(super::display(&image)).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
