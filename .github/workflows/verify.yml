@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Repeated PR pushes should not compile the same Windows toolchain in parallel.
+# Keep manual workflow_dispatch runs intact for explicit verification.
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify-windows:
     runs-on: windows-latest
