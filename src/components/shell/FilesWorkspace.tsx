@@ -6,8 +6,15 @@ import {
 } from '../../bridge/files';
 import { runRecoveryAction } from '../../bridge/shellRecovery';
 import { filterAndSortFiles, humanFileSize, makeFileStars, type FileSort } from '../../core/shell/fileMap';
+import { fileBreadcrumbs } from '../../core/shell/fileNavigation';
+import {
+  readSpatialBookmarks, removeSpatialBookmark, saveSpatialBookmark,
+  sameFolderPath, writeSpatialBookmarks,
+  type SpatialBookmark, type SpatialCamera,
+} from '../../core/shell/fileBookmarks';
 import { Icon } from '../icons';
 import { FileConstellation } from './FileConstellation';
+import { FileInspector } from './FileInspector';
 import { useStudio } from '../../state/store';
 import type { FileFxMode } from '../../state/appSettings';
 import '../../styles/files.css';
@@ -48,13 +55,14 @@ function FileThumbnail({ entry }: { entry: FileEntry }) {
     : <span className={`files-file-icon kind-${entry.kind}`}><FileGlyph kind={entry.kind} size={25} /></span>;
 }
 
-function dateLabel(ms: number | null): string {
-  return ms === null ? 'Unknown' : new Date(ms).toLocaleString();
-}
-
-function folderLabel(path: string): string {
+ function folderLabel(path: string): string {
   const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+function getBookmarkStorage(): Storage | null {
+  try { return typeof window === 'undefined' ? null : window.localStorage; }
+  catch { return null; }
 }
 
 export function FilesWorkspace() {
@@ -62,6 +70,12 @@ export function FilesWorkspace() {
   const fxMode = useStudio((state) => state.appSettings.fileFxMode ?? 'cinematic');
   const updateAppSettings = useStudio((state) => state.updateAppSettings);
   const [locations, setLocations] = useState<FileLocation[]>([]);
+  const [bookmarks, setBookmarks] = useState<SpatialBookmark[]>(() =>
+    readSpatialBookmarks(getBookmarkStorage()));
+  const [cameraRequest, setCameraRequest] = useState<{
+    id: number; folderPath: string; camera: SpatialCamera;
+  } | null>(null);
+  const cameraRequestId = useRef(0);
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [targetPath, setTargetPath] = useState<string | null>(null);
   const [address, setAddress] = useState('');
@@ -161,6 +175,61 @@ export function FilesWorkspace() {
   );
   const selected = listing?.entries.find((item) => item.path === selectedPath) ?? null;
   const visibleStars = useMemo(() => makeFileStars(shown), [shown]);
+  const breadcrumbs = useMemo(() => fileBreadcrumbs(listing?.path ?? ''), [listing?.path]);
+  const currentBookmarked = !!listing && bookmarks.some((item) =>
+    sameFolderPath(item.folderPath, listing.path));
+
+  const saveView = (camera: SpatialCamera | null = null) => {
+    if (!listing) return;
+    const previous = bookmarks.find((item) => sameFolderPath(item.folderPath, listing.path));
+    const next = saveSpatialBookmark(
+      bookmarks, listing.path, folderLabel(listing.path),
+      camera ?? previous?.camera ?? null, Date.now(),
+    );
+    if (!writeSpatialBookmarks(getBookmarkStorage(), next)) {
+      setError('Could not save view locally. Your files are unchanged.');
+      return;
+    }
+    setBookmarks(next);
+    setNotice(camera ? 'Spatial view and camera saved on this device.' : 'Folder bookmarked on this device.');
+    setError(null);
+  };
+
+  const restoreView = (bookmark: SpatialBookmark) => {
+    setMode('constellation');
+    setSelectedPath(null);
+    if (bookmark.camera) {
+      setCameraRequest({
+        id: ++cameraRequestId.current,
+        folderPath: bookmark.folderPath,
+        camera: bookmark.camera,
+      });
+    } else {
+      setCameraRequest(null);
+    }
+    navigate(bookmark.folderPath);
+  };
+
+  const removeView = (id: string) => {
+    const next = removeSpatialBookmark(bookmarks, id);
+    if (!writeSpatialBookmarks(getBookmarkStorage(), next)) {
+      setError('Could not update local bookmarks.');
+      return;
+    }
+    setBookmarks(next);
+    setNotice('Saved view removed. No folders or files were deleted.');
+  };
+
+  const copyPath = async (path: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this environment.');
+      await navigator.clipboard.writeText(path);
+      setNotice('Path copied to clipboard.');
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
 
   const activate = async (entry: FileEntry) => {
     if (entry.isDirectory) {
