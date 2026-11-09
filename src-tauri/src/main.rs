@@ -86,6 +86,7 @@ fn main() {
             files::files_rename,
             files::files_open,
             files::files_preview,
+            files::files_preview_text,
         ])
         .setup(|app| {
             // Auto-start the bundled render bridge sidecar on port 8787.
