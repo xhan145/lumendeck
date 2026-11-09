@@ -476,7 +476,7 @@ mod tests {
         assert!(sample.truncated);
         assert_eq!(sample.bytes_shown as u64, super::MAX_TEXT_PREVIEW_BYTES);
 
-        std::fs::write(&file, b"not\\0text").unwrap();
+        std::fs::write(&file, b"not\0text").unwrap();
         assert!(super::text_preview_sync(super::display(&file)).is_err());
         std::fs::write(root.join("unsafe.exe"), b"program").unwrap();
         assert!(super::text_preview_sync(super::display(&root.join("unsafe.exe"))).is_err());
