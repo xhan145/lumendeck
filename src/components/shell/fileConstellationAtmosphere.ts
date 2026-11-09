@@ -73,7 +73,9 @@ function addLayer(
   focus?: Float32Array,
 ): ParticleLayer {
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const positionAttribute = new THREE.BufferAttribute(positions, 3);
+  if (focus) positionAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('position', positionAttribute);
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
   geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
