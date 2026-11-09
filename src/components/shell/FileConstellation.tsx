@@ -18,6 +18,10 @@ import {
 } from '../../core/shell/fileMiniMap';
 import type { SpatialCamera } from '../../core/shell/fileBookmarks';
 import { createFileNebulaBackdrop } from './fileConstellationBackdrop';
+import {
+  projectFileContext, type FileContextLens, type FileContextMode,
+} from '../../core/shell/fileContext';
+import { createContextConnections } from './fileConstellationContextLinks';
 
 interface Props {
   entries: FileEntry[];
@@ -25,6 +29,8 @@ interface Props {
   folderName: string;
   folderPath: string;
   fxMode: FileFxMode;
+  contextLens: FileContextLens | null;
+  contextMode: FileContextMode;
   cameraRequest?: { id: number; folderPath: string; camera: SpatialCamera } | null;
   onSaveView?: (camera: SpatialCamera) => void;
   onSelect: (entry: FileEntry) => void;
@@ -190,7 +196,8 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]): (xyz: Float32Array)
  * The 3D presentation NEVER changes underlying filesystem paths.
  */
 export function FileConstellation({
-  entries, selectedPath, folderName, folderPath, fxMode, cameraRequest, onSaveView,
+  entries, selectedPath, folderName, folderPath, fxMode,
+  contextLens, contextMode, cameraRequest, onSaveView,
   onSelect, onOpen, onUnavailable,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -209,6 +216,9 @@ export function FileConstellation({
     folderPath: string; position: THREE.Vector3; target: THREE.Vector3;
   } | null>(null);
   const focusRef = useRef<(selected: string | null, hovered: string | null) => void>(() => {});
+  const updateContextRef = useRef<() => void>(() => {});
+  const contextViewRef = useRef({ lens: contextLens, mode: contextMode });
+  contextViewRef.current = { lens: contextLens, mode: contextMode };
   const zoomCommandRef = useRef<(action: FileZoomAction) => void>(() => {});
   const selectedRef = useRef(selectedPath);
   const onSelectRef = useRef(onSelect);
@@ -349,6 +359,8 @@ export function FileConstellation({
     }
 
     const updateLinks = createLinks(scene, stars);
+    const contextWires = createContextConnections(scene, stars);
+    contextWires.setLens(contextViewRef.current.lens, contextViewRef.current.mode);
 
     // One instanced GPU draw for all selectable file cores.
     const sphere = new THREE.IcosahedronGeometry(1, 1);
