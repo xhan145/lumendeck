@@ -511,7 +511,8 @@ export function FileConstellation({
       if (action === 'focus') {
         const index = selectedRef.current ? byPath.get(selectedRef.current) : undefined;
         if (index === undefined) return;
-        const point = starVector(stars[index]);
+        const k = index * 3;
+        const point = new THREE.Vector3(currentXYZ[k], currentXYZ[k + 1], currentXYZ[k + 2]);
         const direction = camera.position.clone().sub(controls.target);
         if (direction.lengthSq() < 0.0001) direction.set(0, 0, 1);
         direction.normalize().multiplyScalar(FILE_ZOOM.focusDistance);
@@ -616,6 +617,7 @@ export function FileConstellation({
     let request = 0;
     let lastFrame = 0;
     let lastRendered = 0;
+    let lastTimeLabel = 0;
     let startTime = 0;
     const frame = (now: number) => {
       try {
@@ -630,6 +632,19 @@ export function FileConstellation({
         const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
         const frameDuration = lastFrame ? now - lastFrame : 16;
         lastFrame = now;
+        if (timeEnabledRef.current && timePlayingRef.current &&
+            temporalBounds?.distinctDates && !reducedMotion) {
+          const fraction = Math.max(0, Math.min(frameDuration, 70)) /
+            (FILE_TIME_DURATION_SECONDS * 1000);
+          timePositionRef.current = (timePositionRef.current + fraction) % 1;
+          projectTime();
+          // Only the slider/date label updates through React. Mesh motion
+          // remains on the renderer's own rAF, without React tree churn.
+          if (now - lastTimeLabel >= 120) {
+            lastTimeLabel = now;
+            setTimePosition(timePositionRef.current);
+          }
+        }
         if (flight) {
           if (flight.startedAt === null) flight.startedAt = now;
           const progress = Math.min(1, (now - flight.startedAt) / FILE_ZOOM.transitionMs);
@@ -703,6 +718,7 @@ export function FileConstellation({
       };
       controls.dispose();
       focusRef.current = () => {};
+      projectTimeRef.current = () => {};
       hoverRef.current = null;
       pipeline?.dispose();
       atmosphere.dispose();
@@ -732,7 +748,7 @@ export function FileConstellation({
 
   // Selection changes do not recreate the canvas, camera or particle fields.
   useEffect(() => {
-    focusRef.current(selectedPath, hoverRef.current);
+    projectTimeRef.current();
   }, [selectedPath, stars]);
 
   const canFocusSelected = selectedPath !== null &&
