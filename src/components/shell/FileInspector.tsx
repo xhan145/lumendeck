@@ -77,7 +77,7 @@ function InspectorText({ entry }: { entry: FileEntry }) {
 }
 
 export function FileInspector({
-  selected, listing, onOpen, onRename, onCopyPath, onSelectRelated,
+  selected, listing, onOpen, onRename, onCopyPath, onSelectRelated, onClose,
 }: {
   selected: FileEntry | null;
   listing: DirectoryListing | null;
@@ -85,6 +85,7 @@ export function FileInspector({
   onRename: () => void;
   onCopyPath: (path: string) => void;
   onSelectRelated: (entry: FileEntry) => void;
+  onClose?: () => void;
 }) {
   const histogram = useMemo(() =>
     modificationHistogram(listing?.entries ?? [], selected?.path ?? null),
@@ -94,9 +95,13 @@ export function FileInspector({
     listing.entries.filter((entry) => entry.kind === selected.kind && entry.path !== selected.path)
       .slice(0, 5), [listing, selected]);
 
-  return <aside className="files-inspector" aria-label="Selected file details">
+  return <aside id="files-inspector-panel" className="files-inspector"
+    aria-label="Selected file details">
     <div className="files-inspector-section-head">
-      <h3>Inspector</h3><span>LOCAL / READ FIRST</span>
+      <h3>Inspector</h3>
+      <span>LOCAL / READ FIRST</span>
+      <button type="button" className="files-inspector-close"
+        aria-label="Close inspector" onClick={onClose}>{Icon.close({ size: 15 })}</button>
     </div>
     {selected ? (
       <>
