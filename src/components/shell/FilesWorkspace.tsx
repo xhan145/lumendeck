@@ -89,6 +89,7 @@ export function FilesWorkspace() {
   const [editName, setEditName] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -322,7 +323,7 @@ export function FilesWorkspace() {
           <p>The browser preview cannot read your Windows drives. Open the native Tauri window using <code>npm.cmd run tauri:dev</code>.</p>
         </div>
       ) : (
-        <div className="files-layout">
+        <div className={`files-layout ${inspectorOpen ? 'files-inspector-open' : ''}`}>
           <aside className="files-places" aria-label="Places and drives">
             <h2>Places</h2>
             {locations.filter((place) => place.kind !== 'drive').map((place) => (
@@ -426,6 +427,11 @@ export function FilesWorkspace() {
                 disabled={!listing || loading}
                 onClick={() => saveView()}>
                 {Icon.save({ size: 15 })} {currentBookmarked ? 'Saved folder' : 'Bookmark'}
+              </button>
+              <button className="btn files-inspector-toggle" type="button"
+                aria-controls="files-inspector-panel" aria-expanded={inspectorOpen}
+                onClick={() => setInspectorOpen((value) => !value)}>
+                {Icon.target({ size: 15 })} Inspector
               </button>
               <button className="btn files-new-button" type="button" disabled={!listing || loading}
                 onClick={() => beginEdit('new-folder')}>{Icon.plus({ size: 15 })} New folder</button>
@@ -540,6 +546,7 @@ export function FilesWorkspace() {
           <FileInspector
             selected={selected}
             listing={listing}
+            onClose={() => setInspectorOpen(false)}
             onOpen={(entry) => { void activate(entry); }}
             onRename={() => beginEdit('rename')}
             onCopyPath={(path) => { void copyPath(path); }}
