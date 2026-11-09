@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { FileEntry, FileKind } from '../../bridge/files';
@@ -801,9 +801,21 @@ export function FileConstellation({
     stars.some((star) => star.entry.path === selectedPath);
   const canNavigateTime = !!temporalBounds?.distinctDates;
   const isPlayingTime = canNavigateTime && timeEnabled && timePlaying && !reducedMotion;
-  const shownTime = temporalBounds
-    ? new Date(fileTimeAt(temporalBounds, timePosition)).toLocaleString()
-    : 'No modification dates available';
+  const shownDate = temporalBounds
+    ? new Date(fileTimeAt(temporalBounds, timePosition))
+    : null;
+  const dateLabel = shownDate
+    ? shownDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
+    : 'No recorded dates';
+  const hourLabel = shownDate
+    ? shownDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : 'Timestamp unavailable';
+  const rangeLabel = (timestamp: number) =>
+    new Date(timestamp).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  const timelineFill = `${Math.round(timePosition * 100)}%`;
+  const representedGroups = FILE_GROUPS.map((group) => ({
+    ...group, count: stars.filter((star) => star.group === group.kind).length,
+  })).filter((group) => group.count > 0);
 
   return (
     <div className="files-constellation" ref={hostRef}
@@ -821,9 +833,17 @@ export function FileConstellation({
         event.preventDefault();
         zoomCommandRef.current(action);
       }}>
+      <div className="files-space-heading" aria-hidden="true">
+        <span className="files-space-heading-kicker">LUMENDECK / SPATIAL ARCHIVE</span>
+        <strong title={folderName}>{folderName}</strong>
+        <span className="files-space-heading-sub">
+          {stars.length} FILE STARS <span className="files-heading-divider">/</span> FOUR DIMENSIONS
+        </span>
+      </div>
       <div className="files-space-help" aria-hidden="true">
-        <span>Wheel to zoom toward cursor</span><span>Pinch to zoom</span>
-        <span>Drag to orbit</span><span>Double-click a star to open</span>
+        <span>SCROLL <b>ZOOM</b></span>
+        <span>DRAG <b>ORBIT</b></span>
+        <span>DOUBLE CLICK <b>OPEN</b></span>
       </div>
       <div className="files-zoom-controls" role="group" aria-label="3D constellation zoom controls">
         <button type="button" aria-label="Zoom in" title="Zoom in (+)"
@@ -839,46 +859,68 @@ export function FileConstellation({
       </div>
       <section className="files-time-rail" aria-label="Fourth dimension: file modification time">
         <div className="files-time-title">
-          <label className="files-time-toggle" title="Move stars through a 3D projection of their last-modified timestamps">
+          <label className="files-time-toggle" title="Project real last-modified dates into the constellation">
             <input type="checkbox" checked={timeEnabled}
               onChange={(event) => toggleTime(event.target.checked)} />
-            <span>4D TIME</span>
+            <span className="files-time-4d-mark">IV</span>
+            <span>TIME FIELD</span>
           </label>
           <output className="files-time-readout" aria-label="Selected last-modified date">
-            {shownTime}
+            <span className="files-time-date">{dateLabel}</span>
+            <span className="files-time-clock">{hourLabel}</span>
           </output>
           <span className="files-time-sample">
-            {temporalBounds ? `${temporalBounds.datedCount}/${stars.length} dated` : 'No dated stars'}
+            {temporalBounds ? `${temporalBounds.datedCount} OF ${stars.length} DATED` : 'NO DATED STARS'}
           </span>
         </div>
         <div className="files-time-scrubber">
           <button type="button" className="files-time-play"
             aria-label={isPlayingTime ? 'Pause fourth-dimensional timeline' : 'Play fourth-dimensional timeline'}
             disabled={!timeEnabled || !canNavigateTime || reducedMotion}
-            onClick={togglePlay}>{isPlayingTime ? 'Ⅱ Pause' : '▶ Play'}</button>
-          <label className="files-time-range-label">
-            <input type="range" min="0" max={FILE_TIME_STEPS} step="1"
-              aria-label="Time position from earliest to latest file modification"
-              disabled={!timeEnabled || !canNavigateTime}
-              value={Math.round(timePosition * FILE_TIME_STEPS)}
-              onChange={(event) => scrubTime(Number(event.target.value) / FILE_TIME_STEPS)} />
-          </label>
+            onClick={togglePlay}>
+            <span aria-hidden="true">{isPlayingTime ? 'Ⅱ' : '▶'}</span>
+            {isPlayingTime ? 'Pause' : 'Play'}
+          </button>
+          <div className="files-time-track">
+            <label className="files-time-range-label">
+              <input type="range" min="0" max={FILE_TIME_STEPS} step="1"
+                aria-label="Time position from earliest to latest file modification"
+                disabled={!timeEnabled || !canNavigateTime}
+                style={{ '--time-progress': timelineFill } as CSSProperties}
+                value={Math.round(timePosition * FILE_TIME_STEPS)}
+                onChange={(event) => scrubTime(Number(event.target.value) / FILE_TIME_STEPS)} />
+            </label>
+            <div className="files-time-range-dates" aria-hidden="true">
+              <span>{temporalBounds ? rangeLabel(temporalBounds.firstMs) : 'EARLIEST'}</span>
+              <span>{temporalBounds ? rangeLabel(temporalBounds.lastMs) : 'LATEST'}</span>
+            </div>
+          </div>
           <button type="button" disabled={!timeEnabled || !canNavigateTime}
-            onClick={() => scrubTime(0)} title="Earliest last-modified date">Earliest</button>
+            onClick={() => scrubTime(0)} title="Jump to earliest modification date">Start</button>
           <button type="button" disabled={!timeEnabled || !canNavigateTime}
-            onClick={() => scrubTime(1)} title="Latest last-modified date">Latest</button>
+            onClick={() => scrubTime(1)} title="Jump to latest modification date">End</button>
         </div>
         <p className="files-time-disclaimer">
           {canNavigateTime
-            ? 'Modification dates projected into space. Dim stars were modified later than the playhead; this is not file-version history.'
-            : 'Needs at least two distinct file modification dates. No historical positions or versions are invented.'}
+            ? 'Projected modification time, not historical file versions. Dim stars were modified later than the playhead.'
+            : 'Requires two distinct modification dates. No historical files or dates are invented.'}
         </p>
       </section>
       <div className="files-space-legend" aria-hidden="true">
-        <span className="files-space-legend-head">LIVE CONSTELLATION</span>
-        <span>● Folder stars are larger</span>
-        <span>✦ Connections reflect folder membership</span>
-        <span>Cosmetic clusters never move files</span>
+        <span className="files-space-legend-head">CONSTELLATION INDEX</span>
+        <div className="files-legend-total"><strong>{stars.length}</strong><span>VISIBLE STARS</span></div>
+        <div className="files-legend-groups">
+          {representedGroups.slice(0, 5).map((group) => (
+            <span className="files-legend-group" key={group.kind}>
+              <i style={{ backgroundColor: group.color }} />
+              <span>{group.label}</span>
+              <b>{group.count}</b>
+            </span>
+          ))}
+        </div>
+        {representedGroups.length > 5 ? (
+          <span className="files-legend-extra">+{representedGroups.length - 5} OTHER TYPES</span>
+        ) : null}
       </div>
       {hovered ? (
         <div className="files-star-tooltip" role="status">
