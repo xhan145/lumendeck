@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify-windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -38,3 +38,8 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust filesystem unit tests (real temp directories, no-clobber rename)
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
