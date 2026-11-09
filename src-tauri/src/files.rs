@@ -67,6 +67,14 @@ fn resolve_path(path: Option<String>) -> PathBuf {
     }
 }
 
+fn require_absolute(path: &Path) -> Result<(), String> {
+    if path.is_absolute() {
+        Ok(())
+    } else {
+        Err("Enter an absolute filesystem path (for example C:\\Users\\you\\Documents).".into())
+    }
+}
+
 fn kind_of(path: &Path, directory: bool) -> (&'static str, String) {
     if directory {
         return ("folder", String::new());
@@ -165,6 +173,7 @@ pub async fn files_list(path: Option<String>) -> Result<DirectoryListing, String
 
 fn files_list_sync(path: Option<String>) -> Result<DirectoryListing, String> {
     let folder = resolve_path(path);
+    require_absolute(&folder)?;
     let meta = fs::metadata(&folder).map_err(|e| format!("Cannot access folder: {e}"))?;
     if !meta.is_dir() {
         return Err("The path is not a directory.".into());
@@ -200,8 +209,14 @@ fn valid_name(name: &str) -> bool {
             c.is_control() || ['\\', '/', ':', '*', '?', '"', '<', '>', '|'].contains(&c)
         )
     { return false; }
-    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-    !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2"
+    // Windows also treats reserved aliases with a space before the extension
+    // as device names. Superscript digits are accepted by the DOS namespace.
+    let stem = name.split('.').next().unwrap_or("")
+        .trim_end_matches(' ')
+        .replace('¹', "1").replace('²', "2").replace('³', "3")
+        .to_ascii_uppercase();
+    !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        | "COM1" | "COM2"
         | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
         | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6"
         | "LPT7" | "LPT8" | "LPT9")
@@ -218,6 +233,7 @@ pub async fn files_create_folder(parent: String, name: String) -> Result<(), Str
 fn create_folder_sync(parent: String, name: String) -> Result<(), String> {
     if !valid_name(&name) { return Err("Choose a valid single folder name.".into()); }
     let directory = PathBuf::from(parent);
+    require_absolute(&directory)?;
     if !directory.is_dir() { return Err("Parent folder is not accessible.".into()); }
     fs::create_dir(directory.join(name)).map_err(|e| format!("Could not create folder: {e}"))
 }
@@ -233,6 +249,7 @@ pub async fn files_rename(path: String, new_name: String) -> Result<(), String> 
 fn rename_sync(path: String, new_name: String) -> Result<(), String> {
     if !valid_name(&new_name) { return Err("Choose a valid single file or folder name.".into()); }
     let source = PathBuf::from(path);
+    require_absolute(&source)?;
     let parent = source.parent().ok_or("Cannot rename a drive root.")?;
     if source.file_name().is_none() { return Err("Cannot rename a drive root.".into()); }
     fs::symlink_metadata(&source).map_err(|e| format!("Cannot access item: {e}"))?;
@@ -274,6 +291,7 @@ fn rename_sync(path: String, new_name: String) -> Result<(), String> {
 #[tauri::command]
 pub fn files_open(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let source = PathBuf::from(path);
+    require_absolute(&source)?;
     if !fs::metadata(&source).map_err(|e| format!("Cannot access file: {e}"))?.is_file() {
         return Err("Select a file to open. Double-click folders to browse them.".into());
     }
@@ -310,6 +328,7 @@ pub async fn files_preview(path: String) -> Result<Vec<u8>, String> {
 
 fn preview_sync(path: String) -> Result<Vec<u8>, String> {
     let file = PathBuf::from(path);
+    require_absolute(&file)?;
     let ext = file.extension().and_then(|e| e.to_str())
         .unwrap_or("").to_ascii_lowercase();
     if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
@@ -337,7 +356,8 @@ mod tests {
     #[test]
     fn rejects_traversal_and_windows_device_names() {
         for name in ["", ".", "..", "../folder", "a/b", "a\\b", "NUL.txt",
-            "con", "COM1", "file.", "trailing ", "a:b"] {
+            "con", "COM1", "COM¹.txt", "CON .txt", "CONIN$.txt",
+            "file.", "trailing ", "a:b"] {
             assert!(!valid_name(name), "accepted unsafe name: {name}");
         }
         assert!(valid_name("My Project"));
