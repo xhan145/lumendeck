@@ -157,7 +157,13 @@ pub fn files_locations() -> Vec<FileLocation> {
 
 /// Enumerate only the selected directory. No background disk crawl or indexing.
 #[tauri::command]
-pub fn files_list(path: Option<String>) -> Result<DirectoryListing, String> {
+pub async fn files_list(path: Option<String>) -> Result<DirectoryListing, String> {
+    tauri::async_runtime::spawn_blocking(move || files_list_sync(path))
+        .await
+        .map_err(|error| format!("Directory reading task failed: {error}"))?
+}
+
+fn files_list_sync(path: Option<String>) -> Result<DirectoryListing, String> {
     let folder = resolve_path(path);
     let meta = fs::metadata(&folder).map_err(|e| format!("Cannot access folder: {e}"))?;
     if !meta.is_dir() {
@@ -203,7 +209,13 @@ fn valid_name(name: &str) -> bool {
 
 /// Creates one folder, never overwrites an existing path.
 #[tauri::command]
-pub fn files_create_folder(parent: String, name: String) -> Result<(), String> {
+pub async fn files_create_folder(parent: String, name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || create_folder_sync(parent, name))
+        .await
+        .map_err(|error| format!("Create-folder task failed: {error}"))?
+}
+
+fn create_folder_sync(parent: String, name: String) -> Result<(), String> {
     if !valid_name(&name) { return Err("Choose a valid single folder name.".into()); }
     let directory = PathBuf::from(parent);
     if !directory.is_dir() { return Err("Parent folder is not accessible.".into()); }
@@ -212,7 +224,13 @@ pub fn files_create_folder(parent: String, name: String) -> Result<(), String> {
 
 /// Renames a single entry within its current directory. Never moves or deletes.
 #[tauri::command]
-pub fn files_rename(path: String, new_name: String) -> Result<(), String> {
+pub async fn files_rename(path: String, new_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || rename_sync(path, new_name))
+        .await
+        .map_err(|error| format!("Rename task failed: {error}"))?
+}
+
+fn rename_sync(path: String, new_name: String) -> Result<(), String> {
     if !valid_name(&new_name) { return Err("Choose a valid single file or folder name.".into()); }
     let source = PathBuf::from(path);
     let parent = source.parent().ok_or("Cannot rename a drive root.")?;
@@ -274,7 +292,13 @@ pub fn files_open(app: tauri::AppHandle, path: String) -> Result<(), String> {
 /// Raster-only preview. Returns bytes for a single explicitly requested item
 /// instead of enabling unrestricted WebView file:// or an asset-server scope.
 #[tauri::command]
-pub fn files_preview(path: String) -> Result<Vec<u8>, String> {
+pub async fn files_preview(path: String) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || preview_sync(path))
+        .await
+        .map_err(|error| format!("Preview task failed: {error}"))?
+}
+
+fn preview_sync(path: String) -> Result<Vec<u8>, String> {
     let file = PathBuf::from(path);
     let ext = file.extension().and_then(|e| e.to_str())
         .unwrap_or("").to_ascii_lowercase();
