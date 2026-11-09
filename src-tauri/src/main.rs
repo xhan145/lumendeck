@@ -3,18 +3,55 @@
 
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+#[cfg(target_os = "windows")]
 use std::process::Command;
 
 mod files;
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetWindowsDirectoryW(buffer: *mut u16, size: u32) -> u32;
+}
+
+#[cfg(target_os = "windows")]
+fn windows_root() -> Result<std::path::PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+
+    // Ask Windows itself instead of trusting PATH or the working directory.
+    let mut buffer = vec![0u16; 512];
+    loop {
+        let size = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        if size == 0 {
+            return Err(format!("Cannot locate the Windows directory: {}", std::io::Error::last_os_error()));
+        }
+        if size as usize >= buffer.len() {
+            buffer.resize(size as usize + 1, 0);
+            continue;
+        }
+        return Ok(std::path::PathBuf::from(
+            std::ffi::OsString::from_wide(&buffer[..size as usize]),
+        ));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_windows_system_app(relative: &str, label: &str) -> Result<(), String> {
+    let executable = windows_root()?.join(relative);
+    if !executable.is_file() {
+        return Err(format!("The official {label} executable is missing from the Windows system directory."));
+    }
+    Command::new(&executable)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Failed to open {label}: {err}"))
+}
 
 #[tauri::command]
 fn open_explorer() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer.exe")
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| format!("Failed to open Windows Explorer: {err}"))
+        open_windows_system_app("explorer.exe", "Windows Explorer")
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -26,10 +63,7 @@ fn open_explorer() -> Result<(), String> {
 fn open_task_manager() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("taskmgr.exe")
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| format!("Failed to open Task Manager: {err}"))
+        open_windows_system_app("System32\\Taskmgr.exe", "Task Manager")
     }
     #[cfg(not(target_os = "windows"))]
     {
