@@ -27,7 +27,9 @@ export function ShellLauncher({ open, onClose }: { open: boolean; onClose: () =>
   const setView = useStudio((s) => s.setView);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
 
   const normalized = query.trim().toLowerCase();
   const items = useMemo(() => {
@@ -39,24 +41,16 @@ export function ShellLauncher({ open, onClose }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (!open) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery('');
     setStatus(null);
+    setActiveIndex(0);
     const id = window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => window.clearTimeout(id);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-      if (event.key === 'Enter' && items[0]) {
-        event.preventDefault();
-        void activate(items[0]);
-      }
+    return () => {
+      window.clearTimeout(id);
+      if (previous?.isConnected) previous.focus();
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, items]);
+  }, [open]);
 
   const activate = async (item: LauncherItem) => {
     if (item.kind === 'view') {
@@ -72,27 +66,66 @@ export function ShellLauncher({ open, onClose }: { open: boolean; onClose: () =>
     }
   };
 
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex((index) => items.length ? (index + 1) % items.length : 0);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex((index) => items.length ? (index + items.length - 1) % items.length : 0);
+    } else if (event.key === 'Enter' && items[activeIndex]) {
+      event.preventDefault();
+      void activate(items[activeIndex]);
+    }
+  };
+
+  const onDialogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab' || !dialogRef.current) return;
+    const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+      'input:not([disabled]), button:not([disabled])',
+    ));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   if (!open) return null;
 
   return (
     <div className="shell-launcher-scrim" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <section className="shell-launcher" role="dialog" aria-modal="true" aria-label="LumenDeck launcher">
+      <section ref={dialogRef} className="shell-launcher" role="dialog" aria-modal="true"
+        aria-label="LumenDeck launcher" onKeyDown={onDialogKeyDown}>
         <label className="shell-launcher-search">
           <span aria-hidden="true">{Icon.target({ size: 18 })}</span>
           <input
             ref={inputRef}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
+            onKeyDown={onSearchKeyDown}
             placeholder="Search LumenDeck..."
             autoComplete="off"
           />
           <kbd>Esc</kbd>
         </label>
-        <div className="shell-launcher-results" role="listbox" aria-label="Launcher results">
-          {items.map((item) => (
-            <button key={`${item.kind}:${item.id}`} type="button" className="shell-launcher-item" onClick={() => void activate(item)}>
+        <div className="shell-launcher-results" role="group" aria-label="Launcher results">
+          {items.map((item, index) => (
+            <button key={`${item.kind}:${item.id}`} type="button"
+              className={`shell-launcher-item ${index === activeIndex ? 'active' : ''}`}
+              onClick={() => void activate(item)}>
               <span className="shell-launcher-icon">{item.icon()}</span>
               <span><b>{item.label}</b><small>{item.description}</small></span>
             </button>
@@ -100,7 +133,7 @@ export function ShellLauncher({ open, onClose }: { open: boolean; onClose: () =>
           {items.length === 0 ? <p className="shell-launcher-empty">No matching command.</p> : null}
         </div>
         <footer className="shell-launcher-foot">
-          <span>Ctrl + Space opens this launcher</span>
+          <span>Ctrl + Space · ↑/↓ selects · Enter opens · Esc closes</span>
           {status ? <span className="shell-launcher-error" role="status">{status}</span> : null}
         </footer>
       </section>
