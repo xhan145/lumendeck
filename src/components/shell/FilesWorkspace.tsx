@@ -359,6 +359,7 @@ export function FilesWorkspace() {
                 <div className="files-space-layout">
                   <FileConstellation entries={shown} selectedPath={selectedPath}
                     fxMode={fxMode}
+                    folderPath={listing.path}
                     folderName={folderLabel(listing.path)}
                     onSelect={(entry) => setSelectedPath(entry.path)}
                     onOpen={(entry) => { void activate(entry); }}
