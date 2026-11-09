@@ -68,6 +68,45 @@ in-progress camera animation. Reduced-motion mode jumps without animation.
 Zoom safety: the camera distance is clamped to [1.35, 82], camera state stays
 preserved during FX/sort changes, and all zoom actions are visual only.
 
+### Fourth dimension: move the constellation through time
+
+**Files → Constellation → 4D TIME** projects the fourth coordinate, **last
+modification time**, into each star's spatial position. Press **Play** to
+animate a 24-second loop from the earliest to latest modification date among
+currently rendered stars; press **Pause** or drag the slider to explore a
+specific moment. **Earliest** and **Latest** jump to the endpoints. Disable
+4D TIME to return all star cores, halos and connections to their normal 3D
+locations. The file browser never edits the filesystem for these actions.
+
+- A real modified timestamp controls each star's temporal depth and orbit
+  phase. Purple constellation wires and selection rings follow the stars.
+  The selected star's short trail is an **abstract projected trajectory**,
+  not an observed historical path.
+- The time rail displays a real date and number of dated entries. Dim stars
+  have modification timestamps **later than the playhead**, which does not
+  imply those files were absent at that time. Undated entries are not assigned
+  invented dates.
+- The timeline needs at least **two distinct valid modification timestamps**
+  in the currently rendered file set. Without them, movement via actual
+  modification time is unavailable and a clear explanation replaces playback.
+- Time is inferred from the currently visible folder listing only, with the
+  same 180-star visualization cap as the existing Constellation. Moving the
+  playhead **does not restore prior file content**, show deleted files, track
+  versions, index other folders, or access any cloud/history service.
+- Playhead updates occur on the existing WebGL frame loop; the React slider
+  and date label are updated at a lower rate for efficiency. The GPU-instanced
+  core, halo particles, selection reticle and constellation wires share one
+  projected position per file.
+- Hidden windows pause playback updates; Windows reduced-motion preference
+  prevents autoplay but manual time scrubbing remains available. Existing
+  Off/Balanced/Cinematic particle FX and List/Grid fallback are unchanged.
+
+**Temporal QA:** Use a folder containing files last modified in different
+months. Check Play/Pause and scrubbing, select a moving star, verify its
+reticle, halo, wires and trail stay attached, confirm camera orbit still works,
+then disable time and verify the stars return to their original stable layout.
+Reopen the folder in Windows Explorer to confirm no changes to files or dates.
+
 ### Visual acceptance checklist
 
 1. Check a mixed folder with images, music, documents and subfolders.
