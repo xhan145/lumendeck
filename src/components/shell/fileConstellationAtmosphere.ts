@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FileStar } from '../../core/shell/fileMap';
+import type { FileContextLens, FileContextMode } from '../../core/shell/fileContext';
 import { makeParticleCloud, stableFileHash, type FileFxPreset } from '../../core/shell/fileFx';
 
 /**
@@ -55,7 +56,8 @@ interface ParticleLayer {
 export interface FileAtmosphere {
   update(timeSeconds: number, animate: boolean): void;
   setPixelRatio(ratio: number): void;
-  setFocus(selectedPath: string | null, hoverPath: string | null): void;
+  setFocus(selectedPath: string | null, hoverPath: string | null,
+    lens?: FileContextLens | null, contextMode?: FileContextMode): void;
   /** Update halo locations in the same order as file stars, with no new GPU objects. */
   moveStars(xyz: Float32Array): void;
   dispose(): void;
@@ -227,13 +229,18 @@ export function createFileAtmosphere(
       }
       attr.needsUpdate = true;
     },
-    setFocus(selectedPath, hoverPath) {
+    setFocus(selectedPath, hoverPath, lens = null, contextMode = 'off') {
       if (!glows.focus) return;
       const buffer = glows.focus;
       buffer.setX(0, 0.1);
+      const contextual = contextMode !== 'off' && !!lens;
       stars.forEach((star, index) => {
+        const score = contextual ? lens.scoreByPath.get(star.entry.path) ?? 0 : 0;
         const amount = star.entry.path === selectedPath ? 1
-          : star.entry.path === hoverPath ? 0.55 : 0;
+          : star.entry.path === hoverPath ? 0.65
+          : contextual && score ? 0.22 + score / 170
+          : contextual && contextMode === 'focus' ? -0.75
+          : contextual ? -0.33 : 0;
         buffer.setX(index + 1, amount);
       });
       buffer.needsUpdate = true;
