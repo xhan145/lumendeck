@@ -164,7 +164,9 @@ export function createFileAtmosphere(
   const layers: ParticleLayer[] = [];
 
   const far = makeParticleCloud(preset.backgroundStars, 'distant');
-  layers.push(addLayer(scene, far.positions, far.colors, far.sizes, far.phases, far.drifts, 0.78, -4));
+  if (preset.backgroundStars > 0) {
+    layers.push(addLayer(scene, far.positions, far.colors, far.sizes, far.phases, far.drifts, 0.78, -4));
+  }
 
   if (preset.ambientDust > 0) {
     const dust = makeParticleCloud(preset.ambientDust, 'dust', 0x2435a093);
@@ -196,7 +198,8 @@ export function createFileAtmosphere(
     sizes[i] = star.entry.isDirectory ? 52 : 38;
     phases[i] = stableFileHash(star.entry.path) / 4294967296 * Math.PI * 2;
   });
-  const glows = addLayer(scene, positions, colors, sizes, phases, drifts, 1.08, 3, focus);
+  const glowOpacity = preset.bloom ? 1.08 : preset.ambientDust ? 0.85 : 0.52;
+  const glows = addLayer(scene, positions, colors, sizes, phases, drifts, glowOpacity, 3, focus);
   layers.push(glows);
 
   return {
