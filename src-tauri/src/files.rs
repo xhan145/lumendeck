@@ -253,7 +253,7 @@ fn rename_sync(path: String, new_name: String) -> Result<(), String> {
     let parent = source.parent().ok_or("Cannot rename a drive root.")?;
     if source.file_name().is_none() { return Err("Cannot rename a drive root.".into()); }
     fs::symlink_metadata(&source).map_err(|e| format!("Cannot access item: {e}"))?;
-    let target = parent.join(new_name);
+    let target = parent.join(&new_name);
     if target == source { return Ok(()); }
     // A case-only rename must be attempted on case-insensitive Windows
     // volumes. MoveFileW below still refuses to replace another target.
