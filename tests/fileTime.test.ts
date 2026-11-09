@@ -42,12 +42,13 @@ describe('fourth-dimensional Files projection', () => {
   it('moves stars deterministically in space when moving through time', () => {
     const bounds = fileTimeBounds(files);
     const stars = makeFileStars(files);
-    const early = projectFileThroughTime(stars[0], bounds, 0);
-    const late = projectFileThroughTime(stars[0], bounds, 1);
-    expect(early).toEqual(projectFileThroughTime(stars[0], bounds, 0));
+    const star = stars.find((item) => item.entry.name === 'old.wav')!;
+    const early = projectFileThroughTime(star, bounds, 0);
+    const late = projectFileThroughTime(star, bounds, 1);
+    expect(early).toEqual(projectFileThroughTime(star, bounds, 0));
     expect([early.x, early.y, early.z]).not.toEqual([late.x, late.y, late.z]);
     expect(early.dated).toBe(true);
-    expect(stars[0].entry.path).toBe(files[0].path);
+    expect(star.entry.path).toBe(files[0].path);
     expect(Number.isFinite(late.x + late.y + late.z)).toBe(true);
   });
 
