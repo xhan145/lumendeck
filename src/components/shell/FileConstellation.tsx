@@ -375,6 +375,54 @@ export function FileConstellation({
     cores.computeBoundingSphere();
     scene.add(cores);
 
+    // A single faceted, camera-facing folder silhouette layer communicates
+    // hierarchy more clearly than making every folder a larger generic star.
+    // One draw call covers every visible folder, even in a crowded directory.
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.42, -0.24);
+    shape.lineTo(-0.42, 0.22);
+    shape.lineTo(-0.22, 0.22);
+    shape.lineTo(-0.13, 0.32);
+    shape.lineTo(0.16, 0.32);
+    shape.lineTo(0.22, 0.20);
+    shape.lineTo(0.42, 0.20);
+    shape.lineTo(0.42, -0.24);
+    shape.closePath();
+    const folderGeometry = new THREE.ShapeGeometry(shape);
+    const folderMaterial = new THREE.MeshBasicMaterial({
+      color: '#c9aeef',
+      transparent: true,
+      opacity: 0.70,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const folderIndices = stars.flatMap((star, index) => star.entry.isDirectory ? [index] : []);
+    const folderIcons = new THREE.InstancedMesh(folderGeometry, folderMaterial, folderIndices.length);
+    folderIcons.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    folderIcons.frustumCulled = false;
+    folderIcons.renderOrder = 4;
+    scene.add(folderIcons);
+    const rootFolder = new THREE.Mesh(folderGeometry, folderMaterial.clone());
+    rootFolder.scale.setScalar(1.3);
+    rootFolder.renderOrder = 4;
+    scene.add(rootFolder);
+
+    const updateFolderSymbols = () => {
+      rootFolder.quaternion.copy(camera.quaternion);
+      for (let i = 0; i < folderIndices.length; i++) {
+        const index = folderIndices[i];
+        const k = index * 3;
+        const chosen = stars[index].entry.path === selectedRef.current;
+        unit.position.set(currentXYZ[k], currentXYZ[k + 1], currentXYZ[k + 2] + 0.055);
+        unit.quaternion.copy(camera.quaternion);
+        unit.scale.setScalar(chosen ? 1.34 : 1);
+        unit.updateMatrix();
+        folderIcons.setMatrixAt(i, unit.matrix);
+      }
+      folderIcons.instanceMatrix.needsUpdate = true;
+    };
+
     const reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.42, 0.46, 72),
       new THREE.MeshBasicMaterial({
@@ -791,6 +839,7 @@ export function FileConstellation({
           }
         }
         controls.update();
+        updateFolderSymbols();
         atmosphere.update(elapsed, !reducedMotion && fxMode !== 'off');
         nucleusRing.quaternion.copy(camera.quaternion);
         if (reticle.visible) {
