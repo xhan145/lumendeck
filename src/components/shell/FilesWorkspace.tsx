@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  canPreview, createDirectory, filesAvailable, getPreviewUrl, listDirectory,
+  canOpenInDefaultApp, canPreview, createDirectory, filesAvailable, getPreviewUrl, listDirectory,
   listLocations, openFile, renameFile,
   type DirectoryListing, type FileEntry, type FileKind, type FileLocation,
 } from '../../bridge/files';
@@ -160,6 +160,10 @@ export function FilesWorkspace() {
   const activate = async (entry: FileEntry) => {
     if (entry.isDirectory) {
       navigate(entry.path);
+      return;
+    }
+    if (!canOpenInDefaultApp(entry)) {
+      setError('LumenDeck cannot open this file type directly yet. Use Explorer fallback to open it intentionally.');
       return;
     }
     setError(null);
@@ -422,9 +426,17 @@ export function FilesWorkspace() {
                   {selected.isSymlink ? <div><b>Link</b><span>Filesystem link</span></div> : null}
                   {selected.isReadOnly ? <div><b>Access</b><span>Read-only</span></div> : null}
                 </div>
-                <button type="button" className="btn primary" onClick={() => void activate(selected)}>
-                  {selected.isDirectory ? 'Browse folder' : 'Open in default app'}
+                <button type="button" className="btn primary"
+                  disabled={!selected.isDirectory && !canOpenInDefaultApp(selected)}
+                  onClick={() => void activate(selected)}>
+                  {selected.isDirectory ? 'Browse folder'
+                    : canOpenInDefaultApp(selected) ? 'Open in default app' : 'Open via Explorer'}
                 </button>
+                {!selected.isDirectory && !canOpenInDefaultApp(selected) ? (
+                  <p className="files-inspector-note">
+                    This file type may execute code or use an untrusted association. Use Explorer fallback to open it deliberately.
+                  </p>
+                ) : null}
                 <button type="button" className="btn" onClick={() => beginEdit('rename')}>
                   {Icon.edit({ size: 15 })} Rename
                 </button>
