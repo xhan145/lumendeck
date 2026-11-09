@@ -1,34 +1,156 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { FileEntry } from '../../bridge/files';
-import { FILE_GROUPS, makeFileStars } from '../../core/shell/fileMap';
+import type { FileEntry, FileKind } from '../../bridge/files';
+import { FILE_GROUPS, makeFileStars, type FileStar } from '../../core/shell/fileMap';
+import { FILE_FX_PRESETS, makeFileFxGovernor } from '../../core/shell/fileFx';
+import type { FileFxMode } from '../../state/appSettings';
+import { createPostPipeline, type PostPipeline } from '../graph/graph3d/postprocessing';
+import { createFileAtmosphere } from './fileConstellationAtmosphere';
 
-/**
- * A true three-dimensional projection of one real directory. Stars and links
- * are only a view: dragging/orbiting cannot move, rename or write to disk.
- * File actions are dispatched to the same explicit controls as list view.
- */
-export function FileConstellation({
-  entries, selectedPath, folderName, onSelect, onOpen, onUnavailable,
-}: {
+interface Props {
   entries: FileEntry[];
   selectedPath: string | null;
   folderName: string;
+  fxMode: FileFxMode;
   onSelect: (entry: FileEntry) => void;
   onOpen: (entry: FileEntry) => void;
   onUnavailable: () => void;
-}) {
+}
+
+function useReducedMotion() {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== 'undefined' &&
+    !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!media) return;
+    const changed = () => setReduced(media.matches);
+    media.addEventListener('change', changed);
+    return () => media.removeEventListener('change', changed);
+  }, []);
+  return reduced;
+}
+
+function makeLabel(text: string, color: string, size = 3.2): THREE.Sprite | null {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 88;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.font = '600 32px system-ui';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 256, 44, 495);
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture, transparent: true, opacity: 0.93, depthWrite: false,
+  }));
+  sprite.scale.set(size, size * 88 / 512, 1);
+  sprite.renderOrder = 7;
+  return sprite;
+}
+
+function starVector(star: FileStar): THREE.Vector3 {
+  return new THREE.Vector3(star.x, star.y, star.z);
+}
+
+function createLinks(scene: THREE.Scene, stars: FileStar[]) {
+  const groups = new Map<FileKind, FileStar[]>();
+  for (const star of stars) {
+    const found = groups.get(star.group) ?? [];
+    found.push(star);
+    groups.set(star.group, found);
+  }
+
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const pushEdge = (from: THREE.Vector3, to: THREE.Vector3, color: THREE.Color) => {
+    positions.push(from.x, from.y, from.z, to.x, to.y, to.z);
+    colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+  };
+
+  const center = new THREE.Vector3();
+  for (const group of FILE_GROUPS) {
+    const members = groups.get(group.kind);
+    if (!members?.length) continue;
+    const tint = new THREE.Color(group.color);
+    const centroid = new THREE.Vector3();
+    for (const member of members) centroid.add(starVector(member));
+    centroid.multiplyScalar(1 / members.length);
+    pushEdge(center, centroid, tint);
+
+    // View-only group hubs, not synthetic files. Membership is real.
+    const ordered = [...members].sort((a, b) => a.entry.path.localeCompare(b.entry.path));
+    for (let i = 0; i < ordered.length; i++) {
+      const star = starVector(ordered[i]);
+      pushEdge(centroid, star, tint);
+      if (i > 0) pushEdge(starVector(ordered[i - 1]), star, tint);
+    }
+
+    const radius = 1.15 + Math.sqrt(members.length) * 0.21;
+    const ellipse: THREE.Vector3[] = [];
+    for (let k = 0; k < 80; k++) {
+      const angle = k * Math.PI * 2 / 80;
+      ellipse.push(new THREE.Vector3(
+        centroid.x + Math.cos(angle) * radius,
+        centroid.y + Math.sin(angle) * radius * 0.68,
+        centroid.z + Math.sin(angle * 2) * 0.27,
+      ));
+    }
+    const orbit = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(ellipse),
+      new THREE.LineBasicMaterial({
+        color: tint, transparent: true, opacity: 0.19,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      }),
+    );
+    scene.add(orbit);
+
+    const label = makeLabel(group.label.toUpperCase(), '#d4c4ed', 3.35);
+    if (label) {
+      label.position.copy(centroid).add(new THREE.Vector3(0, radius * 0.86 + 0.6, 0));
+      scene.add(label);
+    }
+  }
+
+  if (positions.length) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.27,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    lines.renderOrder = 0;
+    scene.add(lines);
+  }
+}
+
+/**
+ * Real Windows folder data becomes a stable, navigable 3D constellation.
+ * The 3D presentation NEVER changes underlying filesystem paths.
+ */
+export function FileConstellation({
+  entries, selectedPath, folderName, fxMode, onSelect, onOpen, onUnavailable,
+}: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const meshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const focusRef = useRef<(selected: string | null, hovered: string | null) => void>(() => {});
   const selectedRef = useRef(selectedPath);
-  selectedRef.current = selectedPath;
   const onSelectRef = useRef(onSelect);
   const onOpenRef = useRef(onOpen);
-  const unavailableRef = useRef(onUnavailable);
+  const onUnavailableRef = useRef(onUnavailable);
+  selectedRef.current = selectedPath;
   onSelectRef.current = onSelect;
   onOpenRef.current = onOpen;
-  unavailableRef.current = onUnavailable;
+  onUnavailableRef.current = onUnavailable;
+
+  const [hovered, setHovered] = useState<FileEntry | null>(null);
+  const [degraded, setDegraded] = useState(false);
+  const hoverRef = useRef<string | null>(null);
+  const reducedMotion = useReducedMotion();
   const stars = useMemo(() => makeFileStars(entries), [entries]);
 
   useEffect(() => {
@@ -37,160 +159,207 @@ export function FileConstellation({
 
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer = new THREE.WebGLRenderer({
+        alpha: false, antialias: true, powerPreference: 'high-performance',
+      });
     } catch {
-      unavailableRef.current();
+      onUnavailableRef.current();
       return;
     }
 
+    const preset = FILE_FX_PRESETS[fxMode];
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#0b0e1b');
-    const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 180);
-    camera.position.set(0, 0.8, 28);
+    scene.background = new THREE.Color('#090a17');
+    const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 190);
+    camera.position.set(0, 1, 31);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.minDistance = 7;
-    controls.maxDistance = 65;
+    controls.dampingFactor = 0.085;
+    controls.minDistance = 5.5;
+    controls.maxDistance = 68;
     controls.enablePan = true;
     controls.screenSpacePanning = true;
     controls.target.set(0, 0, 0);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+
+    const nativePixelRatio = Math.min(window.devicePixelRatio || 1, preset.pixelRatioCap);
+    renderer.setPixelRatio(nativePixelRatio);
+    renderer.setClearColor('#090a17', 1);
     renderer.domElement.setAttribute('aria-hidden', 'true');
+    renderer.domElement.style.touchAction = 'none';
     host.appendChild(renderer.domElement);
 
-    // Deterministic distant reference stars, not simulated filesystem entries.
-    let rng = 12345678;
-    const random = () => {
-      rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0;
-      return rng / 4294967296;
-    };
-    const positions = new Float32Array(600 * 3);
-    for (let i = 0; i < 600; i++) {
-      positions[i * 3] = (random() - 0.5) * 95;
-      positions[i * 3 + 1] = (random() - 0.5) * 60;
-      positions[i * 3 + 2] = -20 - random() * 35;
-    }
-    const specks = new THREE.BufferGeometry();
-    specks.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    scene.add(new THREE.Points(specks, new THREE.PointsMaterial({
-      color: '#9a91bb', transparent: true, opacity: 0.5, size: 0.08, sizeAttenuation: true,
-    })));
+    const atmosphere = createFileAtmosphere(scene, stars, preset);
+    atmosphere.setPixelRatio(nativePixelRatio);
 
     const root = new THREE.Mesh(
-      new THREE.SphereGeometry(0.47, 22, 18),
-      new THREE.MeshBasicMaterial({ color: '#d4c3ff' }),
+      new THREE.SphereGeometry(0.4, 24, 16),
+      new THREE.MeshBasicMaterial({ color: '#dfd1ff', toneMapped: false }),
     );
     scene.add(root);
-    const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(0.8, 20, 16),
+    const nucleusRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.63, 0.67, 80),
       new THREE.MeshBasicMaterial({
-        color: '#9981d5', transparent: true, opacity: 0.075, depthWrite: false,
+        color: '#ae91ef', transparent: true, opacity: 0.52,
+        depthWrite: false, side: THREE.DoubleSide,
       }),
     );
-    scene.add(halo);
+    scene.add(nucleusRing);
 
-    const groupCenters = new Map<string, THREE.Vector3>();
-    const pickables: THREE.Mesh[] = [];
-    const entryByPath = new Map(stars.map((star) => [star.entry.path, star.entry]));
-    const sphere = new THREE.SphereGeometry(1, 14, 10);
-    for (const star of stars) {
-      const point = new THREE.Vector3(star.x, star.y, star.z);
-      const color = new THREE.Color(star.color);
-      const selected = star.entry.path === selectedRef.current;
-      const mesh = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({
-        color: selected ? '#ffffff' : color,
-      }));
-      mesh.scale.setScalar(selected ? 0.31 : star.entry.isDirectory ? 0.25 : 0.15);
-      mesh.position.copy(point);
-      mesh.userData.path = star.entry.path;
-      mesh.userData.baseColor = star.color;
-      scene.add(mesh);
-      pickables.push(mesh);
+    const rootLabel = makeLabel(folderName.slice(0, 31), '#f1eaff', 4.45);
+    if (rootLabel) {
+      rootLabel.position.set(0, -1.05, 0);
+      scene.add(rootLabel);
+    }
 
-      const link = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), point]),
-        new THREE.LineBasicMaterial({
-          color, transparent: true, opacity: selected ? 0.42 : 0.11,
-          depthWrite: false,
-        }),
-      );
-      scene.add(link);
+    createLinks(scene, stars);
 
-      if (!groupCenters.has(star.group)) {
-        groupCenters.set(star.group, point.clone());
+    // One instanced GPU draw for all selectable file cores.
+    const sphere = new THREE.SphereGeometry(1, 12, 9);
+    const coreMaterial = new THREE.MeshBasicMaterial({
+      color: '#ffffff', toneMapped: false,
+    });
+    const cores = new THREE.InstancedMesh(sphere, coreMaterial, stars.length);
+    cores.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const unit = new THREE.Object3D();
+    const tint = new THREE.Color();
+    const byPath = new Map(stars.map((star, index) => [star.entry.path, index]));
+    stars.forEach((star, index) => {
+      unit.position.set(star.x, star.y, star.z);
+      unit.scale.setScalar(star.entry.isDirectory ? 0.32 : 0.21);
+      unit.updateMatrix();
+      cores.setMatrixAt(index, unit.matrix);
+      cores.setColorAt(index, tint.set(star.color));
+    });
+    cores.instanceMatrix.needsUpdate = true;
+    if (cores.instanceColor) cores.instanceColor.needsUpdate = true;
+    cores.computeBoundingSphere();
+    scene.add(cores);
+
+    const reticle = new THREE.Mesh(
+      new THREE.RingGeometry(0.42, 0.46, 72),
+      new THREE.MeshBasicMaterial({
+        color: '#e7d9ff', transparent: true, opacity: 0.86,
+        side: THREE.DoubleSide, depthWrite: false,
+      }),
+    );
+    reticle.visible = false;
+    reticle.renderOrder = 5;
+    scene.add(reticle);
+    const reticleOuter = new THREE.Mesh(
+      new THREE.RingGeometry(0.56, 0.575, 72),
+      new THREE.MeshBasicMaterial({
+        color: '#bca8ed', transparent: true, opacity: 0.52,
+        side: THREE.DoubleSide, depthWrite: false,
+      }),
+    );
+    reticleOuter.visible = false;
+    reticleOuter.renderOrder = 5;
+    scene.add(reticleOuter);
+    const activeBeam = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({
+        color: '#d9c9ff', transparent: true, opacity: 0.66,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      }),
+    );
+    activeBeam.visible = false;
+    scene.add(activeBeam);
+
+    const applyFocus = (selected: string | null, hoveredPath: string | null) => {
+      for (const [index, star] of stars.entries()) {
+        const focused = star.entry.path === selected;
+        const isHover = star.entry.path === hoveredPath && !focused;
+        unit.position.set(star.x, star.y, star.z);
+        unit.scale.setScalar((star.entry.isDirectory ? 0.32 : 0.21) *
+          (focused ? 1.36 : isHover ? 1.18 : 1));
+        unit.updateMatrix();
+        cores.setMatrixAt(index, unit.matrix);
+        cores.setColorAt(index, tint.set(focused ? '#ffffff' : star.color));
       }
-    }
+      cores.instanceMatrix.needsUpdate = true;
+      if (cores.instanceColor) cores.instanceColor.needsUpdate = true;
+      cores.computeBoundingSphere();
+      atmosphere.setFocus(selected, hoveredPath);
 
-    meshesRef.current = new Map(pickables.map((mesh) => [mesh.userData.path as string, mesh]));
-
-    // A few section labels keep the spatial map readable at any orbit angle.
-    for (const group of FILE_GROUPS) {
-      const center = groupCenters.get(group.kind);
-      if (!center) continue;
-      const labelCanvas = document.createElement('canvas');
-      labelCanvas.width = 512;
-      labelCanvas.height = 96;
-      const context = labelCanvas.getContext('2d');
-      if (!context) continue;
-      context.fillStyle = '#e5dff4';
-      context.font = '600 39px system-ui';
-      context.textAlign = 'center';
-      context.textBaseline = 'middle';
-      context.fillText(group.label.toUpperCase(), 256, 48, 490);
-      const texture = new THREE.CanvasTexture(labelCanvas);
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: texture, transparent: true, opacity: 0.88, depthTest: false,
-      }));
-      sprite.position.copy(center).add(new THREE.Vector3(0, 1.4, 0));
-      sprite.scale.set(4.3, 0.8, 1);
-      scene.add(sprite);
-    }
-
-    // The center star represents the current directory, not an invented file.
-    const rootCanvas = document.createElement('canvas');
-    rootCanvas.width = 512;
-    rootCanvas.height = 96;
-    const rootContext = rootCanvas.getContext('2d');
-    if (rootContext) {
-      rootContext.fillStyle = '#e2d5ff';
-      rootContext.font = '600 35px system-ui';
-      rootContext.textAlign = 'center';
-      rootContext.fillText(folderName.slice(0, 34), 256, 60, 500);
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: new THREE.CanvasTexture(rootCanvas),
-        transparent: true, depthTest: false,
-      }));
-      sprite.position.set(0, -1.15, 0);
-      sprite.scale.set(4.7, 0.88, 1);
-      scene.add(sprite);
-    }
+      const index = selected ? byPath.get(selected) : undefined;
+      const item = index === undefined ? null : stars[index];
+      reticle.visible = !!item;
+      reticleOuter.visible = !!item;
+      activeBeam.visible = !!item;
+      if (item) {
+        reticle.position.set(item.x, item.y, item.z);
+        reticleOuter.position.copy(reticle.position);
+        activeBeam.geometry.setFromPoints([
+          new THREE.Vector3(), starVector(item),
+        ]);
+      }
+    };
+    focusRef.current = applyFocus;
+    applyFocus(selectedRef.current, hoverRef.current);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    const pick = (event: MouseEvent): FileEntry | undefined => {
+    const pick = (event: MouseEvent | PointerEvent): FileEntry | null => {
       const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      pointer.x = (event.clientX - rect.left) / rect.width * 2 - 1;
+      pointer.y = -(event.clientY - rect.top) / rect.height * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObjects(pickables, false)[0];
-      const path = hit?.object.userData.path as string | undefined;
-      return path ? entryByPath.get(path) : undefined;
+      const hit = raycaster.intersectObject(cores, false)[0];
+      const index = hit?.instanceId;
+      return index === undefined ? null : stars[index]?.entry ?? null;
     };
-    let down: { x: number; y: number } | null = null;
-    const pointerDown = (event: PointerEvent) => { down = { x: event.clientX, y: event.clientY }; };
+
+    let pointerDown: { x: number; y: number } | null = null;
+    const down = (event: PointerEvent) => {
+      pointerDown = { x: event.clientX, y: event.clientY };
+    };
+    const move = (event: PointerEvent) => {
+      if (event.buttons) return;
+      const item = pick(event);
+      const key = item?.path ?? null;
+      if (key === hoverRef.current) return;
+      hoverRef.current = key;
+      renderer.domElement.style.cursor = key ? 'pointer' : 'grab';
+      setHovered(item);
+      applyFocus(selectedRef.current, key);
+    };
+    const leave = () => {
+      hoverRef.current = null;
+      setHovered(null);
+      renderer.domElement.style.cursor = 'grab';
+      applyFocus(selectedRef.current, null);
+    };
     const click = (event: MouseEvent) => {
-      if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 6) return;
-      const found = pick(event);
-      if (found) onSelectRef.current(found);
+      if (pointerDown && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 7) return;
+      const entry = pick(event);
+      if (entry) onSelectRef.current(entry);
     };
     const doubleClick = (event: MouseEvent) => {
-      const found = pick(event);
-      if (found) onOpenRef.current(found);
+      const entry = pick(event);
+      if (entry) onOpenRef.current(entry);
     };
-    renderer.domElement.addEventListener('pointerdown', pointerDown);
+    renderer.domElement.addEventListener('pointerdown', down);
+    renderer.domElement.addEventListener('pointermove', move);
+    renderer.domElement.addEventListener('pointerleave', leave);
     renderer.domElement.addEventListener('click', click);
     renderer.domElement.addEventListener('dblclick', doubleClick);
+
+    let pipeline: PostPipeline | null = null;
+    let reducedEffects = false;
+    if (preset.bloom) {
+      try {
+        pipeline = createPostPipeline(renderer, scene, camera, {
+          strength: preset.bloomStrength,
+          threshold: 0.78,
+          radius: 0.48,
+        });
+      } catch {
+        // Unsupported GPU post-processing is cosmetic, not a fatal browser error.
+        reducedEffects = true;
+        setDegraded(true);
+      }
+    }
 
     const resize = () => {
       const width = Math.max(1, host.clientWidth);
@@ -198,32 +367,65 @@ export function FileConstellation({
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+      pipeline?.setSize(width, height);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(host);
     resize();
+
+    const governor = makeFileFxGovernor();
     let request = 0;
-    const frame = () => {
+    let lastFrame = 0;
+    let startTime = 0;
+    const frame = (now: number) => {
       try {
+        if (!startTime) startTime = now;
+        const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
+        const frameDuration = lastFrame ? now - lastFrame : 16;
+        lastFrame = now;
         controls.update();
-        renderer.render(scene, camera);
+        atmosphere.update(elapsed, !reducedMotion);
+        nucleusRing.quaternion.copy(camera.quaternion);
+        if (reticle.visible) {
+          reticle.quaternion.copy(camera.quaternion);
+          reticleOuter.quaternion.copy(camera.quaternion);
+          const pulse = reducedMotion ? 1 : 1 + 0.09 * Math.sin(elapsed * 2.3);
+          reticle.scale.setScalar(pulse);
+          reticleOuter.scale.setScalar(reducedMotion ? 1 : 1 + 0.14 * Math.sin(elapsed * 1.4 + 1));
+          (activeBeam.material as THREE.LineBasicMaterial).opacity =
+            reducedMotion ? 0.62 : 0.52 + 0.13 * Math.sin(elapsed * 1.7);
+        }
+        if (pipeline && !reducedEffects) pipeline.render();
+        else renderer.render(scene, camera);
+
+        if (!reducedEffects && governor.feed(frameDuration)) {
+          reducedEffects = true;
+          renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
+          atmosphere.setPixelRatio(renderer.getPixelRatio());
+          resize();
+          setDegraded(true);
+        }
         request = requestAnimationFrame(frame);
       } catch {
-        // Driver/device failures should not crash the desktop or leave a
-        // permanently unresponsive canvas. The parent falls back to List.
-        unavailableRef.current();
+        // If bloom fails, attempt direct rendering before giving up on 3D.
+        if (pipeline && !reducedEffects) {
+          reducedEffects = true;
+          setDegraded(true);
+          request = requestAnimationFrame(frame);
+        } else {
+          onUnavailableRef.current();
+        }
       }
     };
-    // A hidden/minimized Tauri window should not spend GPU time rendering
-    // an unchanged file map. Resume the same camera when it becomes visible.
     const onVisibility = () => {
       cancelAnimationFrame(request);
       request = 0;
+      lastFrame = 0;
       if (!document.hidden) request = requestAnimationFrame(frame);
     };
     const onContextLost = (event: Event) => {
       event.preventDefault();
-      unavailableRef.current();
+      onUnavailableRef.current();
     };
     document.addEventListener('visibilitychange', onVisibility);
     renderer.domElement.addEventListener('webglcontextlost', onContextLost);
@@ -233,51 +435,77 @@ export function FileConstellation({
       cancelAnimationFrame(request);
       document.removeEventListener('visibilitychange', onVisibility);
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
-      observer.disconnect();
-      renderer.domElement.removeEventListener('pointerdown', pointerDown);
+      renderer.domElement.removeEventListener('pointerdown', down);
+      renderer.domElement.removeEventListener('pointermove', move);
+      renderer.domElement.removeEventListener('pointerleave', leave);
       renderer.domElement.removeEventListener('click', click);
       renderer.domElement.removeEventListener('dblclick', doubleClick);
+      observer.disconnect();
       controls.dispose();
-      scene.traverse((item) => {
-        if (item instanceof THREE.Mesh || item instanceof THREE.Line || item instanceof THREE.Points) {
-          if (item.geometry !== sphere) item.geometry.dispose();
-        }
-        if ('material' in item) {
-          const material = item.material as THREE.Material | THREE.Material[];
-          for (const m of Array.isArray(material) ? material : [material]) {
-            if (m instanceof THREE.SpriteMaterial && m.map) m.map.dispose();
-            m.dispose();
+      focusRef.current = () => {};
+      hoverRef.current = null;
+      pipeline?.dispose();
+      atmosphere.dispose();
+
+      const seenGeometry = new Set<THREE.BufferGeometry>();
+      const seenMaterial = new Set<THREE.Material>();
+      scene.traverse((object) => {
+        if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points) {
+          if (!seenGeometry.has(object.geometry)) {
+            seenGeometry.add(object.geometry);
+            object.geometry.dispose();
           }
         }
+        const material = (object as THREE.Mesh).material as
+          THREE.Material | THREE.Material[] | undefined;
+        for (const item of Array.isArray(material) ? material : material ? [material] : []) {
+          if (seenMaterial.has(item)) continue;
+          seenMaterial.add(item);
+          if (item instanceof THREE.SpriteMaterial) item.map?.dispose();
+          item.dispose();
+        }
       });
-      sphere.dispose();
-      meshesRef.current.clear();
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [stars, folderName]);
+  }, [stars, folderName, fxMode, reducedMotion]);
 
-  // Selection should not destroy and recreate WebGL or reset the camera orbit.
+  // Selection changes do not recreate the canvas, camera or particle fields.
   useEffect(() => {
-    const byPath = new Map(stars.map((star) => [star.entry.path, star.entry]));
-    for (const [path, mesh] of meshesRef.current) {
-      const chosen = path === selectedPath;
-      (mesh.material as THREE.MeshBasicMaterial).color.set(
-        chosen ? '#ffffff' : (mesh.userData.baseColor as string),
-      );
-      mesh.scale.setScalar(chosen ? 0.31 : byPath.get(path)?.isDirectory ? 0.25 : 0.15);
-    }
+    focusRef.current(selectedPath, hoverRef.current);
   }, [selectedPath, stars]);
 
   return (
-    <div className="files-constellation" ref={hostRef} role="img"
-      aria-label={`3D constellation of ${stars.length} files and folders in ${folderName}`}>
+    <div className="files-constellation" ref={hostRef}
+      role="img" aria-label={'Interactive 3D constellation of ' + stars.length + ' files and folders in ' + folderName}>
       <div className="files-space-help" aria-hidden="true">
-        <span>Orbit: drag</span><span>Zoom: scroll</span><span>Select: click</span><span>Open: double-click</span>
+        <span>Drag to orbit</span><span>Scroll to zoom</span><span>Click a star to select</span><span>Double-click to open</span>
       </div>
+      <div className="files-space-legend" aria-hidden="true">
+        <span className="files-space-legend-head">LIVE CONSTELLATION</span>
+        <span>● Folder stars are larger</span>
+        <span>✦ Connections reflect folder membership</span>
+        <span>Cosmetic clusters never move files</span>
+      </div>
+      {hovered ? (
+        <div className="files-star-tooltip" role="status">
+          <strong>{hovered.name}</strong>
+          <span>{hovered.isDirectory ? 'Folder' : hovered.kind} · Click to inspect</span>
+        </div>
+      ) : null}
+      {degraded ? (
+        <div className="files-fx-adaptive" role="status">
+          Graphics load reduced automatically. Files remain accessible.
+        </div>
+      ) : null}
+      {reducedMotion ? (
+        <div className="files-fx-reduced" role="status">
+          Reduced motion: particle animation paused
+        </div>
+      ) : null}
       {entries.length > stars.length ? (
         <div className="files-space-limit" role="status">
-          Showing {stars.length} of {entries.length} stars. Switch to List for every item.
+          Showing {stars.length} of {entries.length} stars. Switch to List to access every item.
         </div>
       ) : null}
     </div>
