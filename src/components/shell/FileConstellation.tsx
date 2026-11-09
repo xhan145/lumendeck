@@ -484,6 +484,7 @@ export function FileConstellation({
       startedAt: number | null;
     };
     let flight: CameraFlight | null = null;
+    let followingStar: string | null = null;
     const animateCamera = (position: THREE.Vector3, target: THREE.Vector3) => {
       if (reducedMotion) {
         flight = null;
@@ -502,6 +503,7 @@ export function FileConstellation({
     };
     const commandZoom = (action: FileZoomAction) => {
       if (action === 'reset') {
+        followingStar = null;
         animateCamera(
           new THREE.Vector3(0, 1, FILE_ZOOM.initialDistance),
           new THREE.Vector3(0, 0, 0),
@@ -513,6 +515,7 @@ export function FileConstellation({
         if (index === undefined) return;
         const k = index * 3;
         const point = new THREE.Vector3(currentXYZ[k], currentXYZ[k + 1], currentXYZ[k + 2]);
+        followingStar = stars[index].entry.path;
         const direction = camera.position.clone().sub(controls.target);
         if (direction.lengthSq() < 0.0001) direction.set(0, 0, 1);
         direction.normalize().multiplyScalar(FILE_ZOOM.focusDistance);
@@ -534,7 +537,7 @@ export function FileConstellation({
     };
     zoomCommandRef.current = commandZoom;
     // Drag, wheel and pinch always take priority over an automated flight.
-    const cancelFlight = () => { flight = null; };
+    const cancelFlight = () => { flight = null; followingStar = null; };
     controls.addEventListener('start', cancelFlight);
 
     const raycaster = new THREE.Raycaster();
@@ -652,6 +655,21 @@ export function FileConstellation({
           camera.position.lerpVectors(flight.fromPosition, flight.toPosition, eased);
           controls.target.lerpVectors(flight.fromTarget, flight.toTarget, eased);
           if (progress >= 1) flight = null;
+        }
+        // After "Focus star", stay with the moving selected star as the
+        // playhead advances, unless the user manually orbits/pans the camera.
+        if (followingStar && !flight) {
+          const index = byPath.get(followingStar);
+          if (index === undefined || selectedRef.current !== followingStar) {
+            followingStar = null;
+          } else if (timePlayingRef.current && timeEnabledRef.current) {
+            const k = index * 3;
+            const delta = new THREE.Vector3(
+              currentXYZ[k], currentXYZ[k + 1], currentXYZ[k + 2],
+            ).sub(controls.target).multiplyScalar(0.12);
+            camera.position.add(delta);
+            controls.target.add(delta);
+          }
         }
         controls.update();
         atmosphere.update(elapsed, !reducedMotion && fxMode !== 'off');
