@@ -1757,10 +1757,14 @@
   cursor: pointer;
 }
 .shell-launcher-item:hover,
-.shell-launcher-item:focus-visible {
-  outline: none;
-  border-color: var(--ld-border);
+.shell-launcher-item:focus-visible,
+.shell-launcher-item.active {
+  border-color: var(--ld-border-strong);
   background: var(--md-surface-2);
+}
+.shell-launcher-item:focus-visible {
+  outline: 2px solid var(--md-primary-light);
+  outline-offset: -2px;
 }
 .shell-launcher-icon {
   display: inline-grid;
