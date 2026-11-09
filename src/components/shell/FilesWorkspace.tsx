@@ -5,7 +5,7 @@ import {
   type DirectoryListing, type FileEntry, type FileKind, type FileLocation,
 } from '../../bridge/files';
 import { runRecoveryAction } from '../../bridge/shellRecovery';
-import { filterAndSortFiles, humanFileSize, type FileSort } from '../../core/shell/fileMap';
+import { filterAndSortFiles, humanFileSize, makeFileStars, type FileSort } from '../../core/shell/fileMap';
 import { Icon } from '../icons';
 import { FileConstellation } from './FileConstellation';
 import '../../styles/files.css';
@@ -156,6 +156,7 @@ export function FilesWorkspace() {
     [listing, query, sort],
   );
   const selected = listing?.entries.find((item) => item.path === selectedPath) ?? null;
+  const visibleStars = useMemo(() => makeFileStars(shown), [shown]);
 
   const activate = async (entry: FileEntry) => {
     if (entry.isDirectory) {
@@ -349,9 +350,9 @@ export function FilesWorkspace() {
                       setNotice('3D is unavailable on this device. Switched to List view.');
                     }} />
                   <div className="files-space-index">
-                    <h3>Visible stars <span>{shown.length}</span></h3>
+                    <h3>Visible stars <span>{visibleStars.length}</span></h3>
                     <div className="files-space-index-scroll">
-                      {shown.map((entry) => (
+                      {visibleStars.map(({ entry }) => (
                         <button type="button" key={entry.path}
                           title={entry.path} className={selectedPath === entry.path ? 'selected' : ''}
                           onClick={() => setSelectedPath(entry.path)}
