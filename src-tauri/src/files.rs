@@ -11,6 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 
 const MAX_ITEMS: usize = 800;
 const MAX_PREVIEW_BYTES: u64 = 3 * 1024 * 1024;
+const MAX_TEXT_PREVIEW_BYTES: u64 = 24 * 1024;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,6 +350,52 @@ fn preview_sync(path: String) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextFilePreview {
+    text: String,
+    truncated: bool,
+    bytes_shown: usize,
+}
+
+/// Preview only explicitly selected text-like files. Never execute their
+/// contents, index the disk or expose general read access to the WebView.
+#[tauri::command]
+pub async fn files_preview_text(path: String) -> Result<TextFilePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || text_preview_sync(path))
+        .await
+        .map_err(|e| format!("Text preview task failed: {e}"))?
+}
+
+fn text_preview_sync(path: String) -> Result<TextFilePreview, String> {
+    let file = PathBuf::from(path);
+    require_absolute(&file)?;
+    let ext = file.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(),
+        "txt" | "md" | "log" | "csv" | "json" | "toml"
+        | "yaml" | "yml" | "rs" | "ts" | "tsx" | "jsx"
+        | "css" | "go" | "cpp" | "h"
+    ) {
+        return Err("Text preview is not supported for this file type.".into());
+    }
+    let meta = fs::metadata(&file).map_err(|e| format!("Cannot inspect text file: {e}"))?;
+    if !meta.is_file() {
+        return Err("Text preview requires a regular file.".into());
+    }
+    let input = fs::File::open(&file).map_err(|e| format!("Cannot open text preview: {e}"))?;
+    let mut data = Vec::new();
+    input.take(MAX_TEXT_PREVIEW_BYTES + 1)
+        .read_to_end(&mut data).map_err(|e| format!("Cannot read text preview: {e}"))?;
+    if data.iter().any(|byte| *byte == 0) {
+        return Err("Binary content cannot be previewed as text.".into());
+    }
+    let truncated = meta.len() > MAX_TEXT_PREVIEW_BYTES || data.len() as u64 > MAX_TEXT_PREVIEW_BYTES;
+    data.truncate(MAX_TEXT_PREVIEW_BYTES as usize);
+    let bytes_shown = data.len();
+    let text = String::from_utf8_lossy(&data).into_owned();
+    Ok(TextFilePreview { text, truncated, bytes_shown })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{kind_of, valid_name};
@@ -412,6 +459,27 @@ mod tests {
         super::rename_sync(super::display(&root.join("source.txt")), "renamed.txt".into()).unwrap();
         assert_eq!(std::fs::read(root.join("renamed.txt")).unwrap(), b"source");
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn text_preview_is_bounded_and_rejects_binary_and_unknown_extensions() {
+        let root = test_folder("text-preview");
+        let file = root.join("sample.md");
+        std::fs::write(&file, "A real text preview").unwrap();
+        let sample = super::text_preview_sync(super::display(&file)).unwrap();
+        assert_eq!(sample.text, "A real text preview");
+        assert!(!sample.truncated);
+
+        std::fs::write(&file, vec![b'a'; (super::MAX_TEXT_PREVIEW_BYTES + 3) as usize]).unwrap();
+        let sample = super::text_preview_sync(super::display(&file)).unwrap();
+        assert!(sample.truncated);
+        assert_eq!(sample.bytes_shown as u64, super::MAX_TEXT_PREVIEW_BYTES);
+
+        std::fs::write(&file, b"not\\0text").unwrap();
+        assert!(super::text_preview_sync(super::display(&file)).is_err());
+        std::fs::write(root.join("unsafe.exe"), b"program").unwrap();
+        assert!(super::text_preview_sync(super::display(&root.join("unsafe.exe"))).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
