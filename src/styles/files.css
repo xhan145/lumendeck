@@ -401,3 +401,25 @@
 @media (prefers-reduced-motion: reduce) {
   .files-constellation canvas { animation: none; }
 }
+
+/* Stabilization: visible loading state and genuine keyboard focus outlines. */
+.files-loading {
+  margin: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(182, 160, 237, 0.21);
+  border-radius: 9px;
+  background: rgba(42, 35, 64, 0.28);
+  color: var(--ld-text-dim);
+  font-size: 12px;
+}
+.files-list button:focus-visible,
+.files-grid button:focus-visible,
+.files-space-index-scroll button:focus-visible,
+.files-places button:focus-visible,
+.files-mode button:focus-visible {
+  outline: 2px solid #b6a0ed;
+  outline-offset: -2px;
+}
+.files-mode button:focus-visible {
+  outline-offset: 1px;
+}
