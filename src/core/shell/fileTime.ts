@@ -59,24 +59,26 @@ export function projectFileThroughTime(
   const timestamp = star.entry.modifiedMs;
   const dated = timestamp !== null && Number.isFinite(timestamp) && timestamp >= 0
     && timestamp <= 8_640_000_000_000_000;
-  if (!bounds?.distinctDates) {
+  if (!bounds?.distinctDates || !dated) {
+    // Unknown last-modified time is NOT an estimated historical coordinate:
+    // leave the star anchored in its ordinary constellation location.
     return { x: star.x, y: star.y, z: star.z, dated, laterModified: false };
   }
   const now = clampTimeProgress(progress);
-  const modifiedPosition = dated
-    ? Math.min(1, Math.max(0, (timestamp! - bounds.firstMs) / (bounds.lastMs - bounds.firstMs)))
-    : 0.5;
+  const modifiedPosition = Math.min(
+    1, Math.max(0, (timestamp! - bounds.firstMs) / (bounds.lastMs - bounds.firstMs)),
+  );
   const hash = stableFileHash(star.entry.path);
   const identity = hash / 4294967296;
   const temporalAngle = now * Math.PI * 2 * (0.72 + identity * 0.23)
     + identity * Math.PI * 2 + modifiedPosition * Math.PI * 1.1;
-  const radius = dated ? 0.62 + identity * 0.44 : 0.18;
+  const radius = 0.62 + identity * 0.44;
   // Spatial motion is a controlled 3D projection of the fourth coordinate.
   // No earlier position is claimed to be a historically observed file location.
   return {
     x: star.x + Math.cos(temporalAngle) * radius,
     y: star.y + Math.sin(temporalAngle) * radius * 0.74,
-    z: star.z + (modifiedPosition - now) * (dated ? 7.2 : 1.0),
+    z: star.z + (modifiedPosition - now) * 7.2,
     dated,
     laterModified: dated && timestamp! > fileTimeAt(bounds, now),
   };
