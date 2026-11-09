@@ -111,24 +111,43 @@ export function FilesWorkspace() {
   }, [native, targetPath, refreshKey]);
 
   const navigate = (path: string) => {
+    if (busy) return;
     const destination = path.trim();
     if (!destination) return;
-    if (listing?.path.toLowerCase() === destination.toLowerCase()) return;
+    if (listing?.path.toLowerCase() === destination.toLowerCase()) {
+      setAddress(listing.path);
+      return;
+    }
+    if (!listing && targetPath?.toLowerCase() === destination.toLowerCase()) {
+      // Retry an address that failed previously rather than silently no-op.
+      refresh();
+      return;
+    }
     if (listing) setHistory((stack) => [...stack.slice(-29), listing.path]);
+    setListing(null);
+    setLoading(true);
+    setAddress(destination);
     setTargetPath(destination);
     setSelectedPath(null);
     setQuery('');
     setEditAction(null);
     setNotice(null);
+    setError(null);
   };
 
   const goBack = () => {
-    if (history.length === 0) return;
+    if (busy || history.length === 0) return;
     const previous = history[history.length - 1];
     setHistory((stack) => stack.slice(0, -1));
+    setListing(null);
+    setLoading(true);
     setTargetPath(previous);
+    setAddress(previous);
     setSelectedPath(null);
     setQuery('');
+    setEditAction(null);
+    setError(null);
+    setNotice(null);
   };
 
   const refresh = () => setRefreshKey((count) => count + 1);
@@ -182,6 +201,9 @@ export function FilesWorkspace() {
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
+      // Do not steal key events from an open dialog or from browser-only mode.
+      if (!native || busy || event.defaultPrevented ||
+          document.querySelector('[aria-modal="true"]')) return;
       if (event.ctrlKey && event.key.toLowerCase() === 'l') {
         event.preventDefault();
         addressRef.current?.focus();
@@ -208,7 +230,9 @@ export function FilesWorkspace() {
           <h1>Files, in your orbit.</h1>
           <p>Real local paths. No hidden copies or automatic file changes.</p>
         </div>
-        <button className="btn" type="button" onClick={() => void runRecoveryAction('explorer').catch((e) => setError(String(e)))}>
+        <button className="btn" type="button" disabled={!native}
+          title="Open the original Windows file manager"
+          onClick={() => void runRecoveryAction('explorer').catch((e) => setError(String(e)))}>
           {Icon.folder({ size: 15 })} Explorer fallback
         </button>
       </header>
@@ -242,16 +266,16 @@ export function FilesWorkspace() {
             <div className="files-toolbar">
               <div className="files-location-tools">
                 <button className="btn icon" type="button" aria-label="Go back" title="Go back (Alt+Left)"
-                  disabled={!history.length} onClick={goBack}>‹</button>
+                  disabled={!history.length || busy} onClick={goBack}>‹</button>
                 <button className="btn icon" type="button" aria-label="Parent folder" title="Parent folder (Alt+Up)"
-                  disabled={!listing?.parent} onClick={() => listing?.parent && navigate(listing.parent)}>{Icon.folder({ size: 16 })}</button>
+                  disabled={!listing?.parent || busy} onClick={() => listing?.parent && navigate(listing.parent)}>{Icon.folder({ size: 16 })}</button>
                 <button className="btn icon" type="button" aria-label="Refresh files" title="Refresh"
-                  onClick={refresh}>{Icon.restore({ size: 16 })}</button>
+                  disabled={busy} onClick={refresh}>{Icon.restore({ size: 16 })}</button>
               </div>
               <form className="files-path" onSubmit={(e) => { e.preventDefault(); navigate(address); }}>
-                <input ref={addressRef} value={address} aria-label="Folder path (Ctrl+L)"
+                <input ref={addressRef} value={address} disabled={busy} aria-label="Folder path (Ctrl+L)"
                   spellCheck={false} onChange={(e) => setAddress(e.target.value)} />
-                <button className="btn" type="submit" title="Navigate to folder">Go</button>
+                <button className="btn" type="submit" disabled={busy} title="Navigate to folder">Go</button>
               </form>
             </div>
 
@@ -305,7 +329,7 @@ export function FilesWorkspace() {
             ) : null}
 
             <div className="files-results" aria-busy={loading}>
-              {loading && !listing ? <p className="files-empty">Reading local files…</p> : null}
+              {loading ? <p className="files-loading" role="status">Reading local files…</p> : null}
               {!loading && listing && shown.length === 0 ? <p className="files-empty">
                 {query ? 'No matching files in this folder.' : 'This folder is empty.'}
               </p> : null}
@@ -339,9 +363,9 @@ export function FilesWorkspace() {
               ) : null}
 
               {listing && mode === 'list' ? (
-                <div className="files-list" role="list" aria-label="Folder entries">
+                <div className="files-list" role="group" aria-label="Folder entries">
                   {shown.map((entry) => (
-                    <button type="button" role="listitem" key={entry.path}
+                    <button type="button" key={entry.path}
                       className={selectedPath === entry.path ? 'selected' : ''}
                       onClick={() => setSelectedPath(entry.path)}
                       onDoubleClick={() => void activate(entry)}
@@ -356,9 +380,9 @@ export function FilesWorkspace() {
               ) : null}
 
               {listing && mode === 'grid' ? (
-                <div className="files-grid" role="list" aria-label="Folder entries">
+                <div className="files-grid" role="group" aria-label="Folder entries">
                   {shown.map((entry, index) => (
-                    <button type="button" role="listitem" className={selectedPath === entry.path ? 'selected' : ''}
+                    <button type="button" className={selectedPath === entry.path ? 'selected' : ''}
                       key={entry.path} title={entry.path}
                       onClick={() => setSelectedPath(entry.path)}
                       onDoubleClick={() => void activate(entry)}
