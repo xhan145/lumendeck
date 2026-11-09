@@ -208,10 +208,25 @@ export function FileConstellation({
       renderer.render(scene, camera);
       request = requestAnimationFrame(frame);
     };
-    request = requestAnimationFrame(frame);
+    // A hidden/minimized Tauri window should not spend GPU time rendering
+    // an unchanged file map. Resume the same camera when it becomes visible.
+    const onVisibility = () => {
+      cancelAnimationFrame(request);
+      request = 0;
+      if (!document.hidden) request = requestAnimationFrame(frame);
+    };
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      unavailableRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost);
+    onVisibility();
 
     return () => {
       cancelAnimationFrame(request);
+      document.removeEventListener('visibilitychange', onVisibility);
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
       observer.disconnect();
       renderer.domElement.removeEventListener('pointerdown', pointerDown);
       renderer.domElement.removeEventListener('click', click);
@@ -238,13 +253,13 @@ export function FileConstellation({
 
   // Selection should not destroy and recreate WebGL or reset the camera orbit.
   useEffect(() => {
+    const byPath = new Map(stars.map((star) => [star.entry.path, star.entry]));
     for (const [path, mesh] of meshesRef.current) {
       const chosen = path === selectedPath;
       (mesh.material as THREE.MeshBasicMaterial).color.set(
         chosen ? '#ffffff' : (mesh.userData.baseColor as string),
       );
-      const file = stars.find((star) => star.entry.path === path);
-      mesh.scale.setScalar(chosen ? 0.31 : file?.entry.isDirectory ? 0.25 : 0.15);
+      mesh.scale.setScalar(chosen ? 0.31 : byPath.get(path)?.isDirectory ? 0.25 : 0.15);
     }
   }, [selectedPath, stars]);
 
