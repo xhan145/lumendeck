@@ -156,6 +156,8 @@ export function FileConstellation({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    setDegraded(false);
+    setHovered(null);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -384,7 +386,7 @@ export function FileConstellation({
         const frameDuration = lastFrame ? now - lastFrame : 16;
         lastFrame = now;
         controls.update();
-        atmosphere.update(elapsed, !reducedMotion);
+        atmosphere.update(elapsed, !reducedMotion && fxMode !== 'off');
         nucleusRing.quaternion.copy(camera.quaternion);
         if (reticle.visible) {
           reticle.quaternion.copy(camera.quaternion);
@@ -477,7 +479,7 @@ export function FileConstellation({
 
   return (
     <div className="files-constellation" ref={hostRef}
-      role="img" aria-label={'Interactive 3D constellation of ' + stars.length + ' files and folders in ' + folderName}>
+      role="region" aria-label={'Interactive 3D constellation of ' + stars.length + ' files and folders in ' + folderName}>
       <div className="files-space-help" aria-hidden="true">
         <span>Drag to orbit</span><span>Scroll to zoom</span><span>Click a star to select</span><span>Double-click to open</span>
       </div>
