@@ -25,7 +25,11 @@ export interface FileStar {
 export function makeFileStars(entries: FileEntry[], max = 180): FileStar[] {
   const results: FileStar[] = [];
   const groups = FILE_GROUPS.map((group) => ({
-    ...group, members: entries.filter((entry) => entry.kind === group.kind),
+    ...group,
+    // View sorting (name/size/date) must never reshuffle constellation
+    // coordinates. File identity remains the original physical path.
+    members: entries.filter((entry) => entry.kind === group.kind)
+      .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true })),
   })).filter((group) => group.members.length > 0);
   if (!groups.length || max <= 0) return results;
 
