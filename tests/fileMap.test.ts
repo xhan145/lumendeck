@@ -20,6 +20,18 @@ describe('Files constellation projection', () => {
     expect(JSON.stringify(files)).toBe(before);
   });
 
+  it('keeps spatial coordinates identical when the table sort order changes', () => {
+    const files = [
+      item('z.png', 'image'), item('b.png', 'image'),
+      item('mix.wav', 'audio'), item('work', 'folder'),
+    ];
+    const first = new Map(makeFileStars(files).map((star) => [star.entry.path, [star.x, star.y, star.z]]));
+    const reversed = makeFileStars([...files].reverse());
+    for (const star of reversed) {
+      expect([star.x, star.y, star.z]).toEqual(first.get(star.entry.path));
+    }
+  });
+
   it('handles empty and bounded scenes', () => {
     expect(makeFileStars([])).toEqual([]);
     const files = Array.from({ length: 220 }, (_, i) => item(`file-${i}.png`, 'image'));
