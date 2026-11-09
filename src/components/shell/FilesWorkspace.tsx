@@ -18,6 +18,7 @@ import { FileInspector } from './FileInspector';
 import { useStudio } from '../../state/store';
 import type { FileFxMode } from '../../state/appSettings';
 import '../../styles/files.css';
+import '../../styles/files-spatial.css';
 
 type FilesMode = 'list' | 'grid' | 'constellation';
 type EditAction = 'new-folder' | 'rename' | null;
