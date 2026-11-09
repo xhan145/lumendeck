@@ -112,14 +112,15 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.code === 'Space') {
+      if (splashDone && event.ctrlKey && !event.altKey && !event.metaKey
+          && event.code === 'Space') {
         event.preventDefault();
         setLauncherOpen((open) => !open);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [splashDone]);
 
   const page =
     view === 'desktop' ? <DesktopHome />
@@ -147,7 +148,7 @@ export function App() {
 
   return (
     <>
-      <StarfieldCanvas />
+      {view !== 'files' ? <StarfieldCanvas /> : null}
       <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''} ${desktopMode ? 'desktop-shell' : ''}`}>
         {!desktopMode ? <header
           className={`topbar ${autohideArmed && !top.visible ? 'chrome-hidden' : ''}`}
