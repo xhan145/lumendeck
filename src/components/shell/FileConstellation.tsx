@@ -59,40 +59,47 @@ function starVector(star: FileStar): THREE.Vector3 {
   return new THREE.Vector3(star.x, star.y, star.z);
 }
 
-function createLinks(scene: THREE.Scene, stars: FileStar[]) {
-  const groups = new Map<FileKind, FileStar[]>();
-  for (const star of stars) {
+/**
+ * Dynamic, indexed membership wires. The rings/labels are static group
+ * landmarks; their wires follow the projected star positions on every tick.
+ */
+function createLinks(scene: THREE.Scene, stars: FileStar[]): (xyz: Float32Array) => void {
+  const groups = new Map<FileKind, number[]>();
+  for (const [index, star] of stars.entries()) {
     const found = groups.get(star.group) ?? [];
-    found.push(star);
+    found.push(index);
     groups.set(star.group, found);
   }
 
-  const positions: number[] = [];
-  const colors: number[] = [];
-  const pushEdge = (from: THREE.Vector3, to: THREE.Vector3, color: THREE.Color) => {
-    positions.push(from.x, from.y, from.z, to.x, to.y, to.z);
-    colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
-  };
+  type End = { kind: 'root' } | { kind: 'center'; group: FileKind } | { kind: 'star'; index: number };
+  const segments: Array<{ from: End; to: End; color: THREE.Color }> = [];
+  const root: End = { kind: 'root' };
 
-  const center = new THREE.Vector3();
   for (const group of FILE_GROUPS) {
-    const members = groups.get(group.kind);
-    if (!members?.length) continue;
+    const indices = groups.get(group.kind);
+    if (!indices?.length) continue;
     const tint = new THREE.Color(group.color);
-    const centroid = new THREE.Vector3();
-    for (const member of members) centroid.add(starVector(member));
-    centroid.multiplyScalar(1 / members.length);
-    pushEdge(center, centroid, tint);
+    const center: End = { kind: 'center', group: group.kind };
+    segments.push({ from: root, to: center, color: tint });
 
-    // View-only group hubs, not synthetic files. Membership is real.
-    const ordered = [...members].sort((a, b) => a.entry.path.localeCompare(b.entry.path));
-    for (let i = 0; i < ordered.length; i++) {
-      const star = starVector(ordered[i]);
-      pushEdge(centroid, star, tint);
-      if (i > 0) pushEdge(starVector(ordered[i - 1]), star, tint);
+    const ordered = [...indices].sort((a, b) =>
+      stars[a].entry.path.localeCompare(stars[b].entry.path),
+    );
+    for (const [position, index] of ordered.entries()) {
+      segments.push({ from: center, to: { kind: 'star', index }, color: tint });
+      if (position > 0) {
+        segments.push({
+          from: { kind: 'star', index: ordered[position - 1] },
+          to: { kind: 'star', index }, color: tint,
+        });
+      }
     }
 
-    const radius = 1.15 + Math.sqrt(members.length) * 0.21;
+    // The orbit ring and label identify a category, not a fabricated file.
+    const centroid = new THREE.Vector3();
+    for (const index of indices) centroid.add(starVector(stars[index]));
+    centroid.multiplyScalar(1 / indices.length);
+    const radius = 1.15 + Math.sqrt(indices.length) * 0.21;
     const ellipse: THREE.Vector3[] = [];
     for (let k = 0; k < 80; k++) {
       const angle = k * Math.PI * 2 / 80;
@@ -102,14 +109,13 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]) {
         centroid.z + Math.sin(angle * 2) * 0.27,
       ));
     }
-    const orbit = new THREE.LineLoop(
+    scene.add(new THREE.LineLoop(
       new THREE.BufferGeometry().setFromPoints(ellipse),
       new THREE.LineBasicMaterial({
         color: tint, transparent: true, opacity: 0.19,
         depthWrite: false, blending: THREE.AdditiveBlending,
       }),
-    );
-    scene.add(orbit);
+    ));
 
     const label = makeLabel(group.label.toUpperCase(), '#d4c4ed', 3.35);
     if (label) {
@@ -118,17 +124,53 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]) {
     }
   }
 
-  if (positions.length) {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.27,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    lines.renderOrder = 0;
-    scene.add(lines);
-  }
+  if (!segments.length) return () => {};
+  const positions = new Float32Array(segments.length * 6);
+  const colors = new Float32Array(segments.length * 6);
+  segments.forEach((segment, index) => {
+    const k = index * 6;
+    colors.set([
+      segment.color.r, segment.color.g, segment.color.b,
+      segment.color.r, segment.color.g, segment.color.b,
+    ], k);
+  });
+  const geometry = new THREE.BufferGeometry();
+  const attribute = new THREE.BufferAttribute(positions, 3);
+  attribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('position', attribute);
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.27,
+    depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  lines.renderOrder = 0;
+  lines.frustumCulled = false;
+  scene.add(lines);
+
+  return (xyz: Float32Array) => {
+    const centers = new Map<FileKind, [number, number, number]>();
+    for (const [kind, indices] of groups) {
+      let x = 0; let y = 0; let z = 0;
+      for (const index of indices) {
+        x += xyz[index * 3];
+        y += xyz[index * 3 + 1];
+        z += xyz[index * 3 + 2];
+      }
+      const n = indices.length;
+      centers.set(kind, [x / n, y / n, z / n]);
+    }
+    const get = (end: End): readonly number[] => {
+      if (end.kind === 'root') return [0, 0, 0];
+      if (end.kind === 'center') return centers.get(end.group) ?? [0, 0, 0];
+      return [xyz[end.index * 3], xyz[end.index * 3 + 1], xyz[end.index * 3 + 2]];
+    };
+    for (const [i, segment] of segments.entries()) {
+      const from = get(segment.from);
+      const to = get(segment.to);
+      positions.set([from[0], from[1], from[2], to[0], to[1], to[2]], i * 6);
+    }
+    attribute.needsUpdate = true;
+  };
 }
 
 /**
@@ -228,7 +270,7 @@ export function FileConstellation({
       scene.add(rootLabel);
     }
 
-    createLinks(scene, stars);
+    const updateLinks = createLinks(scene, stars);
 
     // One instanced GPU draw for all selectable file cores.
     const sphere = new THREE.SphereGeometry(1, 12, 9);
