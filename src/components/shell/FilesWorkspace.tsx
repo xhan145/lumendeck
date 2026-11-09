@@ -8,6 +8,10 @@ import { runRecoveryAction } from '../../bridge/shellRecovery';
 import { filterAndSortFiles, humanFileSize, makeFileStars, type FileSort } from '../../core/shell/fileMap';
 import { fileBreadcrumbs } from '../../core/shell/fileNavigation';
 import {
+  buildFileContextLens, CONTEXT_DEFAULT_THRESHOLD,
+  type FileContextMode,
+} from '../../core/shell/fileContext';
+import {
   readSpatialBookmarks, removeSpatialBookmark, saveSpatialBookmark,
   sameFolderPath, writeSpatialBookmarks,
   type SpatialBookmark, type SpatialCamera,
@@ -85,6 +89,8 @@ export function FilesWorkspace() {
   const [sort, setSort] = useState<FileSort>('name');
   const [query, setQuery] = useState('');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [contextMode, setContextMode] = useState<FileContextMode>('links');
+  const [contextThreshold, setContextThreshold] = useState(CONTEXT_DEFAULT_THRESHOLD);
   const [editAction, setEditAction] = useState<EditAction>(null);
   const [editName, setEditName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -177,6 +183,13 @@ export function FilesWorkspace() {
   );
   const selected = listing?.entries.find((item) => item.path === selectedPath) ?? null;
   const visibleStars = useMemo(() => makeFileStars(shown), [shown]);
+  // Context is scoped to the real file stars the user can currently see.
+  // No new filesystem calls, background indexing, or guessed project links.
+  const contextLens = useMemo(
+    () => buildFileContextLens(visibleStars.map((star) => star.entry),
+      selectedPath, contextThreshold),
+    [visibleStars, selectedPath, contextThreshold],
+  );
   const breadcrumbs = useMemo(() => fileBreadcrumbs(listing?.path ?? ''), [listing?.path]);
   const currentBookmarked = !!listing && bookmarks.some((item) =>
     sameFolderPath(item.folderPath, listing.path));
@@ -422,6 +435,28 @@ export function FilesWorkspace() {
                   </select>
                 </label>
               ) : null}
+              {mode === 'constellation' ? (
+                <div className="files-context-toolbar" role="group"
+                  aria-label="Fifth dimension: explainable file context">
+                  <label className="files-context-mode">
+                    <span>Ⅴ CONTEXT</span>
+                    <select aria-label="Context lens mode" value={contextMode}
+                      onChange={(event) => setContextMode(event.target.value as FileContextMode)}>
+                      <option value="off">Off</option>
+                      <option value="links">Reveal</option>
+                      <option value="focus">Focus</option>
+                    </select>
+                  </label>
+                  <label className="files-context-threshold">
+                    <span>Evidence ≥ {contextThreshold}</span>
+                    <input aria-label="Minimum contextual evidence score"
+                      type="range" min="25" max="85" step="5"
+                      disabled={contextMode === 'off' || !contextLens}
+                      value={contextThreshold}
+                      onChange={(event) => setContextThreshold(Number(event.target.value))} />
+                  </label>
+                </div>
+              ) : null}
               <button className="btn files-bookmark-button" type="button"
                 title={currentBookmarked ? 'Update the saved folder bookmark' : 'Save this folder on this device'}
                 disabled={!listing || loading}
@@ -475,6 +510,8 @@ export function FilesWorkspace() {
                     folderPath={listing.path}
                     folderName={folderLabel(listing.path)}
                     cameraRequest={cameraRequest}
+                    contextLens={contextLens}
+                    contextMode={contextMode}
                     onSaveView={(camera) => saveView(camera)}
                     onSelect={(entry) => setSelectedPath(entry.path)}
                     onOpen={(entry) => { void activate(entry); }}
@@ -546,6 +583,8 @@ export function FilesWorkspace() {
           <FileInspector
             selected={selected}
             listing={listing}
+            contextLens={contextLens}
+            contextMode={contextMode}
             onClose={() => setInspectorOpen(false)}
             onOpen={(entry) => { void activate(entry); }}
             onRename={() => beginEdit('rename')}
