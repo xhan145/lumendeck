@@ -12,6 +12,7 @@ interface Props {
   entries: FileEntry[];
   selectedPath: string | null;
   folderName: string;
+  folderPath: string;
   fxMode: FileFxMode;
   onSelect: (entry: FileEntry) => void;
   onOpen: (entry: FileEntry) => void;
@@ -134,9 +135,12 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]) {
  * The 3D presentation NEVER changes underlying filesystem paths.
  */
 export function FileConstellation({
-  entries, selectedPath, folderName, fxMode, onSelect, onOpen, onUnavailable,
+  entries, selectedPath, folderName, folderPath, fxMode, onSelect, onOpen, onUnavailable,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const savedCameraRef = useRef<{
+    folderPath: string; position: THREE.Vector3; target: THREE.Vector3;
+  } | null>(null);
   const focusRef = useRef<(selected: string | null, hovered: string | null) => void>(() => {});
   const selectedRef = useRef(selectedPath);
   const onSelectRef = useRef(onSelect);
@@ -182,6 +186,12 @@ export function FileConstellation({
     controls.enablePan = true;
     controls.screenSpacePanning = true;
     controls.target.set(0, 0, 0);
+    const priorCamera = savedCameraRef.current;
+    if (priorCamera?.folderPath === folderPath) {
+      camera.position.copy(priorCamera.position);
+      controls.target.copy(priorCamera.target);
+      controls.update();
+    }
 
     const nativePixelRatio = Math.min(window.devicePixelRatio || 1, preset.pixelRatioCap);
     renderer.setPixelRatio(nativePixelRatio);
@@ -378,9 +388,17 @@ export function FileConstellation({
     const governor = makeFileFxGovernor();
     let request = 0;
     let lastFrame = 0;
+    let lastRendered = 0;
     let startTime = 0;
     const frame = (now: number) => {
       try {
+        // Reduced-motion mode redraws at a lower cadence while preserving
+        // file selection and orbit interaction.
+        if (reducedMotion && lastRendered && now - lastRendered < 40) {
+          request = requestAnimationFrame(frame);
+          return;
+        }
+        lastRendered = now;
         if (!startTime) startTime = now;
         const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
         const frameDuration = lastFrame ? now - lastFrame : 16;
@@ -400,7 +418,7 @@ export function FileConstellation({
         if (pipeline && !reducedEffects) pipeline.render();
         else renderer.render(scene, camera);
 
-        if (!reducedEffects && governor.feed(frameDuration)) {
+        if (!reducedMotion && !reducedEffects && governor.feed(frameDuration)) {
           reducedEffects = true;
           renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
           atmosphere.setPixelRatio(renderer.getPixelRatio());
@@ -443,6 +461,9 @@ export function FileConstellation({
       renderer.domElement.removeEventListener('click', click);
       renderer.domElement.removeEventListener('dblclick', doubleClick);
       observer.disconnect();
+      savedCameraRef.current = {
+        folderPath, position: camera.position.clone(), target: controls.target.clone(),
+      };
       controls.dispose();
       focusRef.current = () => {};
       hoverRef.current = null;
@@ -470,7 +491,7 @@ export function FileConstellation({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [stars, folderName, fxMode, reducedMotion]);
+  }, [stars, folderName, folderPath, fxMode, reducedMotion]);
 
   // Selection changes do not recreate the canvas, camera or particle fields.
   useEffect(() => {
