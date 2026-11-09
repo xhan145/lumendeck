@@ -12,6 +12,11 @@ import {
 import type { FileFxMode } from '../../state/appSettings';
 import { createPostPipeline, type PostPipeline } from '../graph/graph3d/postprocessing';
 import { createFileAtmosphere } from './fileConstellationAtmosphere';
+import {
+  createMiniMapBounds, findMiniMapStar, projectMiniMapPoint,
+  MINI_MAP_WIDTH, MINI_MAP_HEIGHT,
+} from '../../core/shell/fileMiniMap';
+import type { SpatialCamera } from '../../core/shell/fileBookmarks';
 import { createFileNebulaBackdrop } from './fileConstellationBackdrop';
 
 interface Props {
@@ -20,6 +25,8 @@ interface Props {
   folderName: string;
   folderPath: string;
   fxMode: FileFxMode;
+  cameraRequest?: { id: number; folderPath: string; camera: SpatialCamera } | null;
+  onSaveView?: (camera: SpatialCamera) => void;
   onSelect: (entry: FileEntry) => void;
   onOpen: (entry: FileEntry) => void;
   onUnavailable: () => void;
@@ -183,9 +190,21 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]): (xyz: Float32Array)
  * The 3D presentation NEVER changes underlying filesystem paths.
  */
 export function FileConstellation({
-  entries, selectedPath, folderName, folderPath, fxMode, onSelect, onOpen, onUnavailable,
+  entries, selectedPath, folderName, folderPath, fxMode, cameraRequest, onSaveView,
+  onSelect, onOpen, onUnavailable,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const miniMapRef = useRef<HTMLCanvasElement | null>(null);
+  const miniMapPickRef = useRef<(x: number, y: number) => void>(() => {});
+  const drawMiniMapRef = useRef<() => void>(() => {});
+  const snapshotCameraRef = useRef<() => SpatialCamera | null>(() => null);
+  const restoreCameraRef = useRef<(camera: SpatialCamera) => void>(() => {});
+  const lastCameraRequestRef = useRef<number | null>(null);
+  const onSaveViewRef = useRef(onSaveView);
+  onSaveViewRef.current = onSaveView;
+  const [miniMapVisible, setMiniMapVisible] = useState(true);
+  const miniMapVisibleRef = useRef(true);
+  miniMapVisibleRef.current = miniMapVisible;
   const savedCameraRef = useRef<{
     folderPath: string; position: THREE.Vector3; target: THREE.Vector3;
   } | null>(null);
