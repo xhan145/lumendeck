@@ -17,6 +17,48 @@ stars-and-relationships language to actual local folder entries.
    Up (Alt+Up), common places, mounted drives, or Refresh.
 6. Use **New folder** or select an item then **Rename** for explicit changes.
 
+## Cinematic Constellation FX
+
+**Files → Constellation → Particle FX** exposes three persisted modes:
+
+| Mode | Distant stars | Ambient dust | Mist per group | Bloom |
+| --- | ---: | ---: | ---: | --- |
+| Off | 0 | 0 | 0 | No |
+| Balanced | 1,100 | 260 | 25 | No |
+| Cinematic (default) | 2,400 | 820 | 85 | Yes |
+
+Each real file is one GPU-instanced, selectable core, with a shared halo particle
+layer. The root star is the currently browsed directory. Category group rings and
+labels are **display-only grouping**, not extra files or folders. A single
+line-segment mesh encodes membership and intra-cluster connections.
+
+- Cosmetic particles, halos, and links use deterministic seeds and do not
+  change Windows file paths or move nodes on disk.
+- Orbit/zoom/pan use Three.js OrbitControls; a selected file receives a focus
+  ring and active link. Hovering exposes the real file name in a readable tooltip.
+- Particle motion freezes for `prefers-reduced-motion`; selected-star
+  highlighting still works.
+- Renderer DPR is capped at 1.5 for higher tiers. When sustained slow frames
+  trigger adaptive fallback, bloom is bypassed and DPR drops. The saved
+  preference is **not** overwritten.
+- Hidden windows pause animation. Canvas/GPU memory is disposed when the
+  view closes. WebGL errors fall back to List view with a visible notice.
+- The side list/index remains usable by keyboard, and all 800 loaded entries
+  remain accessible in List. The 3D canvas visualizes at most 180 files.
+- The decorative global starfield is disabled while Files is open to avoid
+  rendering two animated WebGL scenes behind each other.
+
+### Visual acceptance checklist
+
+1. Check a mixed folder with images, music, documents and subfolders.
+   Every category forms a legible spatial cluster.
+2. Try Cinematic, Balanced, Off. Observe mist/particles/bloom change.
+3. Click a star, orbit, click another. The camera should **not reset**.
+4. Sort by date then by name. Star coordinates should remain stable.
+5. Check GPU load on low-end hardware and Windows reduced-motion settings.
+6. Leave Files and return. Ensure WebGL resources don't accumulate.
+7. Confirm List and Grid still work with 3D unavailable.
+
 ## Reality and safety boundaries
 
 - The Rust backend enumerates a single requested directory only, capped at 800
