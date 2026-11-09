@@ -829,7 +829,6 @@ export function FileConstellation({
             disabled={!timeEnabled || !canNavigateTime || reducedMotion}
             onClick={togglePlay}>{isPlayingTime ? 'Ⅱ Pause' : '▶ Play'}</button>
           <label className="files-time-range-label">
-            <span className="sr-only">Travel through last-modified time</span>
             <input type="range" min="0" max={FILE_TIME_STEPS} step="1"
               aria-label="Time position from earliest to latest file modification"
               disabled={!timeEnabled || !canNavigateTime}
