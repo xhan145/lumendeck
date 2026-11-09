@@ -107,6 +107,30 @@ reticle, halo, wires and trail stay attached, confirm camera orbit still works,
 then disable time and verify the stars return to their original stable layout.
 Reopen the folder in Windows Explorer to confirm no changes to files or dates.
 
+### Analog observatory visual polish
+
+The Files Constellation has a second visual layer that is deliberately
+**cosmetic and offline**. In Balanced and Cinematic modes a deterministic,
+static canvas texture paints a deep-purple/navy nebulous ink backdrop with
+subtle long-exposure grain. It is attached behind the camera, so it does not
+move the star map, modify file paths, or change any raycast target. Off mode
+skips the backdrop entirely.
+
+Real file nodes are now gently faceted rather than flat spheres. The selected
+star's modeled time trajectory fades from dark aubergine to pale lavender,
+without new draw calls per frame. A clearer observatory heading identifies
+the current folder; a compact right-side index summarizes represented file
+types. The 4D chronograph has a larger current date, a subtle progress rail,
+actual first/last dates, and keyboard-visible controls. Tooltips, zoom
+controls, and time scrubbing stay separate from decorative layers.
+
+**Visual QA:** Check a large and small window, Windows high-DPI scaling,
+Off/Balanced/Cinematic, keyboard tab/focus, low-GPU fallbacks, reduced-motion,
+time scrubbing and zoom. Look for clipping around the bottom time rail and
+confirm the new backdrop never masks a file or steals pointer events.
+Verify a hidden/minimized window stops animation and leaving the Files view
+releases the backdrop texture; image creation and file operations are unchanged.
+
 ### Visual acceptance checklist
 
 1. Check a mixed folder with images, music, documents and subfolders.
