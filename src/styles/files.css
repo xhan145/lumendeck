@@ -423,3 +423,105 @@
 .files-mode button:focus-visible {
   outline-offset: 1px;
 }
+
+/* Cinematic Files constellation: restrained, legible cosmic instrument panel. */
+.files-fx-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 7px;
+  border: 1px solid rgba(171, 143, 224, 0.35);
+  border-radius: 9px;
+  background: rgba(55, 35, 83, 0.48);
+  color: #d9c9f2;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+.files-fx-select select {
+  min-height: 27px;
+  padding: 3px 20px 3px 7px;
+  background: rgba(20, 17, 36, 0.82);
+  border-color: rgba(171, 143, 224, 0.28);
+  color: #efe7ff;
+  font-size: 11px;
+}
+.files-fx-select select:focus-visible {
+  outline: 2px solid #c3aded;
+  outline-offset: 1px;
+}
+.files-constellation {
+  background:
+    radial-gradient(ellipse at 52% 52%, rgba(77, 51, 122, 0.13), transparent 58%),
+    #090a17;
+  isolation: isolate;
+}
+.files-space-legend {
+  position: absolute;
+  top: 13px;
+  right: 13px;
+  z-index: 2;
+  display: grid;
+  gap: 5px;
+  max-width: min(220px, 43%);
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid rgba(179, 159, 220, 0.21);
+  background: rgba(11, 11, 27, 0.80);
+  color: #c2b6dd;
+  font-size: 10px;
+  line-height: 1.4;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+.files-space-legend-head {
+  color: #e4d9ff;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.13em;
+}
+.files-star-tooltip {
+  position: absolute;
+  right: 13px;
+  bottom: 16px;
+  z-index: 3;
+  display: grid;
+  gap: 4px;
+  max-width: min(240px, 46%);
+  padding: 10px 12px;
+  border: 1px solid rgba(192, 170, 242, 0.44);
+  border-radius: 10px;
+  background: rgba(17, 14, 33, 0.95);
+  box-shadow: 0 0 30px rgba(121, 85, 191, 0.12);
+  color: #eee8ff;
+  pointer-events: none;
+  overflow-wrap: anywhere;
+}
+.files-star-tooltip strong { font-size: 12px; line-height: 1.3; }
+.files-star-tooltip span { font-size: 10px; color: #bdb2d7; }
+.files-fx-adaptive,
+.files-fx-reduced {
+  position: absolute;
+  right: 13px;
+  bottom: 83px;
+  z-index: 3;
+  max-width: 250px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(171, 143, 224, 0.24);
+  background: rgba(12, 11, 26, 0.89);
+  color: #cfc2e8;
+  font-size: 10px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.files-fx-reduced { bottom: 117px; }
+@media (max-width: 940px) {
+  .files-space-legend { display: none; }
+}
+@media (max-width: 620px) {
+  .files-star-tooltip { bottom: 64px; max-width: 65%; }
+  .files-fx-adaptive { bottom: 114px; }
+  .files-fx-reduced { bottom: 144px; }
+  .files-fx-select { flex: 1 1 auto; justify-content: space-between; }
+}
