@@ -274,6 +274,57 @@
 }
 .files-constellation { position: relative; overflow: hidden; background: #0b0e1b; }
 .files-constellation canvas { display: block; width: 100%; height: 100%; }
+/* Canvas-local camera controls: bigger targets make deep zoom discoverable.
+   They do not share click handlers with file stars or modify real file paths. */
+.files-zoom-controls {
+  position: absolute;
+  left: 13px;
+  bottom: 13px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: calc(100% - 26px);
+  padding: 6px;
+  border: 1px solid rgba(184, 158, 227, 0.30);
+  border-radius: 12px;
+  background: rgba(14, 12, 29, 0.88);
+  box-shadow: 0 8px 30px rgba(4, 3, 13, 0.38);
+  backdrop-filter: blur(9px);
+}
+.files-zoom-controls button {
+  min-width: 39px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid rgba(180, 152, 231, 0.20);
+  border-radius: 8px;
+  color: #eee5ff;
+  background: rgba(74, 52, 110, 0.47);
+  font: 650 12px/1.1 system-ui, sans-serif;
+  cursor: pointer;
+}
+.files-zoom-controls button:nth-child(-n+2) {
+  font-size: 22px;
+  font-weight: 450;
+}
+.files-zoom-controls button:not(:disabled):hover {
+  color: #fff;
+  border-color: rgba(193, 169, 248, 0.68);
+  background: rgba(113, 82, 166, 0.55);
+}
+.files-zoom-controls button:focus-visible {
+  outline: 2px solid #d3c0ff;
+  outline-offset: 2px;
+}
+.files-zoom-controls button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.files-constellation:focus-visible {
+  outline: 2px solid rgba(195, 173, 237, 0.75);
+  outline-offset: -2px;
+}
+
 .files-space-help {
   position: absolute;
   display: flex;
@@ -293,7 +344,7 @@
 .files-space-limit {
   position: absolute;
   left: 13px;
-  bottom: 14px;
+  bottom: 72px;
   max-width: calc(100% - 26px);
   padding: 7px 10px;
   color: #d7cee7;
