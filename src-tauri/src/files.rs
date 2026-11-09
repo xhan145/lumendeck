@@ -238,8 +238,14 @@ fn rename_sync(path: String, new_name: String) -> Result<(), String> {
     fs::symlink_metadata(&source).map_err(|e| format!("Cannot access item: {e}"))?;
     let target = parent.join(new_name);
     if target == source { return Ok(()); }
+    // A case-only rename must be attempted on case-insensitive Windows
+    // volumes. MoveFileW below still refuses to replace another target.
+    let case_only = source.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case(&new_name))
+        .unwrap_or(false);
     // symlink_metadata also sees dangling symlink destinations.
-    if fs::symlink_metadata(&target).is_ok() {
+    if !case_only && fs::symlink_metadata(&target).is_ok() {
         return Err("An item with that name already exists.".into());
     }
     // On Windows, MoveFileW fails if the target exists. Unlike a separate
@@ -256,7 +262,10 @@ fn rename_sync(path: String, new_name: String) -> Result<(), String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        fs::rename(&source, target).map_err(|e| format!("Could not rename item: {e}"))
+        // std::fs::rename can replace existing files on Unix. Until a
+        // platform-specific atomic no-clobber primitive is available, avoid
+        // exposing a destructive operation under a promise of safety.
+        Err("Safe no-overwrite rename is only available on Windows.".into())
     }
 }
 
@@ -280,6 +289,7 @@ pub fn files_open(app: tauri::AppHandle, path: String) -> Result<(), String> {
         | "mp4" | "mov" | "mkv" | "webm" | "avi"
         | "txt" | "md" | "pdf" | "rtf" | "docx" | "xlsx" | "pptx"
         | "csv" | "log" | "json" | "toml" | "yaml" | "yml"
+        | "rs" | "ts" | "tsx" | "jsx" | "css" | "go" | "cpp" | "h"
     ) {
         return Err(
             "This file type may launch code or an untrusted association. Open it explicitly through Windows Explorer.".into(),
