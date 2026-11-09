@@ -964,7 +964,38 @@ export function FileConstellation({
         <button type="button" aria-label="Reset constellation camera"
           title="Return to full constellation (0)"
           onClick={() => zoomCommandRef.current('reset')}>Reset</button>
+        <button type="button" disabled={!onSaveView} title="Save this folder and camera framing locally"
+          onClick={() => {
+            const snapshot = snapshotCameraRef.current();
+            if (snapshot) onSaveViewRef.current?.(snapshot);
+          }}>Save view</button>
       </div>
+      <section className="files-spatial-mini-map" aria-label="Spatial mini-map">
+        <div className="files-spatial-mini-map-head">
+          <span>SPATIAL MAP <small>TOP DOWN</small></span>
+          <button type="button" onClick={() => setMiniMapVisible((shown) => !shown)}
+            aria-expanded={miniMapVisible}
+            title={miniMapVisible ? 'Hide spatial map' : 'Show spatial map'}>
+            {miniMapVisible ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {miniMapVisible ? <>
+          <canvas ref={miniMapRef}
+            role="img"
+            aria-label="Top-down overview of real file stars. Click a point to select it. For keyboard access use the visible star index."
+            title="Click a dot to select a file star"
+            width={MINI_MAP_WIDTH * 2} height={MINI_MAP_HEIGHT * 2}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) return;
+              miniMapPickRef.current(
+                (event.clientX - rect.left) * MINI_MAP_WIDTH / rect.width,
+                (event.clientY - rect.top) * MINI_MAP_HEIGHT / rect.height,
+              );
+            }} />
+          <small className="files-mini-map-caption">Click a dot to select · Crosshair is camera target</small>
+        </> : null}
+      </section>
       <section className="files-time-rail" aria-label="Fourth dimension: file modification time">
         <div className="files-time-title">
           <label className="files-time-toggle" title="Project real last-modified dates into the constellation">
