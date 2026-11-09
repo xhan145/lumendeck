@@ -518,6 +518,63 @@ export function FileConstellation({
     projectTimeRef.current = projectTime;
     projectTime();
 
+    // The map is a lightweight 2D projection of these SAME real 3D nodes.
+    // A fixed spatial boundary prevents jitter as 4D timestamps advance.
+    const miniMapBounds = createMiniMapBounds(stars);
+    const drawMiniMap = () => {
+      if (!miniMapVisibleRef.current) return;
+      const canvas = miniMapRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
+      ctx.clearRect(0, 0, MINI_MAP_WIDTH, MINI_MAP_HEIGHT);
+      ctx.fillStyle = '#0c1020';
+      ctx.fillRect(0, 0, MINI_MAP_WIDTH, MINI_MAP_HEIGHT);
+      ctx.strokeStyle = 'rgba(180,153,221,0.08)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i <= 3; i++) {
+        const x = i * MINI_MAP_WIDTH / 4;
+        const y = i * MINI_MAP_HEIGHT / 4;
+        ctx.beginPath();
+        ctx.moveTo(x, 0); ctx.lineTo(x, MINI_MAP_HEIGHT);
+        ctx.moveTo(0, y); ctx.lineTo(MINI_MAP_WIDTH, y);
+        ctx.stroke();
+      }
+      const center = projectMiniMapPoint(0, 0, miniMapBounds);
+      ctx.strokeStyle = 'rgba(207,176,248,0.5)';
+      ctx.beginPath(); ctx.arc(center.x, center.y, 6, 0, Math.PI * 2); ctx.stroke();
+
+      for (let i = 0; i < stars.length; i++) {
+        const k = i * 3;
+        const point = projectMiniMapPoint(currentXYZ[k], currentXYZ[k + 1], miniMapBounds);
+        const active = selectedRef.current === stars[i].entry.path;
+        ctx.globalAlpha = laterModified[i] && !active ? 0.38 : 0.94;
+        ctx.fillStyle = active ? '#ffffff' : stars[i].color;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, active ? 4.6 : stars[i].entry.isDirectory ? 3 : 2.1,
+          0, Math.PI * 2);
+        ctx.fill();
+        if (active) {
+          ctx.strokeStyle = '#d4bfff';
+          ctx.lineWidth = 1.3;
+          ctx.beginPath(); ctx.arc(point.x, point.y, 7.6, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      const target = projectMiniMapPoint(controls.target.x, controls.target.y, miniMapBounds);
+      ctx.strokeStyle = '#e9dafc'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(target.x - 5, target.y); ctx.lineTo(target.x + 5, target.y);
+      ctx.moveTo(target.x, target.y - 5); ctx.lineTo(target.x, target.y + 5);
+      ctx.stroke();
+    };
+    drawMiniMapRef.current = drawMiniMap;
+    miniMapPickRef.current = (x, y) => {
+      const index = findMiniMapStar(currentXYZ, x, y, miniMapBounds, 11);
+      if (index !== null && stars[index]) onSelectRef.current(stars[index].entry);
+    };
+    drawMiniMap();
+
     // Camera navigation is separate from file selection: zoom never moves files
     // or reconstructs the 3D scene. Repeated button presses accumulate even
     // while a previous camera flight is still animating.
@@ -581,6 +638,21 @@ export function FileConstellation({
       );
     };
     zoomCommandRef.current = commandZoom;
+    snapshotCameraRef.current = () => ({
+      position: camera.position.toArray() as [number, number, number],
+      target: controls.target.toArray() as [number, number, number],
+    });
+    restoreCameraRef.current = (snapshot) => {
+      const position = new THREE.Vector3(...snapshot.position);
+      const target = new THREE.Vector3(...snapshot.target);
+      if (!position.toArray().every(Number.isFinite) ||
+          !target.toArray().every(Number.isFinite)) return;
+      const offset = position.sub(target);
+      if (offset.lengthSq() < 0.001) offset.set(0, 0, FILE_ZOOM.minDistance);
+      offset.clampLength(FILE_ZOOM.minDistance, FILE_ZOOM.maxDistance);
+      followingStar = null;
+      animateCamera(target.clone().add(offset), target);
+    };
     // Drag, wheel and pinch always take priority over an automated flight.
     const cancelFlight = () => { flight = null; followingStar = null; };
     controls.addEventListener('start', cancelFlight);
@@ -667,6 +739,7 @@ export function FileConstellation({
     let lastFrame = 0;
     let lastRendered = 0;
     let lastTimeLabel = 0;
+    let lastMiniMapFrame = 0;
     let startTime = 0;
     const frame = (now: number) => {
       try {
@@ -731,6 +804,10 @@ export function FileConstellation({
         }
         if (pipeline && !reducedEffects) pipeline.render();
         else renderer.render(scene, camera);
+        if (now - lastMiniMapFrame >= 110) {
+          lastMiniMapFrame = now;
+          drawMiniMap();
+        }
 
         if (!reducedMotion && !reducedEffects && governor.feed(frameDuration)) {
           reducedEffects = true;
@@ -777,6 +854,10 @@ export function FileConstellation({
       observer.disconnect();
       controls.removeEventListener('start', cancelFlight);
       zoomCommandRef.current = () => {};
+      snapshotCameraRef.current = () => null;
+      restoreCameraRef.current = () => {};
+      drawMiniMapRef.current = () => {};
+      miniMapPickRef.current = () => {};
       savedCameraRef.current = {
         folderPath, position: camera.position.clone(), target: controls.target.clone(),
       };
@@ -814,7 +895,15 @@ export function FileConstellation({
   // Selection changes do not recreate the canvas, camera or particle fields.
   useEffect(() => {
     projectTimeRef.current();
+    drawMiniMapRef.current();
   }, [selectedPath, stars]);
+
+  useEffect(() => {
+    if (!cameraRequest || cameraRequest.folderPath !== folderPath ||
+        lastCameraRequestRef.current === cameraRequest.id) return;
+    lastCameraRequestRef.current = cameraRequest.id;
+    restoreCameraRef.current(cameraRequest.camera);
+  }, [cameraRequest, folderPath]);
 
   const canFocusSelected = selectedPath !== null &&
     stars.some((star) => star.entry.path === selectedPath);
