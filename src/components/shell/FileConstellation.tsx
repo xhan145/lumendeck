@@ -753,6 +753,11 @@ export function FileConstellation({
 
   const canFocusSelected = selectedPath !== null &&
     stars.some((star) => star.entry.path === selectedPath);
+  const canNavigateTime = !!temporalBounds?.distinctDates;
+  const isPlayingTime = canNavigateTime && timeEnabled && timePlaying && !reducedMotion;
+  const shownTime = temporalBounds
+    ? new Date(fileTimeAt(temporalBounds, timePosition)).toLocaleString()
+    : 'No modification dates available';
 
   return (
     <div className="files-constellation" ref={hostRef}
@@ -786,6 +791,44 @@ export function FileConstellation({
           title="Return to full constellation (0)"
           onClick={() => zoomCommandRef.current('reset')}>Reset</button>
       </div>
+      <section className="files-time-rail" aria-label="Fourth dimension: file modification time">
+        <div className="files-time-title">
+          <label className="files-time-toggle" title="Move stars through a 3D projection of their last-modified timestamps">
+            <input type="checkbox" checked={timeEnabled}
+              onChange={(event) => toggleTime(event.target.checked)} />
+            <span>4D TIME</span>
+          </label>
+          <output className="files-time-readout" aria-label="Selected last-modified date">
+            {shownTime}
+          </output>
+          <span className="files-time-sample">
+            {temporalBounds ? `${temporalBounds.datedCount}/${stars.length} dated` : 'No dated stars'}
+          </span>
+        </div>
+        <div className="files-time-scrubber">
+          <button type="button" className="files-time-play"
+            aria-label={isPlayingTime ? 'Pause fourth-dimensional timeline' : 'Play fourth-dimensional timeline'}
+            disabled={!timeEnabled || !canNavigateTime || reducedMotion}
+            onClick={togglePlay}>{isPlayingTime ? 'Ⅱ Pause' : '▶ Play'}</button>
+          <label className="files-time-range-label">
+            <span className="sr-only">Travel through last-modified time</span>
+            <input type="range" min="0" max={FILE_TIME_STEPS} step="1"
+              aria-label="Time position from earliest to latest file modification"
+              disabled={!timeEnabled || !canNavigateTime}
+              value={Math.round(timePosition * FILE_TIME_STEPS)}
+              onChange={(event) => scrubTime(Number(event.target.value) / FILE_TIME_STEPS)} />
+          </label>
+          <button type="button" disabled={!timeEnabled || !canNavigateTime}
+            onClick={() => scrubTime(0)} title="Earliest last-modified date">Earliest</button>
+          <button type="button" disabled={!timeEnabled || !canNavigateTime}
+            onClick={() => scrubTime(1)} title="Latest last-modified date">Latest</button>
+        </div>
+        <p className="files-time-disclaimer">
+          {canNavigateTime
+            ? 'Modification dates projected into space. Dim stars were modified later than the playhead; this is not file-version history.'
+            : 'Needs at least two distinct file modification dates. No historical positions or versions are invented.'}
+        </p>
+      </section>
       <div className="files-space-legend" aria-hidden="true">
         <span className="files-space-legend-head">LIVE CONSTELLATION</span>
         <span>● Folder stars are larger</span>
