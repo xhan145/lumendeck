@@ -12,6 +12,7 @@ import {
 import type { FileFxMode } from '../../state/appSettings';
 import { createPostPipeline, type PostPipeline } from '../graph/graph3d/postprocessing';
 import { createFileAtmosphere } from './fileConstellationAtmosphere';
+import { createFileNebulaBackdrop } from './fileConstellationBackdrop';
 
 interface Props {
   entries: FileEntry[];
@@ -45,7 +46,7 @@ function makeLabel(text: string, color: string, size = 3.2): THREE.Sprite | null
   canvas.height = 88;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
-  ctx.font = '600 32px system-ui';
+  ctx.font = '500 29px system-ui';
   ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -276,7 +277,7 @@ export function FileConstellation({
 
     const preset = FILE_FX_PRESETS[fxMode];
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#090a17');
+    scene.background = new THREE.Color('#080915');
     const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 190);
     camera.position.set(0, 1, FILE_ZOOM.initialDistance);
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -299,16 +300,17 @@ export function FileConstellation({
 
     const nativePixelRatio = Math.min(window.devicePixelRatio || 1, preset.pixelRatioCap);
     renderer.setPixelRatio(nativePixelRatio);
-    renderer.setClearColor('#090a17', 1);
+    renderer.setClearColor('#080915', 1);
     renderer.domElement.setAttribute('aria-hidden', 'true');
     renderer.domElement.style.touchAction = 'none';
     host.appendChild(renderer.domElement);
 
+    const backdrop = createFileNebulaBackdrop(scene, camera, fxMode);
     const atmosphere = createFileAtmosphere(scene, stars, preset);
     atmosphere.setPixelRatio(nativePixelRatio);
 
     const root = new THREE.Mesh(
-      new THREE.SphereGeometry(0.4, 24, 16),
+      new THREE.IcosahedronGeometry(0.4, 1),
       new THREE.MeshBasicMaterial({ color: '#dfd1ff', toneMapped: false }),
     );
     scene.add(root);
@@ -330,7 +332,7 @@ export function FileConstellation({
     const updateLinks = createLinks(scene, stars);
 
     // One instanced GPU draw for all selectable file cores.
-    const sphere = new THREE.SphereGeometry(1, 12, 9);
+    const sphere = new THREE.IcosahedronGeometry(1, 1);
     const coreMaterial = new THREE.MeshBasicMaterial({
       color: '#ffffff', toneMapped: false,
     });
@@ -392,16 +394,32 @@ export function FileConstellation({
 
     // The selected star gets an abstract trajectory through the modeled time
     // dimension. This is NOT a real historical file location.
+    // The time ribbon is a gradient from ink violet to soft silver at the
+    // selected star. A single dynamic line mesh, no per-frame allocations.
     const trailCount = 30;
-    const trailData = new Float32Array(trailCount * 3);
-    const trailAttribute = new THREE.BufferAttribute(trailData, 3);
+    const trailSegmentCount = trailCount - 1;
+    const trailPositions = new Float32Array(trailSegmentCount * 6);
+    const trailAttribute = new THREE.BufferAttribute(trailPositions, 3);
     trailAttribute.setUsage(THREE.DynamicDrawUsage);
     const trailGeometry = new THREE.BufferGeometry();
     trailGeometry.setAttribute('position', trailAttribute);
-    const temporalTrail = new THREE.Line(
+    const trailColors = new Float32Array(trailSegmentCount * 6);
+    const oldColor = new THREE.Color('#312644');
+    const newColor = new THREE.Color('#d4c3eb');
+    const tintPoint = new THREE.Color();
+    for (let i = 0; i < trailSegmentCount; i++) {
+      const t0 = i / trailSegmentCount;
+      const t1 = (i + 1) / trailSegmentCount;
+      tintPoint.copy(oldColor).lerp(newColor, Math.pow(t0, 1.65));
+      trailColors.set([tintPoint.r, tintPoint.g, tintPoint.b], i * 6);
+      tintPoint.copy(oldColor).lerp(newColor, Math.pow(t1, 1.65));
+      trailColors.set([tintPoint.r, tintPoint.g, tintPoint.b], i * 6 + 3);
+    }
+    trailGeometry.setAttribute('color', new THREE.BufferAttribute(trailColors, 3));
+    const temporalTrail = new THREE.LineSegments(
       trailGeometry,
       new THREE.LineBasicMaterial({
-        color: '#b79be7', transparent: true, opacity: 0.54,
+        vertexColors: true, transparent: true, opacity: 0.7,
         depthWrite: false, blending: THREE.AdditiveBlending,
       }),
     );
@@ -462,10 +480,18 @@ export function FileConstellation({
       if (enabled && index !== undefined) {
         const star = stars[index];
         const from = Math.max(0, progress - 0.23);
-        for (let i = 0; i < trailCount; i++) {
-          const p = from + (progress - from) * i / (trailCount - 1);
+        const firstPoint = projectFileThroughTime(star, temporalBounds, from);
+        let lastX = firstPoint.x;
+        let lastY = firstPoint.y;
+        let lastZ = firstPoint.z;
+        for (let i = 0; i < trailSegmentCount; i++) {
+          const p = from + (progress - from) * (i + 1) / trailSegmentCount;
           const point = projectFileThroughTime(star, temporalBounds, p);
-          trailAttribute.setXYZ(i, point.x, point.y, point.z);
+          trailAttribute.setXYZ(i * 2, lastX, lastY, lastZ);
+          trailAttribute.setXYZ(i * 2 + 1, point.x, point.y, point.z);
+          lastX = point.x;
+          lastY = point.y;
+          lastZ = point.z;
         }
         trailAttribute.needsUpdate = true;
       }
@@ -609,6 +635,7 @@ export function FileConstellation({
       const height = Math.max(1, host.clientHeight);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      backdrop.resize();
       renderer.setSize(width, height);
       pipeline?.setSize(width, height);
     };
@@ -740,6 +767,7 @@ export function FileConstellation({
       hoverRef.current = null;
       pipeline?.dispose();
       atmosphere.dispose();
+      backdrop.dispose();
 
       const seenGeometry = new Set<THREE.BufferGeometry>();
       const seenMaterial = new Set<THREE.Material>();
