@@ -1048,7 +1048,7 @@ export function FileConstellation({
         <span className="files-space-heading-kicker">LUMENDECK / SPATIAL ARCHIVE</span>
         <strong title={folderName}>{folderName}</strong>
         <span className="files-space-heading-sub">
-          {stars.length} FILE STARS <span className="files-heading-divider">/</span> FOUR DIMENSIONS
+          {stars.length} FILE STARS <span className="files-heading-divider">/</span> X · Y · Z · T · CONTEXT
         </span>
       </div>
       <div className="files-space-help" aria-hidden="true">
@@ -1148,22 +1148,55 @@ export function FileConstellation({
             : 'Requires two distinct modification dates. No historical files or dates are invented.'}
         </p>
       </section>
-      <div className="files-space-legend" aria-hidden="true">
-        <span className="files-space-legend-head">CONSTELLATION INDEX</span>
-        <div className="files-legend-total"><strong>{stars.length}</strong><span>VISIBLE STARS</span></div>
-        <div className="files-legend-groups">
-          {representedGroups.slice(0, 5).map((group) => (
-            <span className="files-legend-group" key={group.kind}>
-              <i style={{ backgroundColor: group.color }} />
-              <span>{group.label}</span>
-              <b>{group.count}</b>
-            </span>
-          ))}
+      {contextMode !== 'off' ? (
+        <section className="files-context-hud" aria-label="Fifth dimension: file context">
+          <div className="files-context-hud-kicker">
+            <span>Ⅴ / CONTEXT FIELD</span>
+            <span>{contextMode === 'focus' ? 'FOCUS' : 'REVEAL'}</span>
+          </div>
+          {contextLens ? (
+            <>
+              <strong title={contextLens.anchor.path}>{contextLens.anchor.name}</strong>
+              <p>{contextLens.relations.length} evidence matches in {contextLens.candidates} visible stars</p>
+              {contextLens.relations.length ? (
+                <div className="files-context-hud-links">
+                  {contextLens.relations.slice(0, 4).map((relation) => (
+                    <button type="button" key={relation.entry.path}
+                      title={relation.evidence.map((reason) => reason.label).join(' · ')}
+                      onClick={() => onSelectRef.current(relation.entry)}>
+                      <span>{relation.entry.name}</span>
+                      <b>{relation.score}</b>
+                    </button>
+                  ))}
+                </div>
+              ) : <p>No nearby metadata evidence at this threshold. Other files remain accessible.</p>}
+              <small>Filename, type and modified-date clues only. Not verified project dependencies.</small>
+            </>
+          ) : (
+            <>
+              <strong>Select a visible file star</strong>
+              <p>Context reveals explainable local similarities, not hidden AI guesses.</p>
+            </>
+          )}
+        </section>
+      ) : (
+        <div className="files-space-legend" aria-hidden="true">
+          <span className="files-space-legend-head">CONSTELLATION INDEX</span>
+          <div className="files-legend-total"><strong>{stars.length}</strong><span>VISIBLE STARS</span></div>
+          <div className="files-legend-groups">
+            {representedGroups.slice(0, 5).map((group) => (
+              <span className="files-legend-group" key={group.kind}>
+                <i style={{ backgroundColor: group.color }} />
+                <span>{group.label}</span>
+                <b>{group.count}</b>
+              </span>
+            ))}
+          </div>
+          {representedGroups.length > 5 ? (
+            <span className="files-legend-extra">+{representedGroups.length - 5} OTHER TYPES</span>
+          ) : null}
         </div>
-        {representedGroups.length > 5 ? (
-          <span className="files-legend-extra">+{representedGroups.length - 5} OTHER TYPES</span>
-        ) : null}
-      </div>
+      )}
       {hovered ? (
         <div className="files-star-tooltip" role="status">
           <strong>{hovered.name}</strong>
