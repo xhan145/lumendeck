@@ -507,7 +507,10 @@ export function FileConstellation({
     temporalTrail.renderOrder = 2;
     scene.add(temporalTrail);
 
+    const contextualWhite = new THREE.Color('#efe0ff');
     const applyFocus = (selected: string | null, hoveredPath: string | null) => {
+      const { lens, mode } = contextViewRef.current;
+      const contextual = mode !== 'off' && lens?.anchor.path === selected;
       for (const [index, star] of stars.entries()) {
         const focused = star.entry.path === selected;
         const isHover = star.entry.path === hoveredPath && !focused;
@@ -518,13 +521,19 @@ export function FileConstellation({
         unit.updateMatrix();
         cores.setMatrixAt(index, unit.matrix);
         tint.set(focused ? '#ffffff' : star.color);
+        if (contextual && !focused) {
+          const score = lens.scoreByPath.get(star.entry.path) ?? 0;
+          if (score > 0) tint.lerp(contextualWhite, 0.17 + score / 260);
+          else if (!isHover) tint.multiplyScalar(mode === 'focus' ? 0.21 : 0.49);
+        }
         if (!focused && laterModified[index]) tint.multiplyScalar(0.38);
         cores.setColorAt(index, tint);
       }
       cores.instanceMatrix.needsUpdate = true;
       if (cores.instanceColor) cores.instanceColor.needsUpdate = true;
       cores.computeBoundingSphere();
-      atmosphere.setFocus(selected, hoveredPath);
+      atmosphere.setFocus(selected, hoveredPath,
+        contextual ? lens : null, contextual ? mode : 'off');
 
       const index = selected ? byPath.get(selected) : undefined;
       const item = index === undefined ? null : stars[index];
@@ -551,8 +560,29 @@ export function FileConstellation({
         currentXYZ.set([point.x, point.y, point.z], index * 3);
         laterModified[index] = point.laterModified ? 1 : 0;
       }
+      // Fifth coordinate c is the selected file's explainable metadata score.
+      // Project c over the existing 3D + fourth-dimensional time positions.
+      const { lens, mode } = contextViewRef.current;
+      if (mode !== 'off' && lens && lens.anchor.path === selectedRef.current) {
+        const anchorIndex = byPath.get(lens.anchor.path);
+        if (anchorIndex !== undefined) {
+          const a = anchorIndex * 3;
+          const anchor = { x: currentXYZ[a], y: currentXYZ[a + 1], z: currentXYZ[a + 2] };
+          for (const [index, star] of stars.entries()) {
+            const k = index * 3;
+            const point = projectFileContext({
+              x: currentXYZ[k], y: currentXYZ[k + 1], z: currentXYZ[k + 2],
+            }, anchor, lens.scoreByPath.get(star.entry.path) ?? 0,
+            mode, index === anchorIndex);
+            currentXYZ[k] = point.x;
+            currentXYZ[k + 1] = point.y;
+            currentXYZ[k + 2] = point.z;
+          }
+        }
+      }
       atmosphere.moveStars(currentXYZ);
       updateLinks(currentXYZ);
+      contextWires.move(currentXYZ);
       applyFocus(selectedRef.current, hoverRef.current);
 
       const index = selectedRef.current ? byPath.get(selectedRef.current) : undefined;
@@ -577,6 +607,10 @@ export function FileConstellation({
       }
     };
     projectTimeRef.current = projectTime;
+    updateContextRef.current = () => {
+      contextWires.setLens(contextViewRef.current.lens, contextViewRef.current.mode);
+      projectTime();
+    };
     projectTime();
 
     // The map is a lightweight 2D projection of these SAME real 3D nodes.
@@ -926,9 +960,11 @@ export function FileConstellation({
       controls.dispose();
       focusRef.current = () => {};
       projectTimeRef.current = () => {};
+      updateContextRef.current = () => {};
       hoverRef.current = null;
       pipeline?.dispose();
       atmosphere.dispose();
+      contextWires.dispose();
       backdrop.dispose();
 
       const seenGeometry = new Set<THREE.BufferGeometry>();
@@ -956,9 +992,9 @@ export function FileConstellation({
 
   // Selection changes do not recreate the canvas, camera or particle fields.
   useEffect(() => {
-    projectTimeRef.current();
+    updateContextRef.current();
     drawMiniMapRef.current();
-  }, [selectedPath, stars]);
+  }, [selectedPath, stars, contextLens, contextMode]);
 
   useEffect(() => {
     if (!cameraRequest || cameraRequest.folderPath !== folderPath ||
