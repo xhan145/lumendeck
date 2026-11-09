@@ -56,13 +56,13 @@ export function projectFileThroughTime(
   bounds: FileTimeBounds | null,
   progress: number,
 ): FileTimePoint {
-  if (!bounds?.distinctDates) {
-    return { x: star.x, y: star.y, z: star.z, dated: star.entry.modifiedMs !== null, laterModified: false };
-  }
-  const now = clampTimeProgress(progress);
   const timestamp = star.entry.modifiedMs;
   const dated = timestamp !== null && Number.isFinite(timestamp) && timestamp >= 0
     && timestamp <= 8_640_000_000_000_000;
+  if (!bounds?.distinctDates) {
+    return { x: star.x, y: star.y, z: star.z, dated, laterModified: false };
+  }
+  const now = clampTimeProgress(progress);
   const modifiedPosition = dated
     ? Math.min(1, Math.max(0, (timestamp! - bounds.firstMs) / (bounds.lastMs - bounds.firstMs)))
     : 0.5;
