@@ -9,6 +9,7 @@ export type VramSafetyMode = 'strict' | 'balanced' | 'off';
 export type GraphMode = '2d' | '3d';
 export type Graph3DStyle = 'orbs' | 'cards';
 export type Graph3DEffects = 'off' | 'minimal' | 'standard' | 'rich' | 'cinematic';
+export type FileFxMode = 'off' | 'balanced' | 'cinematic';
 
 export interface AppSettings {
   themeMode: ThemeMode;
@@ -72,6 +73,11 @@ export interface AppSettings {
    * behavior behind the same four levels without a settings migration.
    */
   graph3dEffects?: Graph3DEffects;
+  /**
+   * Independent Files Constellation atmosphere setting. This does NOT alter
+   * creative workflow quality preferences or the filesystem itself.
+   */
+  fileFxMode?: FileFxMode;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -93,6 +99,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   localOnlyMode: true,
   telemetryDisabled: true,
   showDiagnostics: false,
+  fileFxMode: 'cinematic',
   apiKeys: {
     civitai: '',
     huggingface: '',
@@ -131,6 +138,8 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
     palettePinned: typeof settings?.palettePinned === 'boolean' ? settings.palettePinned : undefined,
     chromeAutohide: typeof settings?.chromeAutohide === 'boolean' ? settings.chromeAutohide : undefined,
     graph3dStyle: settings?.graph3dStyle === 'orbs' || settings?.graph3dStyle === 'cards' ? settings.graph3dStyle : undefined,
+    fileFxMode: settings?.fileFxMode === 'off' || settings?.fileFxMode === 'balanced'
+      || settings?.fileFxMode === 'cinematic' ? settings.fileFxMode : 'cinematic',
     graph3dEffects:
       settings?.graph3dEffects === 'off' ||
       settings?.graph3dEffects === 'minimal' ||
