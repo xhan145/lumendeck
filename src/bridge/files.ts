@@ -28,6 +28,20 @@ export interface DirectoryListing {
   skipped: number;
 }
 
+/** Match the native allowlist: avoid accidentally executing scripts on open. */
+const PASSIVE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff',
+  'wav', 'mp3', 'flac', 'ogg', 'aiff', 'm4a', 'mid',
+  'mp4', 'mov', 'mkv', 'webm', 'avi',
+  'txt', 'md', 'pdf', 'rtf', 'docx', 'xlsx', 'pptx',
+  'csv', 'log', 'json', 'toml', 'yaml', 'yml',
+  'rs', 'ts', 'tsx', 'jsx', 'css', 'go', 'cpp', 'h',
+]);
+
+export function canOpenInDefaultApp(entry: FileEntry): boolean {
+  return !entry.isDirectory && PASSIVE_EXTENSIONS.has(entry.extension.toLowerCase());
+}
+
 export const filesAvailable = () => isTauri();
 
 export const listLocations = (): Promise<FileLocation[]> => invoke('files_locations');
