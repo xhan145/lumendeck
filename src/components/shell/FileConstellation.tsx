@@ -576,11 +576,40 @@ export function FileConstellation({
     focusRef.current(selectedPath, hoverRef.current);
   }, [selectedPath, stars]);
 
+  const canFocusSelected = selectedPath !== null &&
+    stars.some((star) => star.entry.path === selectedPath);
+
   return (
     <div className="files-constellation" ref={hostRef}
-      role="region" aria-label={'Interactive 3D constellation of ' + stars.length + ' files and folders in ' + folderName}>
+      role="region" tabIndex={0}
+      aria-label={'Interactive 3D constellation of ' + stars.length + ' files and folders in ' + folderName}
+      onPointerDown={(event) => {
+        if (event.target instanceof HTMLCanvasElement) {
+          event.currentTarget.focus({ preventScroll: true });
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || event.ctrlKey || event.altKey || event.metaKey) return;
+        const action = fileZoomActionFromKey(event.key, event.code);
+        if (!action || (action === 'focus' && !canFocusSelected)) return;
+        event.preventDefault();
+        zoomCommandRef.current(action);
+      }}>
       <div className="files-space-help" aria-hidden="true">
-        <span>Drag to orbit</span><span>Scroll to zoom</span><span>Click a star to select</span><span>Double-click to open</span>
+        <span>Wheel to zoom toward cursor</span><span>Pinch to zoom</span>
+        <span>Drag to orbit</span><span>Double-click a star to open</span>
+      </div>
+      <div className="files-zoom-controls" role="group" aria-label="3D constellation zoom controls">
+        <button type="button" aria-label="Zoom in" title="Zoom in (+)"
+          onClick={() => zoomCommandRef.current('in')}>+</button>
+        <button type="button" aria-label="Zoom out" title="Zoom out (-)"
+          onClick={() => zoomCommandRef.current('out')}>−</button>
+        <button type="button" disabled={!canFocusSelected}
+          aria-label="Focus camera on selected star" title="Focus on selected star (F)"
+          onClick={() => zoomCommandRef.current('focus')}>Focus star</button>
+        <button type="button" aria-label="Reset constellation camera"
+          title="Return to full constellation (0)"
+          onClick={() => zoomCommandRef.current('reset')}>Reset</button>
       </div>
       <div className="files-space-legend" aria-hidden="true">
         <span className="files-space-legend-head">LIVE CONSTELLATION</span>
