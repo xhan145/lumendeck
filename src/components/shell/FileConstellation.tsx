@@ -339,7 +339,10 @@ export function FileConstellation({
     const unit = new THREE.Object3D();
     const tint = new THREE.Color();
     const byPath = new Map(stars.map((star, index) => [star.entry.path, index]));
+    const currentXYZ = new Float32Array(stars.length * 3);
+    const laterModified = new Uint8Array(stars.length);
     stars.forEach((star, index) => {
+      currentXYZ.set([star.x, star.y, star.z], index * 3);
       unit.position.set(star.x, star.y, star.z);
       unit.scale.setScalar(star.entry.isDirectory ? 0.32 : 0.21);
       unit.updateMatrix();
@@ -371,26 +374,54 @@ export function FileConstellation({
     reticleOuter.visible = false;
     reticleOuter.renderOrder = 5;
     scene.add(reticleOuter);
+    const beamData = new Float32Array(6);
+    const beamAttribute = new THREE.BufferAttribute(beamData, 3);
+    beamAttribute.setUsage(THREE.DynamicDrawUsage);
+    const beamGeometry = new THREE.BufferGeometry();
+    beamGeometry.setAttribute('position', beamAttribute);
     const activeBeam = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      beamGeometry,
       new THREE.LineBasicMaterial({
         color: '#d9c9ff', transparent: true, opacity: 0.66,
         depthWrite: false, blending: THREE.AdditiveBlending,
       }),
     );
     activeBeam.visible = false;
+    activeBeam.frustumCulled = false;
     scene.add(activeBeam);
+
+    // The selected star gets an abstract trajectory through the modeled time
+    // dimension. This is NOT a real historical file location.
+    const trailCount = 30;
+    const trailData = new Float32Array(trailCount * 3);
+    const trailAttribute = new THREE.BufferAttribute(trailData, 3);
+    trailAttribute.setUsage(THREE.DynamicDrawUsage);
+    const trailGeometry = new THREE.BufferGeometry();
+    trailGeometry.setAttribute('position', trailAttribute);
+    const temporalTrail = new THREE.Line(
+      trailGeometry,
+      new THREE.LineBasicMaterial({
+        color: '#b79be7', transparent: true, opacity: 0.54,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      }),
+    );
+    temporalTrail.visible = false;
+    temporalTrail.frustumCulled = false;
+    temporalTrail.renderOrder = 2;
+    scene.add(temporalTrail);
 
     const applyFocus = (selected: string | null, hoveredPath: string | null) => {
       for (const [index, star] of stars.entries()) {
         const focused = star.entry.path === selected;
         const isHover = star.entry.path === hoveredPath && !focused;
-        unit.position.set(star.x, star.y, star.z);
+        unit.position.set(currentXYZ[index * 3], currentXYZ[index * 3 + 1], currentXYZ[index * 3 + 2]);
         unit.scale.setScalar((star.entry.isDirectory ? 0.32 : 0.21) *
           (focused ? 1.36 : isHover ? 1.18 : 1));
         unit.updateMatrix();
         cores.setMatrixAt(index, unit.matrix);
-        cores.setColorAt(index, tint.set(focused ? '#ffffff' : star.color));
+        tint.set(focused ? '#ffffff' : star.color);
+        if (!focused && laterModified[index]) tint.multiplyScalar(0.38);
+        cores.setColorAt(index, tint);
       }
       cores.instanceMatrix.needsUpdate = true;
       if (cores.instanceColor) cores.instanceColor.needsUpdate = true;
@@ -402,16 +433,45 @@ export function FileConstellation({
       reticle.visible = !!item;
       reticleOuter.visible = !!item;
       activeBeam.visible = !!item;
-      if (item) {
-        reticle.position.set(item.x, item.y, item.z);
+      if (item && index !== undefined) {
+        const k = index * 3;
+        reticle.position.set(currentXYZ[k], currentXYZ[k + 1], currentXYZ[k + 2]);
         reticleOuter.position.copy(reticle.position);
-        activeBeam.geometry.setFromPoints([
-          new THREE.Vector3(), starVector(item),
-        ]);
+        beamAttribute.setXYZ(0, 0, 0, 0);
+        beamAttribute.setXYZ(1, currentXYZ[k], currentXYZ[k + 1], currentXYZ[k + 2]);
+        beamAttribute.needsUpdate = true;
       }
     };
     focusRef.current = applyFocus;
-    applyFocus(selectedRef.current, hoverRef.current);
+
+    const projectTime = () => {
+      const enabled = timeEnabledRef.current && temporalBounds?.distinctDates;
+      const progress = timePositionRef.current;
+      for (const [index, star] of stars.entries()) {
+        const point = enabled ? projectFileThroughTime(star, temporalBounds, progress)
+          : { x: star.x, y: star.y, z: star.z, laterModified: false };
+        currentXYZ.set([point.x, point.y, point.z], index * 3);
+        laterModified[index] = point.laterModified ? 1 : 0;
+      }
+      atmosphere.moveStars(currentXYZ);
+      updateLinks(currentXYZ);
+      applyFocus(selectedRef.current, hoverRef.current);
+
+      const index = selectedRef.current ? byPath.get(selectedRef.current) : undefined;
+      temporalTrail.visible = !!enabled && index !== undefined;
+      if (enabled && index !== undefined) {
+        const star = stars[index];
+        const from = Math.max(0, progress - 0.23);
+        for (let i = 0; i < trailCount; i++) {
+          const p = from + (progress - from) * i / (trailCount - 1);
+          const point = projectFileThroughTime(star, temporalBounds, p);
+          trailAttribute.setXYZ(i, point.x, point.y, point.z);
+        }
+        trailAttribute.needsUpdate = true;
+      }
+    };
+    projectTimeRef.current = projectTime;
+    projectTime();
 
     // Camera navigation is separate from file selection: zoom never moves files
     // or reconstructs the 3D scene. Repeated button presses accumulate even
