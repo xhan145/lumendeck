@@ -59,8 +59,10 @@ describe('fourth-dimensional Files projection', () => {
     const undated = stars.find((star) => star.entry.name === 'undated.wav')!;
     expect(projectFileThroughTime(lateFile, bounds, 0).laterModified).toBe(true);
     expect(projectFileThroughTime(lateFile, bounds, 1).laterModified).toBe(false);
-    expect(projectFileThroughTime(undated, bounds, 0.5).dated).toBe(false);
-    expect(projectFileThroughTime(undated, bounds, 0.5).laterModified).toBe(false);
+    const unknown = projectFileThroughTime(undated, bounds, 0.5);
+    expect(unknown.dated).toBe(false);
+    expect(unknown.laterModified).toBe(false);
+    expect([unknown.x, unknown.y, unknown.z]).toEqual([undated.x, undated.y, undated.z]);
   });
 
   it('clamps invalid, negative and overflowing playhead positions', () => {
