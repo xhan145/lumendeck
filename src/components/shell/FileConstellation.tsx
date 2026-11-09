@@ -500,6 +500,7 @@ export function FileConstellation({
         const focused = star.entry.path === selected;
         const isHover = star.entry.path === hoveredPath && !focused;
         unit.position.set(currentXYZ[index * 3], currentXYZ[index * 3 + 1], currentXYZ[index * 3 + 2]);
+        unit.quaternion.identity();
         unit.scale.setScalar((star.entry.isDirectory ? 0.32 : 0.21) *
           (focused ? 1.36 : isHover ? 1.18 : 1));
         unit.updateMatrix();
