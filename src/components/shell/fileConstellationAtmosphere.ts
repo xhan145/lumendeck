@@ -56,6 +56,8 @@ export interface FileAtmosphere {
   update(timeSeconds: number, animate: boolean): void;
   setPixelRatio(ratio: number): void;
   setFocus(selectedPath: string | null, hoverPath: string | null): void;
+  /** Update halo locations in the same order as file stars, with no new GPU objects. */
+  moveStars(xyz: Float32Array): void;
   dispose(): void;
 }
 
@@ -213,6 +215,15 @@ export function createFileAtmosphere(
       for (const { points } of layers) {
         points.material.uniforms.uPixelRatio.value = pixelRatio;
       }
+    },
+    moveStars(xyz) {
+      if (xyz.length !== stars.length * 3) return;
+      const attr = glows.points.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let index = 0; index < stars.length; index++) {
+        const offset = index * 3;
+        attr.setXYZ(index + 1, xyz[offset], xyz[offset + 1], xyz[offset + 2]);
+      }
+      attr.needsUpdate = true;
     },
     setFocus(selectedPath, hoverPath) {
       if (!glows.focus) return;
