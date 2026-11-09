@@ -45,17 +45,18 @@ export function sanitizeBookmark(value: unknown): SpatialBookmark | null {
   const cameraValue = b.camera;
   const camera = cameraValue && typeof cameraValue === 'object'
     ? cameraValue as Record<string, unknown> : null;
-  const validCamera = camera && safeVector(camera.position) && safeVector(camera.target);
+  const safePosition = camera?.position;
+  const safeTarget = camera?.target;
+  const validCamera: SpatialCamera | null =
+    safeVector(safePosition) && safeVector(safeTarget)
+      ? { position: [...safePosition], target: [...safeTarget] } : null;
   return {
     id: b.id,
     folderPath: b.folderPath,
     label: b.label.trim().slice(0, 72),
     savedAt: typeof b.savedAt === 'number' && Number.isFinite(b.savedAt) && b.savedAt > 0
       ? b.savedAt : 0,
-    camera: validCamera ? {
-      position: [...camera.position] as [number, number, number],
-      target: [...camera.target] as [number, number, number],
-    } : null,
+    camera: validCamera,
   };
 }
 
