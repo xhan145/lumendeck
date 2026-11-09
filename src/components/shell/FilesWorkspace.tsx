@@ -331,6 +331,25 @@ export function FilesWorkspace() {
                 <span>{place.label}</span>
               </button>
             ))}
+            <h2>Saved views <span className="files-saved-count">{bookmarks.length}</span></h2>
+            {bookmarks.length ? (
+              <div className="files-saved-views">
+                {bookmarks.map((bookmark) => (
+                  <div className="files-saved-item" key={bookmark.id}>
+                    <button type="button" className="files-saved-link"
+                      title={bookmark.folderPath} onClick={() => restoreView(bookmark)}>
+                      {Icon.sparkle({ size: 15 })}
+                      <span>{bookmark.label}</span>
+                      {bookmark.camera ? <small>3D</small> : null}
+                    </button>
+                    <button type="button" className="files-saved-remove"
+                      title={'Remove saved view ' + bookmark.label}
+                      aria-label={'Remove saved view ' + bookmark.label}
+                      onClick={() => removeView(bookmark.id)}>{Icon.close({ size: 12 })}</button>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="files-saved-empty">Save a folder or camera angle to return here later.</p>}
             <h2>Drives</h2>
             {locations.filter((place) => place.kind === 'drive').map((place) => (
               <button key={place.path} className={listing?.path === place.path ? 'active' : ''}
@@ -356,6 +375,18 @@ export function FilesWorkspace() {
                 <button className="btn" type="submit" disabled={busy} title="Navigate to folder">Go</button>
               </form>
             </div>
+            {listing && breadcrumbs.length ? <nav className="files-breadcrumbs"
+              aria-label="Current folder hierarchy">
+              {breadcrumbs.map((crumb, index) => (
+                <span className="files-breadcrumb-node" key={crumb.path}>
+                  {index > 0 ? <span className="files-breadcrumb-separator" aria-hidden="true">›</span> : null}
+                  <button type="button" title={crumb.path}
+                    aria-current={index === breadcrumbs.length - 1 ? 'location' : undefined}
+                    disabled={busy || index === breadcrumbs.length - 1}
+                    onClick={() => navigate(crumb.path)}>{crumb.label}</button>
+                </span>
+              ))}
+            </nav> : null}
 
             <div className="files-controls">
               <label className="files-filter">
@@ -389,6 +420,12 @@ export function FilesWorkspace() {
                   </select>
                 </label>
               ) : null}
+              <button className="btn files-bookmark-button" type="button"
+                title={currentBookmarked ? 'Update the saved folder bookmark' : 'Save this folder on this device'}
+                disabled={!listing || loading}
+                onClick={() => saveView()}>
+                {Icon.save({ size: 15 })} {currentBookmarked ? 'Saved folder' : 'Bookmark'}
+              </button>
               <button className="btn files-new-button" type="button" disabled={!listing || loading}
                 onClick={() => beginEdit('new-folder')}>{Icon.plus({ size: 15 })} New folder</button>
             </div>
@@ -430,6 +467,8 @@ export function FilesWorkspace() {
                     fxMode={fxMode}
                     folderPath={listing.path}
                     folderName={folderLabel(listing.path)}
+                    cameraRequest={cameraRequest}
+                    onSaveView={(camera) => saveView(camera)}
                     onSelect={(entry) => setSelectedPath(entry.path)}
                     onOpen={(entry) => { void activate(entry); }}
                     onUnavailable={() => {
@@ -497,47 +536,14 @@ export function FilesWorkspace() {
             </footer>
           </section>
 
-          <aside className="files-inspector" aria-label="Selected file details">
-            <p className="page-kicker">Inspector</p>
-            {selected ? (
-              <>
-                <div className="files-inspector-preview">
-                  {canPreview(selected) ? <FileThumbnail entry={selected} />
-                    : <span className={`files-file-icon kind-${selected.kind}`}><FileGlyph kind={selected.kind} size={44} /></span>}
-                </div>
-                <h2 title={selected.name}>{selected.name}</h2>
-                <div className="files-inspector-meta">
-                  <div><b>Type</b><span>{selected.isDirectory ? 'Folder' : selected.kind}</span></div>
-                  <div><b>Size</b><span>{humanFileSize(selected.sizeBytes)}</span></div>
-                  <div><b>Modified</b><span>{dateLabel(selected.modifiedMs)}</span></div>
-                  <div><b>Path</b><span className="files-path-text">{selected.path}</span></div>
-                  {selected.isSymlink ? <div><b>Link</b><span>Filesystem link</span></div> : null}
-                  {selected.isReadOnly ? <div><b>Access</b><span>Read-only</span></div> : null}
-                </div>
-                <button type="button" className="btn primary"
-                  disabled={!selected.isDirectory && !canOpenInDefaultApp(selected)}
-                  onClick={() => void activate(selected)}>
-                  {selected.isDirectory ? 'Browse folder'
-                    : canOpenInDefaultApp(selected) ? 'Open in default app' : 'Open via Explorer'}
-                </button>
-                {!selected.isDirectory && !canOpenInDefaultApp(selected) ? (
-                  <p className="files-inspector-note">
-                    This file type may execute code or use an untrusted association. Use Explorer fallback to open it deliberately.
-                  </p>
-                ) : null}
-                <button type="button" className="btn" onClick={() => beginEdit('rename')}>
-                  {Icon.edit({ size: 15 })} Rename
-                </button>
-                <p className="files-inspector-note">No delete or bulk move commands in this release. The Constellation is a view, not a new storage system.</p>
-              </>
-            ) : (
-              <div className="files-inspector-idle">
-                <span>{Icon.sparkle({ size: 32 })}</span>
-                <h2>Select a file or star</h2>
-                <p>Explore its real path, preview images, open it, or rename it.</p>
-              </div>
-            )}
-          </aside>
+          <FileInspector
+            selected={selected}
+            listing={listing}
+            onOpen={(entry) => { void activate(entry); }}
+            onRename={() => beginEdit('rename')}
+            onCopyPath={(path) => { void copyPath(path); }}
+            onSelectRelated={(entry) => setSelectedPath(entry.path)}
+          />
         </div>
       )}
     </main>
