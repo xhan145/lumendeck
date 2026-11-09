@@ -4,6 +4,7 @@ import {
   canOpenInDefaultApp, canPreview, canPreviewText, getPreviewUrl, getTextPreview,
 } from '../../bridge/files';
 import { modificationHistogram } from '../../core/shell/fileActivity';
+import type { FileContextLens, FileContextMode } from '../../core/shell/fileContext';
 import { humanFileSize } from '../../core/shell/fileMap';
 import { Icon } from '../icons';
 
@@ -77,10 +78,12 @@ function InspectorText({ entry }: { entry: FileEntry }) {
 }
 
 export function FileInspector({
-  selected, listing, onOpen, onRename, onCopyPath, onSelectRelated, onClose,
+  selected, listing, contextLens, contextMode, onOpen, onRename, onCopyPath, onSelectRelated, onClose,
 }: {
   selected: FileEntry | null;
   listing: DirectoryListing | null;
+  contextLens: FileContextLens | null;
+  contextMode: FileContextMode;
   onOpen: (entry: FileEntry) => void;
   onRename: () => void;
   onCopyPath: (path: string) => void;
@@ -91,10 +94,6 @@ export function FileInspector({
     modificationHistogram(listing?.entries ?? [], selected?.path ?? null),
     [listing, selected?.path]);
   const peak = Math.max(1, ...histogram.map((item) => item.count));
-  const related = useMemo(() => !selected || !listing ? [] :
-    listing.entries.filter((entry) => entry.kind === selected.kind && entry.path !== selected.path)
-      .slice(0, 5), [listing, selected]);
-
   return <aside id="files-inspector-panel" className="files-inspector"
     aria-label="Selected file details">
     <div className="files-inspector-section-head">
@@ -139,15 +138,42 @@ export function FileInspector({
           <p className="files-inspector-help">Audio waveform decoding is not enabled in this version. The file can still open in your chosen audio application.</p>
         ) : null}
 
-        {related.length > 0 ? <section className="files-related">
+        <section className="files-context-inspector" aria-label="Fifth-dimensional context evidence">
           <div className="files-inspector-section-head">
-            <h3>Same kind, this folder</h3><span>{related.length} SHOWN</span>
+            <h3>Ⅴ Context connections</h3>
+            <span>{contextMode === 'off' ? 'OFF'
+              : contextLens ? contextLens.relations.length + ' MATCHES' : 'NO STAR ANCHOR'}</span>
           </div>
-          {related.map((entry) => <button type="button" key={entry.path}
-            title={entry.path} onClick={() => onSelectRelated(entry)}>
-            <span>{entry.name}</span>{Icon.link({ size: 13 })}
-          </button>)}
-        </section> : null}
+          {contextMode === 'off' ? (
+            <p className="files-inspector-help">Context lens is off. Turn on Reveal or Focus in Constellation.</p>
+          ) : !contextLens ? (
+            <p className="files-inspector-help">
+              This item is outside the currently rendered stars. Narrow the folder filter to inspect its context.
+            </p>
+          ) : contextLens.relations.length === 0 ? (
+            <p className="files-inspector-help">
+              No listed stars meet the evidence threshold. This does not mean the file is unrelated.
+            </p>
+          ) : (
+            <div className="files-context-inspector-list">
+              {contextLens.relations.slice(0, 7).map((relation) => (
+                <button type="button" key={relation.entry.path} title={relation.entry.path}
+                  onClick={() => onSelectRelated(relation.entry)}>
+                  <span className="files-context-inspector-item">
+                    <strong>{relation.entry.name}</strong>
+                    <small>{relation.evidence.map((item) => item.label).join(' · ')}</small>
+                  </span>
+                  <span className="files-context-score" aria-label={'Evidence score ' + relation.score}>
+                    {relation.score}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="files-inspector-help">
+            Evidence scores compare names, types and modified dates only. They do not prove shared contents or project dependencies.
+          </p>
+        </section>
       </>
     ) : (
       <div className="files-inspector-idle">
