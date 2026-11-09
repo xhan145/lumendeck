@@ -140,7 +140,7 @@ export function FileInspector({
           </div>
           {related.map((entry) => <button type="button" key={entry.path}
             title={entry.path} onClick={() => onSelectRelated(entry)}>
-            <span>{entry.name}</span>{Icon.arrowRight({ size: 13 })}
+            <span>{entry.name}</span>{Icon.link({ size: 13 })}
           </button>)}
         </section> : null}
       </>
