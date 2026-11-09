@@ -48,6 +48,26 @@ line-segment mesh encodes membership and intra-cluster connections.
 - The decorative global starfield is disabled while Files is open to avoid
   rendering two animated WebGL scenes behind each other.
 
+### Easier zoom and star inspection
+
+The **Files → Constellation** camera now supports fast wheel zoom **toward the
+mouse cursor**, plus trackpad/touch pinch. The camera can approach to 1.35 scene
+units, instead of stopping at 5.5. Star navigation does not change real files.
+
+The bottom-left zoom strip provides:
+- **+ / −**: large-step smooth zoom in/out
+- **Focus star**: center the selected, visible file star and move closer
+- **Reset**: return to the whole-folder view
+
+Click or Tab into the 3D viewport for keyboard shortcuts: **+ / =** to zoom in,
+**−** to zoom out, **F** to focus the selected star, and **0** to reset. These
+shortcuts are limited to the focused 3D viewport, so typing in search or path
+fields remains unaffected. Direct orbit/pan/pinch/wheel interactions cancel any
+in-progress camera animation. Reduced-motion mode jumps without animation.
+
+Zoom safety: the camera distance is clamped to [1.35, 82], camera state stays
+preserved during FX/sort changes, and all zoom actions are visual only.
+
 ### Visual acceptance checklist
 
 1. Check a mixed folder with images, music, documents and subfolders.
