@@ -35,6 +35,11 @@ function bridgePlugin(): PluginOption {
     name: 'lumendeck-bridge',
     apply: 'serve',
     async configureServer() {
+      // Vitest also creates a Vite server for its test runner. Starting the
+      // Python bridge there leaves an unrelated child process/socket alive
+      // after unit tests (especially noticeable on Windows Node 26).
+      // Only the actual dev server is allowed to spawn the render bridge.
+      if (process.env.VITEST || process.env.NODE_ENV === 'test') return;
       if (await portOpen(BRIDGE_PORT)) {
         console.log(`\n[bridge] already running on :${BRIDGE_PORT} — reusing it.`);
         return;
