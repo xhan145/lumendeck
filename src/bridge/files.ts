@@ -80,3 +80,21 @@ export async function getPreviewUrl(entry: FileEntry): Promise<string | null> {
     type: RASTER_MIME[entry.extension],
   }));
 }
+
+export interface TextFilePreview {
+  text: string;
+  truncated: boolean;
+  bytesShown: number;
+}
+
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  'txt', 'md', 'log', 'csv', 'json', 'toml', 'yaml', 'yml',
+  'rs', 'ts', 'tsx', 'jsx', 'css', 'go', 'cpp', 'h',
+]);
+
+export function canPreviewText(entry: FileEntry): boolean {
+  return !entry.isDirectory && TEXT_PREVIEW_EXTENSIONS.has(entry.extension.toLowerCase());
+}
+
+export const getTextPreview = (path: string): Promise<TextFilePreview> =>
+  invoke('files_preview_text', { path });
