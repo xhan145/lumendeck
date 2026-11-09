@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FileEntry } from '../src/bridge/files';
+import { canOpenInDefaultApp, type FileEntry } from '../src/bridge/files';
 import { filterAndSortFiles, humanFileSize, makeFileStars } from '../src/core/shell/fileMap';
 
 const item = (name: string, kind: FileEntry['kind'], sizeBytes: number | null = 10): FileEntry => ({
@@ -39,5 +39,32 @@ describe('File browser listing utilities', () => {
   it('formats sizes without inventing sizes for folders', () => {
     expect(humanFileSize(null)).toBe('Folder');
     expect(humanFileSize(1024)).toBe('1.0 KB');
+  });
+});
+
+describe('File safety and constellation distribution', () => {
+  it('shows non-image clusters even when a folder has many image files', () => {
+    const files = [
+      ...Array.from({ length: 210 }, (_, i) => item(`image-${i}.png`, 'image')),
+      item('Project', 'folder'),
+      item('mix.wav', 'audio'),
+      item('app.tsx', 'code'),
+    ];
+    const stars = makeFileStars(files);
+    expect(stars).toHaveLength(180);
+    expect(new Set(stars.map((star) => star.group))).toEqual(
+      new Set(['folder', 'image', 'audio', 'code']),
+    );
+    expect(stars.every((star) => files.includes(star.entry))).toBe(true);
+  });
+
+  it('never offers direct execution of scripts or installers', () => {
+    const doc = { ...item('app.tsx', 'code'), extension: 'tsx' };
+    const installer = { ...item('setup.msi', 'file'), extension: 'msi' };
+    const script = { ...item('run.py', 'code'), extension: 'py' };
+    expect(canOpenInDefaultApp(doc)).toBe(true);
+    expect(canOpenInDefaultApp(installer)).toBe(false);
+    expect(canOpenInDefaultApp(script)).toBe(false);
+    expect(canOpenInDefaultApp(item('Folder', 'folder'))).toBe(false);
   });
 });
