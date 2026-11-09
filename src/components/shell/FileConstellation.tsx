@@ -204,9 +204,15 @@ export function FileConstellation({
     resize();
     let request = 0;
     const frame = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      request = requestAnimationFrame(frame);
+      try {
+        controls.update();
+        renderer.render(scene, camera);
+        request = requestAnimationFrame(frame);
+      } catch {
+        // Driver/device failures should not crash the desktop or leave a
+        // permanently unresponsive canvas. The parent falls back to List.
+        unavailableRef.current();
+      }
     };
     // A hidden/minimized Tauri window should not spend GPU time rendering
     // an unchanged file map. Resume the same camera when it becomes visible.
