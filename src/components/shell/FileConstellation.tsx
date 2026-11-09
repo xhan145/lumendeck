@@ -5,6 +5,10 @@ import type { FileEntry, FileKind } from '../../bridge/files';
 import { FILE_GROUPS, makeFileStars, type FileStar } from '../../core/shell/fileMap';
 import { FILE_FX_PRESETS, makeFileFxGovernor } from '../../core/shell/fileFx';
 import { FILE_ZOOM, fileZoomActionFromKey, nextFileZoomDistance, type FileZoomAction } from '../../core/shell/fileZoom';
+import {
+  FILE_TIME_DURATION_SECONDS, FILE_TIME_STEPS,
+  clampTimeProgress, fileTimeAt, fileTimeBounds, projectFileThroughTime,
+} from '../../core/shell/fileTime';
 import type { FileFxMode } from '../../state/appSettings';
 import { createPostPipeline, type PostPipeline } from '../graph/graph3d/postprocessing';
 import { createFileAtmosphere } from './fileConstellationAtmosphere';
@@ -200,6 +204,59 @@ export function FileConstellation({
   const hoverRef = useRef<string | null>(null);
   const reducedMotion = useReducedMotion();
   const stars = useMemo(() => makeFileStars(entries), [entries]);
+
+  const temporalBounds = useMemo(
+    () => fileTimeBounds(stars.map((star) => star.entry)),
+    [stars],
+  );
+  // The playhead stays in a ref so 60 FPS star motion never re-mounts WebGL.
+  const [timeEnabled, setTimeEnabled] = useState(true);
+  const [timePlaying, setTimePlaying] = useState(true);
+  const [timePosition, setTimePosition] = useState(0);
+  const timeEnabledRef = useRef(true);
+  const timePlayingRef = useRef(true);
+  const timePositionRef = useRef(0);
+  const projectTimeRef = useRef<() => void>(() => {});
+
+  const showTimePosition = (progress: number) => {
+    const clamped = clampTimeProgress(progress);
+    timePositionRef.current = clamped;
+    setTimePosition(clamped);
+    projectTimeRef.current();
+  };
+  const pauseTime = () => {
+    timePlayingRef.current = false;
+    setTimePlaying(false);
+  };
+  const scrubTime = (progress: number) => {
+    pauseTime();
+    showTimePosition(progress);
+  };
+  const toggleTime = (enabled: boolean) => {
+    timeEnabledRef.current = enabled;
+    setTimeEnabled(enabled);
+    if (!enabled) pauseTime();
+    projectTimeRef.current();
+  };
+  const togglePlay = () => {
+    if (!timeEnabledRef.current || !temporalBounds?.distinctDates || reducedMotion) return;
+    timePlayingRef.current = !timePlayingRef.current;
+    setTimePlaying(timePlayingRef.current);
+    if (timePlayingRef.current && timePositionRef.current >= 0.999) {
+      showTimePosition(0);
+    }
+  };
+  useEffect(() => {
+    timePositionRef.current = 0;
+    setTimePosition(0);
+    projectTimeRef.current();
+  }, [folderPath, temporalBounds?.firstMs, temporalBounds?.lastMs]);
+  useEffect(() => {
+    if (reducedMotion) {
+      timePlayingRef.current = false;
+      setTimePlaying(false);
+    }
+  }, [reducedMotion]);
 
   useEffect(() => {
     const host = hostRef.current;
