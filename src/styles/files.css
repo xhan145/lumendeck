@@ -576,3 +576,121 @@
   .files-fx-reduced { bottom: 144px; }
   .files-fx-select { flex: 1 1 auto; justify-content: space-between; }
 }
+
+/* Fourth-dimensional Files: real modification timestamps mapped into 3D.
+   The controls are intentionally legible over the animated particle field. */
+.files-time-rail {
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  bottom: 12px;
+  z-index: 6;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(171, 145, 226, 0.42);
+  border-radius: 12px;
+  background: rgba(13, 11, 29, 0.94);
+  box-shadow: 0 8px 36px rgba(4, 2, 12, 0.44);
+  backdrop-filter: blur(10px);
+  color: #e8ddfb;
+}
+.files-time-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 11px;
+}
+.files-time-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: #d5beff;
+  letter-spacing: 0.11em;
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.files-time-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: #aa85e9;
+}
+.files-time-readout {
+  color: #f3eefe;
+  font: 600 11px/1.3 ui-monospace, Consolas, monospace;
+}
+.files-time-sample {
+  margin-left: auto;
+  color: #aaa0c4;
+  font-size: 10px;
+}
+.files-time-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.files-time-scrubber button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid rgba(173, 144, 230, 0.32);
+  border-radius: 8px;
+  background: rgba(71, 45, 114, 0.65);
+  color: #e8dcff;
+  font: 600 10px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+}
+.files-time-scrubber button:hover:not(:disabled) {
+  border-color: #bf9def;
+  background: rgba(106, 72, 161, 0.66);
+}
+.files-time-scrubber button:focus-visible,
+.files-time-toggle input:focus-visible,
+.files-time-range-label input:focus-visible {
+  outline: 2px solid #d3bcff;
+  outline-offset: 2px;
+}
+.files-time-scrubber button:disabled { opacity: 0.4; cursor: not-allowed; }
+.files-time-scrubber .files-time-play { min-width: 69px; }
+.files-time-range-label {
+  flex: 1;
+  min-width: 42px;
+  display: flex;
+  align-items: center;
+}
+.files-time-range-label input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: #b38de9;
+  cursor: ew-resize;
+}
+.files-time-range-label input:disabled { cursor: not-allowed; }
+.files-time-disclaimer {
+  margin: 0;
+  color: #aea3c8;
+  font-size: 9px;
+  line-height: 1.35;
+}
+.files-constellation .files-zoom-controls { bottom: 125px; }
+.files-constellation .files-space-limit { bottom: 183px; }
+.files-constellation .files-star-tooltip { bottom: 132px; }
+.files-constellation .files-fx-adaptive { bottom: 186px; }
+.files-constellation .files-fx-reduced { bottom: 215px; }
+@media (max-width: 700px) {
+  .files-time-rail { padding: 8px; left: 8px; right: 8px; }
+  .files-time-scrubber { gap: 4px; }
+  .files-time-scrubber button { padding: 4px 6px; }
+  .files-time-sample { display: none; }
+  .files-constellation .files-zoom-controls { bottom: 131px; }
+}
+@media (max-height: 575px) {
+  .files-time-disclaimer { display: none; }
+  .files-constellation .files-zoom-controls { bottom: 96px; }
+  .files-constellation .files-space-limit { bottom: 148px; }
+}
