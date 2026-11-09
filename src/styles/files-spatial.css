@@ -355,3 +355,37 @@
   .files-spatial-mini-map { backdrop-filter: none; background: #151229; }
   .files-inspector { background: #18132a; }
 }
+
+/* Narrow windows can open the real inspector without losing file access. */
+.files-inspector-toggle { display: none; }
+.files-inspector-close { display: none; }
+@media (max-width: 990px) {
+  .files-layout { position: relative; }
+  .files-inspector-toggle { display: inline-flex; align-items: center; }
+  .files-layout.files-inspector-open > .files-inspector {
+    display: flex;
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(310px, 88vw);
+    min-width: 0;
+    z-index: 20;
+    border-left: 1px solid rgba(194, 162, 238, 0.34);
+    box-shadow: -14px 0 40px rgba(5, 3, 15, 0.55);
+  }
+  .files-inspector-close {
+    display: inline-grid;
+    place-items: center;
+    padding: 5px;
+    border: 1px solid rgba(185, 155, 217, 0.28);
+    border-radius: 6px;
+    background: rgba(91, 62, 137, 0.38);
+    color: #ecdefa;
+    cursor: pointer;
+  }
+  .files-inspector-close:focus-visible {
+    outline: 2px solid #dbc6f7;
+    outline-offset: 2px;
+  }
+}
