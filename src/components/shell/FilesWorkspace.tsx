@@ -8,6 +8,8 @@ import { runRecoveryAction } from '../../bridge/shellRecovery';
 import { filterAndSortFiles, humanFileSize, makeFileStars, type FileSort } from '../../core/shell/fileMap';
 import { Icon } from '../icons';
 import { FileConstellation } from './FileConstellation';
+import { useStudio } from '../../state/store';
+import type { FileFxMode } from '../../state/appSettings';
 import '../../styles/files.css';
 
 type FilesMode = 'list' | 'grid' | 'constellation';
@@ -57,6 +59,8 @@ function folderLabel(path: string): string {
 
 export function FilesWorkspace() {
   const native = filesAvailable();
+  const fxMode = useStudio((state) => state.appSettings.fileFxMode ?? 'cinematic');
+  const updateAppSettings = useStudio((state) => state.updateAppSettings);
   const [locations, setLocations] = useState<FileLocation[]>([]);
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [targetPath, setTargetPath] = useState<string | null>(null);
@@ -304,6 +308,18 @@ export function FilesWorkspace() {
                 <button type="button" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')}>Grid</button>
                 <button type="button" aria-pressed={mode === 'constellation'} onClick={() => setMode('constellation')}>✦ Constellation</button>
               </div>
+              {mode === 'constellation' ? (
+                <label className="files-fx-select" title="Particle atmosphere quality. Kept separate from creative workflow effects.">
+                  <span>Particle FX</span>
+                  <select aria-label="Constellation particle effects"
+                    value={fxMode}
+                    onChange={(event) => updateAppSettings({ fileFxMode: event.target.value as FileFxMode })}>
+                    <option value="off">Off</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="cinematic">Cinematic</option>
+                  </select>
+                </label>
+              ) : null}
               <button className="btn files-new-button" type="button" disabled={!listing || loading}
                 onClick={() => beginEdit('new-folder')}>{Icon.plus({ size: 15 })} New folder</button>
             </div>
@@ -342,6 +358,7 @@ export function FilesWorkspace() {
               {listing && mode === 'constellation' ? (
                 <div className="files-space-layout">
                   <FileConstellation entries={shown} selectedPath={selectedPath}
+                    fxMode={fxMode}
                     folderName={folderLabel(listing.path)}
                     onSelect={(entry) => setSelectedPath(entry.path)}
                     onOpen={(entry) => { void activate(entry); }}
