@@ -118,3 +118,65 @@ Windows machine remain required for final 1.0 release sign-off.
 
 Future expansion should follow these safety boundaries rather than trading
 filesystem accuracy for more impressive visual effects.
+
+## Fifth dimension: context (X/Y/Z + T + C)
+
+Context is the **fifth coordinate**, not the sixth: three spatial axes,
+**T** (the existing fourth-dimensional last-modified-time projection), and
+**C** (an explainable, selected-file relationship score).
+
+**Files → Constellation → Ⅴ CONTEXT** offers three independent modes:
+
+| Mode | Behavior |
+| --- | --- |
+| Off | Original 3D/4D file positions and brightness; context wiring disappears |
+| Reveal | Related files are gently pulled/lifted in the 3D projection; evidence-backed lavender lines appear; other stars stay accessible |
+| Focus | Stronger emphasis, greater projected separation and dimming of unrelated stars, without deleting or hiding them |
+
+Select a real star and choose a score threshold from **25 to 85**. The
+algorithm compares only metadata already returned by the current directory
+listing: matching filename stems, shared meaningful filename words, file
+extension/kind, and proximity of actual modified timestamps. Each result
+contains its precise evidence labels and a bounded **0–100 heuristic score**.
+The on-scene Ⅴ panel lists the strongest matches; the inspector lists up to
+seven with their specific evidence. Clicking a result selects that real file.
+
+**No confidence or semantic claim:** A score is not probability,
+similarity of file contents, proof of dependency, duplicate detection or
+confirmed project membership. A missing link does not mean the two files are
+unrelated. Generic words are ignored, scores are deterministic, ties sort by
+real path, and at most **18 context edges** are rendered per selected star.
+
+Context shares the 180-star limit with the Files Constellation and never
+requests another folder, file preview or filesystem scan. It runs entirely
+locally in pure TypeScript; no AI embeddings, telemetry or network connections.
+The selected anchor, active lens and threshold are session-only view state,
+not saved navigation history.
+
+**Composition with time:** On each frame, the 4D projector first obtains
+positions from real last-modified timestamps. Context then makes a small,
+bounded presentation-only adjustment using coordinate **C**. The GPU file
+cores, halos, selection rings, min-map dots and context links update together.
+The underlying file path and metadata never change. Changing context mode or
+threshold does not recreate the Three.js renderer or reset the camera.
+
+### 5D test and accessibility checklist
+
+1. Use a folder with mixed media and at least three named variants, such as
+   `Orbit-mix.wav`, `Orbit-mix.flac` and `Orbit-notes.md`. Select one
+   real star and compare the evidence explanations with the filenames.
+2. Move the threshold from 25 to 85. Confirm fewer matches appear and no
+   threshold creates claims about actual project dependencies.
+3. Switch **Off → Reveal → Focus → Off**. Confirm the original 3D/4D
+   positions are restored without changing files or the camera.
+4. While 4D Time plays, verify the context wires, glow, focus ring and map
+   nodes move with their parent star. Pause and scrub manually.
+5. Check a directory with unrelated names, unknown modified dates, a single
+   file, an empty folder and more than 180 entries. Empty match lists must
+   give a clear explanation rather than fabricate links.
+6. Verify every contextual result is keyboard-selectable through the inspector
+   (and, on large screens, through the on-scene panel); List/Grid remain
+   usable with the context lens disabled.
+7. Switch FX quality and Windows reduced-motion; the lens and fallback
+   List view remain safe. Watch GPU memory when switching folders repeatedly.
+
