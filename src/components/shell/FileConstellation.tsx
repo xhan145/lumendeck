@@ -314,6 +314,69 @@ export function FileConstellation({
     focusRef.current = applyFocus;
     applyFocus(selectedRef.current, hoverRef.current);
 
+    // Camera navigation is separate from file selection: zoom never moves files
+    // or reconstructs the 3D scene. Repeated button presses accumulate even
+    // while a previous camera flight is still animating.
+    type CameraFlight = {
+      fromPosition: THREE.Vector3;
+      fromTarget: THREE.Vector3;
+      toPosition: THREE.Vector3;
+      toTarget: THREE.Vector3;
+      startedAt: number | null;
+    };
+    let flight: CameraFlight | null = null;
+    const animateCamera = (position: THREE.Vector3, target: THREE.Vector3) => {
+      if (reducedMotion) {
+        flight = null;
+        camera.position.copy(position);
+        controls.target.copy(target);
+        controls.update();
+        return;
+      }
+      flight = {
+        fromPosition: camera.position.clone(),
+        fromTarget: controls.target.clone(),
+        toPosition: position,
+        toTarget: target,
+        startedAt: null,
+      };
+    };
+    const commandZoom = (action: FileZoomAction) => {
+      if (action === 'reset') {
+        animateCamera(
+          new THREE.Vector3(0, 1, FILE_ZOOM.initialDistance),
+          new THREE.Vector3(0, 0, 0),
+        );
+        return;
+      }
+      if (action === 'focus') {
+        const index = selectedRef.current ? byPath.get(selectedRef.current) : undefined;
+        if (index === undefined) return;
+        const point = starVector(stars[index]);
+        const direction = camera.position.clone().sub(controls.target);
+        if (direction.lengthSq() < 0.0001) direction.set(0, 0, 1);
+        direction.normalize().multiplyScalar(FILE_ZOOM.focusDistance);
+        animateCamera(point.clone().add(direction), point);
+        return;
+      }
+      const target = flight?.toTarget.clone() ?? controls.target.clone();
+      const position = flight?.toPosition.clone() ?? camera.position.clone();
+      const offset = position.sub(target);
+      const distance = offset.length();
+      const factor = action === 'in' ? FILE_ZOOM.buttonFactor : 1 / FILE_ZOOM.buttonFactor;
+      const nextDistance = nextFileZoomDistance(distance, factor);
+      if (Math.abs(nextDistance - distance) < 0.0001) return;
+      if (distance < 0.0001) offset.set(0, 0, 1);
+      animateCamera(
+        target.clone().add(offset.normalize().multiplyScalar(nextDistance)),
+        target,
+      );
+    };
+    zoomCommandRef.current = commandZoom;
+    // Drag, wheel and pinch always take priority over an automated flight.
+    const cancelFlight = () => { flight = null; };
+    controls.addEventListener('start', cancelFlight);
+
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const pick = (event: MouseEvent | PointerEvent): FileEntry | null => {
@@ -408,6 +471,14 @@ export function FileConstellation({
         const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
         const frameDuration = lastFrame ? now - lastFrame : 16;
         lastFrame = now;
+        if (flight) {
+          if (flight.startedAt === null) flight.startedAt = now;
+          const progress = Math.min(1, (now - flight.startedAt) / FILE_ZOOM.transitionMs);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          camera.position.lerpVectors(flight.fromPosition, flight.toPosition, eased);
+          controls.target.lerpVectors(flight.fromTarget, flight.toTarget, eased);
+          if (progress >= 1) flight = null;
+        }
         controls.update();
         atmosphere.update(elapsed, !reducedMotion && fxMode !== 'off');
         nucleusRing.quaternion.copy(camera.quaternion);
@@ -466,6 +537,8 @@ export function FileConstellation({
       renderer.domElement.removeEventListener('click', click);
       renderer.domElement.removeEventListener('dblclick', doubleClick);
       observer.disconnect();
+      controls.removeEventListener('start', cancelFlight);
+      zoomCommandRef.current = () => {};
       savedCameraRef.current = {
         folderPath, position: camera.position.clone(), target: controls.target.clone(),
       };
