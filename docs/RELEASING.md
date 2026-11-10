@@ -1,5 +1,11 @@
 # Releasing LumenDeck + the auto-updater
 
+> **0.36.0 source-integration milestone:** Updating the repository version and
+> merging development code do **not** publish an MSI, portable package, signed
+> updater artifact, or GitHub Release. Native Windows GPU/installer QA and
+> the private updater signing key remain release gates. Do not run
+> `npm run release` until those gates have been verified.
+
 LumenDeck ships a public GitHub Release carrying the Windows MSI plus the Tauri
 updater artifacts, so installed copies can check for and install new versions.
 

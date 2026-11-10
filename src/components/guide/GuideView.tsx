@@ -131,7 +131,7 @@ export function GuideView({ onOpenControls }: { onOpenControls: () => void }) {
               {Icon.play()} Render
             </button>
             <button className="btn" type="button" onClick={onOpenControls}>
-              {Icon.gear()} Controls
+              {Icon.gear()} Create
             </button>
           </div>
         </header>

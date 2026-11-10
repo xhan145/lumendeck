@@ -290,3 +290,33 @@
     transition: none;
   }
 }
+
+/* Read-only file constellation mode */
+.constellation-files-toolbar {
+  position: absolute;
+  z-index: 15;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 28px);
+  padding: 7px;
+  border: 1px solid var(--ld-border);
+  border-radius: 12px;
+  background: var(--md-surface);
+}
+.constellation-file-picker { position: relative; cursor: pointer; }
+.constellation-file-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+.constellation-file-picker:focus-within { outline: 2px solid var(--ld-violet); outline-offset: 2px; }
+.constellation-file-count { font-size: 11px; color: var(--ld-text-dim); }
+@media (max-width: 700px) {
+  .constellation-files-toolbar { left: 8px; right: 8px; transform: none; flex-wrap: wrap; }
+}

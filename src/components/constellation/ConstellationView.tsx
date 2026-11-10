@@ -3,6 +3,7 @@ import { useStudio } from '../../state/store';
 import { resolveCssColor } from '../graph/graph3d/scene';
 import type { EffectsLevel } from '../graph/graph3d/quality';
 import { buildLumenConstellation } from './data';
+import { buildFileConstellation, type FileEntry } from './files';
 import { canGoBack, goBack, indexConstellation, initialSelection, selectNode, type SelectionState } from './selection';
 import { ConstellationScene } from './ConstellationScene';
 import { ConstellationOverlay } from './ConstellationOverlay';
@@ -56,6 +57,9 @@ export function ConstellationView() {
   const galleryReady = useStudio((s) => s.galleryReady);
   const graph3dEffects = useStudio((s) => s.appSettings.graph3dEffects ?? 'standard');
 
+  const [fileEntries, setFileEntries] = useState<FileEntry[] | null>(null);
+  const [folderName, setFolderName] = useState('Selected folder');
+  const [fileError, setFileError] = useState<string | null>(null);
   const reducedMotion = useReducedMotion();
   const [webglOk] = useState(detectWebGL);
   const [contextFailed, setContextFailed] = useState(false);
@@ -78,15 +82,16 @@ export function ConstellationView() {
     });
   }, [brains, recipes, gallery, collections, galleryReady]);
 
-  const index = useMemo(() => indexConstellation(root), [root]);
-  const [selection, setSelection] = useState<SelectionState>(() => initialSelection('lumen'));
+  const activeRoot = useMemo(() => fileEntries === null ? root : buildFileConstellation(fileEntries, folderName), [root, fileEntries, folderName]);
+  const index = useMemo(() => indexConstellation(activeRoot), [activeRoot]);
+  const [selection, setSelection] = useState<SelectionState>(() => initialSelection(activeRoot.id));
   // A rebuilt tree can drop a live node (e.g. a collection was deleted) — snap
   // home rather than pointing the camera at a ghost.
   useEffect(() => {
-    if (!index.has(selection.currentId)) setSelection(initialSelection(root.id));
-  }, [index, selection.currentId, root.id]);
+    if (!index.has(selection.currentId)) setSelection(initialSelection(activeRoot.id));
+  }, [index, selection.currentId, activeRoot.id]);
 
-  const currentNode = index.get(selection.currentId) ?? root;
+  const currentNode = index.get(selection.currentId) ?? activeRoot;
   const satelliteCount = currentNode.children?.length ?? 0;
 
   const promote = useCallback(
@@ -115,9 +120,31 @@ export function ConstellationView() {
 
   return (
     <div className="constellation-view" aria-label="Open Constellation">
+      <div className="constellation-files-toolbar" aria-label="Constellation data source">
+        <button className="btn" type="button" aria-pressed={fileEntries === null} onClick={() => { setFileEntries(null); setSelection(initialSelection(root.id)); setFileError(null); }}>LumenDeck universe</button>
+        <label className="btn constellation-file-picker">
+          Choose local folder
+          <input type="file" multiple {...{ webkitdirectory: '' }} aria-label="Choose folder for read-only constellation" onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            if (!files.length) return;
+            const entries = files.slice(0, 200).map((file) => ({
+              relativePath: file.webkitRelativePath || file.name,
+              size: file.size,
+            }));
+            const selectedName = (files[0].webkitRelativePath || '').split('/')[0] || 'Selected folder';
+            setFolderName(selectedName);
+            setFileEntries(entries);
+            setFileError(files.length > 200 ? 'Showing the first 200 files to protect performance.' : null);
+            setSelection(initialSelection('files-selected'));
+            event.currentTarget.value = '';
+          }} />
+        </label>
+        {fileEntries !== null ? <span className="constellation-file-count">{fileEntries.length} files · read-only</span> : null}
+        {fileError ? <span className="constellation-file-count" role="status">{fileError}</span> : null}
+      </div>
       {canvasMode ? (
         <ConstellationScene
-          root={root}
+          root={activeRoot}
           centerId={selection.currentId}
           onPromote={promote}
           reducedMotion={reducedMotion}
@@ -126,7 +153,7 @@ export function ConstellationView() {
         />
       ) : (
         <ConstellationFallback
-          root={root}
+          root={activeRoot}
           currentId={selection.currentId}
           onSelect={promote}
           reason={

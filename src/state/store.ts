@@ -159,6 +159,8 @@ export type { AudioSource } from '../audio/engine';
 export type { CreativeState } from './creative';
 
 export type ViewId =
+  | 'desktop'
+  | 'files'
   | 'mission'
   | 'constellation'
   | 'overview'
@@ -842,7 +844,7 @@ const initialView: ViewId = initialAppSettings.startupBehavior === 'controls'
   ? 'controls'
   : initialAppSettings.startupBehavior === 'last-view' && initialAppSettings.lastView
     ? initialAppSettings.lastView
-    : 'mission';
+    : 'desktop';
 
 export const useStudio = create<StudioState>((set, get) => {
   /**

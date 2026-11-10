@@ -17,6 +17,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,13 @@ _TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 _TORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 _INSTALL_COMMAND = "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch."
 _python_cache: dict[str, Any] | None | bool = False
+_python_cache_last_miss = 0.0
+_PYTHON_RETRY_SECONDS = 20.0
+_PYTHON_REQUIRED_MESSAGE = (
+    "No compatible Python interpreter was found. Install 64-bit Python 3.12, "
+    "restart the LUMENDECK bridge, or set LUMENDECK_PYTHON to the full "
+    "path of its python.exe before starting the bridge."
+)
 
 # ControlNet capability map: family -> control type -> Hugging Face repo.
 # Single source of truth. The worker never duplicates this table: generate()/
@@ -2123,19 +2131,27 @@ def _managed_runtime_python() -> dict[str, Any] | None:
     return None
 
 def _find_python() -> dict[str, Any] | None:
-    global _python_cache
-    if _python_cache is not False:
-        return _python_cache
+    global _python_cache, _python_cache_last_miss
 
-    # Absolute override must win. This is the escape hatch for broken py-launcher
-    # setups and embedded Python installs.
+    # A freshly set override must win EVEN after the last lookup failed or a
+    # different Python was cached. Do not require a bridge restart merely to
+    # recover from a prior missing-interpreter result.
     env_python = os.environ.get("LUMENDECK_PYTHON")
+    if env_python and isinstance(_python_cache, dict) and _python_cache.get("cmd") == [env_python]:
+        return _python_cache
     if env_python:
         found = _probe_python([env_python])
         if found:
             _python_cache = found
             return found
 
+    if isinstance(_python_cache, dict):
+        return _python_cache
+    if _python_cache is None and time.monotonic() - _python_cache_last_miss < _PYTHON_RETRY_SECONDS:
+        return None
+
+    # Absolute override must win. This is the escape hatch for broken py-launcher
+    # setups and embedded Python installs.
     # Highest priority after explicit override: the interpreter matching the
     # managed CUDA runtime, so GPU rendering actually engages.
     managed = _managed_runtime_python()
@@ -2157,7 +2173,10 @@ def _find_python() -> dict[str, Any] | None:
             _python_cache = found
             return found
 
+    # Cache a miss briefly to prevent probing subprocesses on every
+    # status request, but allow a newly installed Python to be discovered.
     _python_cache = None
+    _python_cache_last_miss = time.monotonic()
     return None
 
 def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
@@ -2201,7 +2220,7 @@ def _worker_env(python: dict[str, Any]) -> dict[str, str]:
 def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
     worker = _write_worker()
     env = _worker_env(python)
     proc = subprocess.run(
@@ -2242,7 +2261,7 @@ class _PersistentWorker:
     def _spawn(self) -> None:
         python = _find_python()
         if not python:
-            raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
+            raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
         worker = _write_worker()
         log_path = _runtime_dir() / "worker.log"
         try:
@@ -2311,7 +2330,7 @@ def _pip_install(
 ) -> None:
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
     _site_dir().mkdir(parents=True, exist_ok=True)
     cmd = python["cmd"] + ["-m", "pip", "install", "--upgrade", "--target", str(_site_dir())]
     if index_url:
@@ -2383,7 +2402,7 @@ def install_runtime() -> dict[str, Any]:
     global _python_cache
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
 
     _reset_site_dir()
     _pip_install(["torch"], index_url=_torch_index_url(), force_reinstall=True, timeout=2400)

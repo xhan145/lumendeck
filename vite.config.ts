@@ -28,6 +28,20 @@ function portOpen(port: number): Promise<boolean> {
   });
 }
 
+/** Confirm a listener really is the LUMENDECK bridge before reusing it. */
+async function healthyLumenDeckBridge(): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/health`, {
+      signal: AbortSignal.timeout(1_500),
+    });
+    if (!response.ok) return false;
+    const status = await response.json() as { status?: unknown; adapter?: unknown };
+    return status.status === 'ok' && status.adapter === 'procedural';
+  } catch {
+    return false;
+  }
+}
+
 /** Dev-only: autostart the Python render bridge alongside `npm run dev`. */
 function bridgePlugin(): PluginOption {
   let child: ChildProcess | null = null;
@@ -35,8 +49,21 @@ function bridgePlugin(): PluginOption {
     name: 'lumendeck-bridge',
     apply: 'serve',
     async configureServer() {
+      // Vitest also creates a Vite server for its test runner. Starting the
+      // Python bridge there leaves an unrelated child process/socket alive
+      // after unit tests (especially noticeable on Windows Node 26).
+      // Only the actual dev server is allowed to spawn the render bridge.
+      if (process.env.VITEST || process.env.NODE_ENV === 'test') return;
       if (await portOpen(BRIDGE_PORT)) {
-        console.log(`\n[bridge] already running on :${BRIDGE_PORT} — reusing it.`);
+        if (!await healthyLumenDeckBridge()) {
+          throw new Error(
+            `[bridge] Port ${BRIDGE_PORT} is occupied, but /health is not a LUMENDECK bridge. ` +
+            'Close the conflicting process manually; LUMENDECK will not terminate it.',
+          );
+        }
+        console.log(`\n[bridge] healthy LUMENDECK bridge on :${BRIDGE_PORT}; reusing it.`);
+        console.log('[bridge] An existing process retains its original Python environment. ' +
+          'Restart that bridge to apply a new LUMENDECK_PYTHON value.');
         return;
       }
       const python = process.env.LUMENDECK_PYTHON || 'python';
@@ -75,6 +102,12 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: Number(process.env.PORT) || 14200,
+    // Cargo frequently creates and locks .exe build scripts on Windows. Vite
+    // must not watch Rust build artifacts or its FSWatcher can crash with EBUSY.
+    // Tauri/Cargo watch Rust sources independently, so HMR remains unaffected.
+    watch: {
+      ignored: ['**/src-tauri/target/**'],
+    },
     // Same-origin API: the browser calls /health etc. on the dev server, which
     // forwards to the bridge. Avoids all cross-origin / private-network blocks.
     proxy: {
