@@ -40,6 +40,14 @@ jobs:
       - name: Frontend build
         run: npm run build
 
+      - name: Set up Python 3.12 for bridge discovery tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bridge Python discovery unit tests
+        run: python bridge/test_python_discovery.py
+
       - name: Rust check (development config without packaged sidecar)
         env:
           TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
