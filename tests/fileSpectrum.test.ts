@@ -33,6 +33,8 @@ describe('sixth-dimensional Spectrum (S)', () => {
     expect(close.temporal).toBe(1);
     expect(distant.temporal).toBe(0);
     expect(close.energy).toBeGreaterThan(distant.energy);
+    expect(spectrumStarColor(star, close, 'gradient', false, false, 0, false))
+      .not.toBe(spectrumStarColor(star, distant, 'gradient', false, false, 0, false));
     const missing = spectrumSignal({ ...star, entry: { ...file, modifiedMs: null } }, bounds, 0.5, 0);
     expect(missing.temporal).toBeNull();
     expect(missing.energy).toBe(0);
@@ -73,6 +75,15 @@ describe('sixth-dimensional Spectrum (S)', () => {
     expect(attribute.count).toBe(geometry.getAttribute('position').count);
     const first = [attribute.getX(0), attribute.getY(0), attribute.getZ(0)];
     expect(first.every(Number.isFinite)).toBe(true);
+    const vertices = geometry.getAttribute('position') as THREE.BufferAttribute;
+    let darkest = 0;
+    let brightest = 0;
+    for (let i = 1; i < vertices.count; i++) {
+      if (vertices.getY(i) < vertices.getY(darkest)) darkest = i;
+      if (vertices.getY(i) > vertices.getY(brightest)) brightest = i;
+    }
+    expect(attribute.getX(brightest)).toBeGreaterThan(attribute.getX(darkest));
+    expect(attribute.getY(brightest)).toBeGreaterThan(attribute.getY(darkest));
     gradient.setActive(false);
     for (let i = 0; i < attribute.count; i++) {
       expect([attribute.getX(i), attribute.getY(i), attribute.getZ(i)]).toEqual([1, 1, 1]);
