@@ -8,7 +8,7 @@ LUMENDECK is a Windows-first desktop application built with **Tauri, React, Type
 
 **Repository description:** Windows-first, local-first creative workspace with native file navigation, GPU spatial constellations, time/context/spectrum views, and optional AI rendering.
 
-**Status:** Development-source milestone **0.36.0**, tracked in [Spatial Experience PR #53](https://github.com/xhan145/lumendeck/pull/53). Spatial Files, 4D Spacetime, 5D Context, and 6D Spectrum remain **experimental** until native Windows GPU and installer QA. A version bump or merged PR is **not** a signed installer release. Windows Explorer shell replacement is not implemented.
+**Status:** Source milestone **0.36.0** is merged into `main` via [Spatial Experience PR #53](https://github.com/xhan145/lumendeck/pull/53) and [bundled Python PR #50](https://github.com/xhan145/lumendeck/pull/50). Spatial Files, 4D Spacetime, 5D Context, 6D Spectrum, and the new packaging path remain **experimental** pending native Windows GPU, clean-installer, and first-use AI runtime QA. Merging code is **not** a signed installer release. Windows Explorer shell replacement is not implemented.
 
 ## What LUMENDECK does
 
