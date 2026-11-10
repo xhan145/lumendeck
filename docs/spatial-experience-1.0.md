@@ -180,3 +180,67 @@ threshold does not recreate the Three.js renderer or reset the camera.
 7. Switch FX quality and Windows reduced-motion; the lens and fallback
    List view remain safe. Watch GPU memory when switching folders repeatedly.
 
+
+## Sixth dimension: Spectrum (X / Y / Z / T / C / S)
+
+**Name:** **Spectrum (S)**. Its animated visual behavior is **Spectral Drift**.
+
+The sixth dimension is **chromatic display state**, not a sixth
+independent physical coordinate or an extra filesystem metadata field.
+It encodes observations already available in the current folder into
+color gradients on each file star:
+
+- **Base hue** = actual file type (folder, image, audio, video, code,
+  document, other), retaining the existing muted purple/indigo/blue
+  category palette.
+- **Gradient brightness/lavender shift** = closeness of an observed
+  last-modified timestamp to the active 4D time playhead, plus the
+  selected file's already explainable 5D context score.
+- **White-violet highlight** = the selected or hovered star.
+- **Spectral Drift** = a small, slow decorative hue modulation. Its
+  oscillation **is not a new filesystem event or a live activity signal**.
+
+Use **Files → Constellation → Ⅵ SPECTRUM**:
+
+| Mode | Expected behavior |
+| --- | --- |
+| Off | Solid, existing category star colors. The star geometry's gradient multipliers become uniform white. |
+| Gradient | Static two-tone gradient on each GPU-instanced file star. The per-star color updates as you scrub or play time, or change context. |
+| Drift (default) | Gradient with very subtle autonomous hue movement. Freezes in reduced-motion mode and during GPU performance degradation; evidence still updates on manual time scrubbing. |
+
+All three modes persist as `AppSettings.fileSpectrumMode` and are
+independent from particle quality and context selection. Older saved
+settings sanitize to the default; unknown values do not crash the app.
+
+Implementation uses Three.js's existing `InstancedMesh` and built-in
+`MeshBasicMaterial.vertexColors`, with one shared vertex-gradient
+attribute and one per-file instance tint. This avoids extra WebGL
+render passes, additional external textures and third-party shader
+packages. The particle halo and top-down mini-map reuse the same
+per-star colors. The 3D/4D/5D coordinates and real paths are unchanged.
+
+Missing modification dates do not receive invented temporal color
+evidence. Context evidence is still a **bounded heuristic**, not a
+probability of shared content or project dependencies. Gradient motion
+is a visualization cue only, not an indication of edits happening.
+
+### Sixth-dimensional visual QA
+
+1. Open a mixed directory and compare base colors against the real file
+   kind legend. Turn Spectrum Off and confirm solid original colors.
+2. Select **Gradient** and verify two-tone color transitions across
+   individual star surfaces, rather than only a flat colored glow.
+3. Scrub the 4D timeline across known modification dates; nearby
+   timestamps should brighten the relevant stars in a deterministic way.
+4. Select a file with multiple contextual matches, switch Reveal/Focus,
+   then adjust the context threshold. The matching stars' tints and halo
+   should reflect the change, without hiding other real files.
+5. Enable Drift, pause the 4D timeline, and verify only gentle periodic
+   chromatic motion remains. Enable Windows reduced-motion: hue drift
+   freezes, but keyboard selection, zoom and scrubbing still work.
+6. Compare the real 3D stars, GPU halo points and mini-map colors.
+   Switching Off should restore category colors with no camera reset.
+7. Repeat on a low-memory GPU and across several folder switches;
+   monitor GPU responsiveness and confirm the existing WebGL→List
+   fallback and Explorer recovery path remain available.
+
