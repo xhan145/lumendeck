@@ -22,6 +22,7 @@ import { FileInspector } from './FileInspector';
 import { useStudio } from '../../state/store';
 import type { FileFxMode } from '../../state/appSettings';
 import type { FileSpectrumMode } from '../../core/shell/fileSpectrum';
+import type { FileSpacetimeMode } from '../../core/shell/fileSpacetime';
 import '../../styles/files.css';
 import '../../styles/files-spatial.css';
 
@@ -75,6 +76,7 @@ export function FilesWorkspace() {
   const native = filesAvailable();
   const fxMode = useStudio((state) => state.appSettings.fileFxMode ?? 'cinematic');
   const spectrumMode = useStudio((state) => state.appSettings.fileSpectrumMode ?? 'drift');
+  const spacetimeMode = useStudio((state) => state.appSettings.fileSpacetimeMode ?? 'contours');
   const updateAppSettings = useStudio((state) => state.updateAppSettings);
   const [locations, setLocations] = useState<FileLocation[]>([]);
   const [bookmarks, setBookmarks] = useState<SpatialBookmark[]>(() =>
@@ -526,6 +528,9 @@ export function FilesWorkspace() {
                   <FileConstellation entries={shown} selectedPath={selectedPath}
                     fxMode={fxMode}
                      spectrumMode={spectrumMode}
+                     spacetimeMode={spacetimeMode}
+                     onSpacetimeModeChange={(next: FileSpacetimeMode) =>
+                       updateAppSettings({ fileSpacetimeMode: next })}
                     folderPath={listing.path}
                     folderName={folderLabel(listing.path)}
                     cameraRequest={cameraRequest}
