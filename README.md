@@ -8,16 +8,16 @@ LUMENDECK is a Windows-first desktop application built with **Tauri, React, Type
 
 **Repository description:** Windows-first, local-first creative workspace with native file navigation, GPU spatial constellations, time/context/spectrum views, and optional AI rendering.
 
-**Status:** Active development, source version **0.35.0**. The expanded Files/Spacetime experience is implemented on the **[`ux/shell-first-desktop` branch](https://github.com/xhan145/lumendeck/tree/ux/shell-first-desktop)** in **[draft PR #53](https://github.com/xhan145/lumendeck/pull/53)**. It is **not merged into `main`** and still needs visual and performance testing on physical Windows GPUs. Do not treat draft features as an installed stable release.
+**Status:** Development-source milestone **0.36.0**, tracked in [Spatial Experience PR #53](https://github.com/xhan145/lumendeck/pull/53). Spatial Files, 4D Spacetime, 5D Context, and 6D Spectrum remain **experimental** until native Windows GPU and installer QA. A version bump or merged PR is **not** a signed installer release. Windows Explorer shell replacement is not implemented.
 
 ## What LUMENDECK does
 
 - **Creative studio:** A node-based environment for local image-generation workflows, render settings, models, and outputs.
-- **Native Files workspace (draft):** Navigate actual Windows folders and drives in List, Grid, or Constellation views. Open real files, inspect bounded previews and metadata, use bookmarks and saved camera views. The visual layer does not duplicate or relocate files.
-- **Spatial Constellation (draft):** Group real files into a GPU-rendered, selectable 3D map. Orbit, zoom, focus, inspect, and open file stars. An accessible List view remains available.
-- **4D Time and Spacetime (draft):** Scrub real last-modified timestamps; project them onto the 3D scene. A low-contrast, shader-driven **Spacetime** field provides Off, Contours, and Flow modes.
-- **5D Context (draft):** Show local, explainable relationships based on filename, extension, type, and modification-date evidence. **These are heuristic metadata matches**, not verified semantic dependencies.
-- **6D Spectrum (draft):** Encode file type, proximity to the time playhead, and contextual evidence as subtle star gradients. Choose Off, Gradient, or Drift. Drift is cosmetic, not a live file-change indicator.
+- **Native Files workspace (experimental):** Navigate actual Windows folders and drives in List, Grid, or Constellation views. Open real files, inspect bounded previews and metadata, use bookmarks and saved camera views. The visual layer does not duplicate or relocate files.
+- **Spatial Constellation (experimental):** Group real files into a GPU-rendered, selectable 3D map. Orbit, zoom, focus, inspect, and open file stars. An accessible List view remains available.
+- **4D Time and Spacetime (experimental):** Scrub real last-modified timestamps; project them onto the 3D scene. A low-contrast, shader-driven **Spacetime** field provides Off, Contours, and Flow modes.
+- **5D Context (experimental):** Show local, explainable relationships based on filename, extension, type, and modification-date evidence. **These are heuristic metadata matches**, not verified semantic dependencies.
+- **6D Spectrum (experimental):** Encode file type, proximity to the time playhead, and contextual evidence as subtle star gradients. Choose Off, Gradient, or Drift. Drift is cosmetic, not a live file-change indicator.
 - **Optional AI rendering:** A bundled/locally launched procedural bridge and an optional managed **Diffusers + PyTorch** workflow. Downloading models or enabling external providers requires a deliberate choice and may require network access.
 
 Here, **X · Y · Z · T · C · S** means three spatial display coordinates, a real file-time projection, a contextual-evidence encoding, and a chromatic display channel. It does **not** claim six physical dimensions, reconstructed file history, or autonomous understanding of personal files.
@@ -37,9 +37,9 @@ Here, **X · Y · Z · T · C · S** means three spatial display coordinates, a 
 | Area | Status |
 | --- | --- |
 | Tauri desktop application and creative studio | Existing codebase on `main` |
-| Native Files, spatial inspector, bookmarks, 3D Constellation | Implemented on draft branch, pending merge and Windows GPU QA |
-| 4D Time + GPU Spacetime | Implemented on draft branch, pending runtime visual QA |
-| 5D Context evidence and 6D Spectrum | Implemented on draft branch, heuristic/display-only |
+| Native Files, spatial inspector, bookmarks, 3D Constellation | Implemented as experimental 0.36.0 source in PR #53; Windows GPU QA pending |
+| 4D Time + GPU Spacetime | Implemented as experimental 0.36.0 source in PR #53; runtime visual QA pending |
+| 5D Context evidence and 6D Spectrum | Implemented as experimental 0.36.0 source in PR #53; heuristic/display-only |
 | Optional local AI model runtime | Available through the bridge, requires compatible Python and additional dependencies |
 | Full Windows desktop shell replacement | **Not implemented**; exploratory direction only |
 
@@ -49,7 +49,7 @@ For implementation details and honest limitations, see the [Files technical guid
 
 **Prerequisites:** Windows 10/11 with WebView2, Node.js 22, Rust stable (MSVC target), and Visual Studio C++ Build Tools / Windows SDK. Native Tauri builds should run from an appropriately initialized Visual Studio x64 developer environment. Hardware requirements vary with the selected renderer and local AI models.
 
-### Run the current `main` development UI
+### Run the development UI
 
 ```powershell
 git clone https://github.com/xhan145/lumendeck.git
@@ -58,23 +58,23 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-The command above starts the Vite development UI; it is not an installer or a complete native Files test. For Tauri development on `main`, consult the app's sidecar build requirements in [bridge/README.md](bridge/README.md).
+The command above starts the Vite development UI; it is not an installer. For native Windows testing, use the Tauri workflow below.
 
-### Run the draft native Files + Spacetime experience
+### Run native Files + Spacetime locally
 
 Use a **separate worktree** to preserve your original checkout and unfinished work:
 
 ```powershell
-git fetch origin ux/shell-first-desktop
-git worktree add --detach ../lumendeck-spatial-preview origin/ux/shell-first-desktop
+git fetch origin main
+git worktree add --detach ../lumendeck-spatial-preview origin/main
 Set-Location ../lumendeck-spatial-preview
 npm.cmd ci
 npm.cmd run tauri:dev
 ```
 
-If you already have that worktree, do not run `git worktree add` again. Ensure it has no changes before updating its checkout. The draft's `tauri:dev` command uses a development config that does not require a prepackaged sidecar; the Vite server can start the local Python bridge separately. Stop older dev servers first if ports conflict.
+If you already have that worktree, do not run `git worktree add` again. Ensure it has no changes before updating its checkout. The `tauri:dev` command uses a development config that does not require a prepackaged sidecar; the Vite server can start the local Python bridge separately. Stop older dev servers first if ports conflict.
 
-In the app, open **Files → Constellation**, choose Particle FX **Balanced** or **Cinematic**, and explore **4D TIME → Spacetime**, **Ⅴ CONTEXT**, and **Ⅵ SPECTRUM**. These are settings in the draft branch, not a promise about the current release.
+In the app, open **Files → Constellation**, choose Particle FX **Balanced** or **Cinematic**, and explore **4D TIME → Spacetime**, **Ⅴ CONTEXT**, and **Ⅵ SPECTRUM**. These are experimental development-source settings, not a promise about an installed release.
 
 ### Python and the optional AI bridge
 
@@ -111,7 +111,7 @@ npm.cmd run typecheck
 npm.cmd run build
 ```
 
-The draft PR's Windows CI also checks Rust code, filesystem tests, and Python interpreter-discovery tests. CI does **not** validate runtime GPU appearance, frame pacing, or the performance of a particular Windows graphics card.
+Windows CI also checks Rust code, filesystem tests, and Python interpreter-discovery tests. CI does **not** validate runtime GPU appearance, frame pacing, or the performance of a particular Windows graphics card.
 
 Please use [Issues](https://github.com/xhan145/lumendeck/issues) for reproducible defects. See [CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md), and [docs/vision-dossier.md](docs/vision-dossier.md) for contributions, planned work, and the preserved original product vision.
 
