@@ -1095,6 +1095,16 @@ export function FileConstellation({
           {stars.length} FILE STARS <span className="files-heading-divider">/</span> X · Y · Z · T · C · S
         </span>
       </div>
+      <section className="files-spectrum-key" aria-label="Sixth dimension Spectrum legend">
+        <div className="files-spectrum-key-heading">
+          <span>Ⅵ / SPECTRUM</span>
+          <strong>{spectrumMode === 'off' ? 'OFF' :
+            spectrumMode === 'gradient' ? 'GRADIENT' : reducedMotion ? 'DRIFT PAUSED' : 'DRIFT'}</strong>
+        </div>
+        <div className="files-spectrum-key-gradient" aria-hidden="true" />
+        <small>Base hue: file type · Lavender: time proximity and context evidence.
+          Drift adds cosmetic motion, not file activity.</small>
+      </section>
       <div className="files-space-help" aria-hidden="true">
         <span>SCROLL <b>ZOOM</b></span>
         <span>DRAG <b>ORBIT</b></span>
