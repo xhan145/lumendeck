@@ -950,9 +950,15 @@ export function FileConstellation({
         if (!startTime) startTime = now;
         const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
         spectrumElapsed = elapsed;
-        spacetimeElapsed = elapsed;
         const frameDuration = lastFrame ? now - lastFrame : 16;
         lastFrame = now;
+        // Accumulate visible, actively playing time only. A minimized window
+        // must not jump the shader phase forward when it resumes.
+        if (spacetimeFlowEnabled(spacetimeModeRef.current,
+          !!temporalBounds?.distinctDates && timeEnabledRef.current,
+          timePlayingRef.current, reducedMotion, spacetimeDegraded)) {
+          spacetimeElapsed += Math.max(0, Math.min(frameDuration, 70)) / 1000;
+        }
         if (timeEnabledRef.current && timePlayingRef.current &&
             temporalBounds?.distinctDates && !reducedMotion) {
           const fraction = Math.max(0, Math.min(frameDuration, 70)) /
