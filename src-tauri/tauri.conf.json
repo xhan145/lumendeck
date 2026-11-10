@@ -41,8 +41,8 @@
     "externalBin": ["binaries/lumendeck-bridge"],
     "publisher": "LumenDeck",
     "category": "GraphicsAndDesign",
-    "shortDescription": "Local-first node-native generative image studio",
-    "longDescription": "LumenDeck is a local-first, node-native generative image studio with a beginner-friendly Recipe View and an expert Graph View.",
+    "shortDescription": "Local-first spatial and creative workspace",
+    "longDescription": "LumenDeck combines a node-based creative studio with a Windows-first spatial file workspace, GPU-rendered constellations, and optional local AI rendering. Spatial Files features are in active development.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
