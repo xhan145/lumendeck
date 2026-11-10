@@ -20,7 +20,7 @@ export const FILE_FX_PRESETS: Readonly<Record<FileFxMode, FileFxPreset>> = {
   },
   cinematic: {
     backgroundStars: 2400, ambientDust: 820, clusterMist: 85,
-    bloom: true, bloomStrength: 0.95, pixelRatioCap: 1.5,
+    bloom: true, bloomStrength: 0.62, pixelRatioCap: 1.5,
   },
 };
 
