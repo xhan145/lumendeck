@@ -60,6 +60,8 @@ export interface FileAtmosphere {
     lens?: FileContextLens | null, contextMode?: FileContextMode): void;
   /** Update halo locations in the same order as file stars, with no new GPU objects. */
   moveStars(xyz: Float32Array): void;
+  /** Synchronize halo tints with the sixth-dimensional star spectrum. */
+  setSpectrum(colors: readonly string[]): void;
   dispose(): void;
 }
 
@@ -228,6 +230,16 @@ export function createFileAtmosphere(
         attr.setXYZ(index + 1, xyz[offset], xyz[offset + 1], xyz[offset + 2]);
       }
       attr.needsUpdate = true;
+    },
+    setSpectrum(hexColors) {
+      if (hexColors.length !== stars.length) return;
+      const colorAttribute = glows.points.geometry.getAttribute('color') as THREE.BufferAttribute;
+      const color = new THREE.Color();
+      hexColors.forEach((hex, index) => {
+        color.set(hex);
+        colorAttribute.setXYZ(index + 1, color.r, color.g, color.b);
+      });
+      colorAttribute.needsUpdate = true;
     },
     setFocus(selectedPath, hoverPath, lens = null, contextMode = 'off') {
       if (!glows.focus) return;
