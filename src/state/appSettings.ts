@@ -1,4 +1,5 @@
 import type { ViewId } from './store';
+import type { FileSpectrumMode } from '../core/shell/fileSpectrum';
 import type { TurboPresetId } from '../turboForge/types';
 import type { RenderBackendId } from '../turboForge/backends/backendSettings';
 import { isHardwareProfileId, type HardwareProfileId } from '../core/hardware/profiles';
@@ -78,6 +79,11 @@ export interface AppSettings {
    * creative workflow quality preferences or the filesystem itself.
    */
   fileFxMode?: FileFxMode;
+  /**
+   * Six-dimensional Files constellation chromatic display. Independent of
+   * particle FX and the fourth-dimensional file time navigation.
+   */
+  fileSpectrumMode?: FileSpectrumMode;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -100,6 +106,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   telemetryDisabled: true,
   showDiagnostics: false,
   fileFxMode: 'cinematic',
+  fileSpectrumMode: 'drift',
   apiKeys: {
     civitai: '',
     huggingface: '',
@@ -140,6 +147,10 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
     graph3dStyle: settings?.graph3dStyle === 'orbs' || settings?.graph3dStyle === 'cards' ? settings.graph3dStyle : undefined,
     fileFxMode: settings?.fileFxMode === 'off' || settings?.fileFxMode === 'balanced'
       || settings?.fileFxMode === 'cinematic' ? settings.fileFxMode : 'cinematic',
+    fileSpectrumMode: settings?.fileSpectrumMode === 'off' ||
+      settings?.fileSpectrumMode === 'gradient' ||
+      settings?.fileSpectrumMode === 'drift'
+      ? settings.fileSpectrumMode : 'drift',
     graph3dEffects:
       settings?.graph3dEffects === 'off' ||
       settings?.graph3dEffects === 'minimal' ||
