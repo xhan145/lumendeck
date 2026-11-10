@@ -28,6 +28,20 @@ function portOpen(port: number): Promise<boolean> {
   });
 }
 
+/** Confirm a listener really is the LUMENDECK bridge before reusing it. */
+async function healthyLumenDeckBridge(): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/health`, {
+      signal: AbortSignal.timeout(1_500),
+    });
+    if (!response.ok) return false;
+    const status = await response.json() as { status?: unknown; adapter?: unknown };
+    return status.status === 'ok' && status.adapter === 'procedural';
+  } catch {
+    return false;
+  }
+}
+
 /** Dev-only: autostart the Python render bridge alongside `npm run dev`. */
 function bridgePlugin(): PluginOption {
   let child: ChildProcess | null = null;
@@ -41,7 +55,15 @@ function bridgePlugin(): PluginOption {
       // Only the actual dev server is allowed to spawn the render bridge.
       if (process.env.VITEST || process.env.NODE_ENV === 'test') return;
       if (await portOpen(BRIDGE_PORT)) {
-        console.log(`\n[bridge] already running on :${BRIDGE_PORT} — reusing it.`);
+        if (!await healthyLumenDeckBridge()) {
+          throw new Error(
+            `[bridge] Port ${BRIDGE_PORT} is occupied, but /health is not a LUMENDECK bridge. ` +
+            'Close the conflicting process manually; LUMENDECK will not terminate it.',
+          );
+        }
+        console.log(`\n[bridge] healthy LUMENDECK bridge on :${BRIDGE_PORT}; reusing it.`);
+        console.log('[bridge] An existing process retains its original Python environment. ' +
+          'Restart that bridge to apply a new LUMENDECK_PYTHON value.');
         return;
       }
       const python = process.env.LUMENDECK_PYTHON || 'python';
