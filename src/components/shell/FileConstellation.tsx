@@ -524,6 +524,8 @@ export function FileConstellation({
     const applyFocus = (selected: string | null, hoveredPath: string | null) => {
       const { lens, mode } = contextViewRef.current;
       const contextual = mode !== 'off' && lens?.anchor.path === selected;
+      const chromaticMode = spectrumModeRef.current;
+      starGradientSurface.setActive(chromaticMode !== 'off');
       for (const [index, star] of stars.entries()) {
         const focused = star.entry.path === selected;
         const isHover = star.entry.path === hoveredPath && !focused;
@@ -533,7 +535,14 @@ export function FileConstellation({
           (focused ? 1.36 : isHover ? 1.18 : 1));
         unit.updateMatrix();
         cores.setMatrixAt(index, unit.matrix);
-        tint.set(focused ? '#ffffff' : star.color);
+        const signal = spectrumSignal(star,
+          timeEnabledRef.current ? temporalBounds : null,
+          timePositionRef.current,
+          contextual && lens ? lens.scoreByPath.get(star.entry.path) ?? 0 : 0);
+        const spectrumColor = spectrumStarColor(star, signal, chromaticMode,
+          focused, isHover, spectrumElapsed, spectrumMotionEnabled);
+        spectrumColors[index] = spectrumColor;
+        tint.set(spectrumColor);
         if (contextual && lens && !focused) {
           const score = lens.scoreByPath.get(star.entry.path) ?? 0;
           if (score > 0) tint.lerp(contextualWhite, 0.17 + score / 260);
@@ -547,6 +556,7 @@ export function FileConstellation({
       cores.computeBoundingSphere();
       atmosphere.setFocus(selected, hoveredPath,
         contextual ? lens : null, contextual ? mode : 'off');
+      atmosphere.setSpectrum(spectrumColors);
 
       const index = selected ? byPath.get(selected) : undefined;
       const item = index === undefined ? null : stars[index];
@@ -563,6 +573,10 @@ export function FileConstellation({
       }
     };
     focusRef.current = applyFocus;
+    spectrumRefreshRef.current = () => {
+      applyFocus(selectedRef.current, hoverRef.current);
+      drawMiniMapRef.current();
+    };
 
     const projectTime = () => {
       const enabled = timeEnabledRef.current && temporalBounds?.distinctDates;
@@ -662,7 +676,7 @@ export function FileConstellation({
         const contextDim = contextual && !active && !related
           ? mode === 'focus' ? 0.25 : 0.55 : 1;
         ctx.globalAlpha = (laterModified[i] && !active ? 0.38 : 0.94) * contextDim;
-        ctx.fillStyle = active ? '#ffffff' : stars[i].color;
+        ctx.fillStyle = spectrumColors[i];
         ctx.beginPath();
         ctx.arc(point.x, point.y, active ? 4.6 : stars[i].entry.isDirectory ? 3 : 2.1,
           0, Math.PI * 2);
@@ -853,6 +867,7 @@ export function FileConstellation({
     let lastRendered = 0;
     let lastTimeLabel = 0;
     let lastMiniMapFrame = 0;
+    let lastSpectrumFrame = 0;
     let startTime = 0;
     const frame = (now: number) => {
       try {
@@ -865,6 +880,7 @@ export function FileConstellation({
         lastRendered = now;
         if (!startTime) startTime = now;
         const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
+        spectrumElapsed = elapsed;
         const frameDuration = lastFrame ? now - lastFrame : 16;
         lastFrame = now;
         if (timeEnabledRef.current && timePlayingRef.current &&
@@ -879,6 +895,14 @@ export function FileConstellation({
             lastTimeLabel = now;
             setTimePosition(timePositionRef.current);
           }
+        }
+        // Independent chromatic drift remains alive when 4D time is paused,
+        // but updates only ~9 Hz rather than re-uploading colors every frame.
+        if (spectrumModeRef.current === 'drift' && spectrumMotionEnabled &&
+            now - lastSpectrumFrame >= 110 &&
+            !(timeEnabledRef.current && timePlayingRef.current && temporalBounds?.distinctDates)) {
+          lastSpectrumFrame = now;
+          applyFocus(selectedRef.current, hoverRef.current);
         }
         if (flight) {
           if (flight.startedAt === null) flight.startedAt = now;
@@ -925,6 +949,8 @@ export function FileConstellation({
 
         if (!reducedMotion && !reducedEffects && governor.feed(frameDuration)) {
           reducedEffects = true;
+          spectrumMotionEnabled = false;
+          applyFocus(selectedRef.current, hoverRef.current);
           renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
           atmosphere.setPixelRatio(renderer.getPixelRatio());
           resize();
@@ -977,6 +1003,7 @@ export function FileConstellation({
       };
       controls.dispose();
       focusRef.current = () => {};
+      spectrumRefreshRef.current = () => {};
       projectTimeRef.current = () => {};
       updateContextRef.current = () => {};
       hoverRef.current = null;
@@ -1013,6 +1040,10 @@ export function FileConstellation({
     updateContextRef.current();
     drawMiniMapRef.current();
   }, [selectedPath, stars, contextLens, contextMode]);
+
+  useEffect(() => {
+    spectrumRefreshRef.current();
+  }, [spectrumMode]);
 
   useEffect(() => {
     if (!cameraRequest || cameraRequest.folderPath !== folderPath ||
@@ -1061,7 +1092,7 @@ export function FileConstellation({
         <span className="files-space-heading-kicker">LUMENDECK / SPATIAL ARCHIVE</span>
         <strong title={folderName}>{folderName}</strong>
         <span className="files-space-heading-sub">
-          {stars.length} FILE STARS <span className="files-heading-divider">/</span> X · Y · Z · T · CONTEXT
+          {stars.length} FILE STARS <span className="files-heading-divider">/</span> X · Y · Z · T · C · S
         </span>
       </div>
       <div className="files-space-help" aria-hidden="true">
