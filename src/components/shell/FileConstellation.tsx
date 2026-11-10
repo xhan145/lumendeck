@@ -22,6 +22,10 @@ import {
   projectFileContext, type FileContextLens, type FileContextMode,
 } from '../../core/shell/fileContext';
 import { createContextConnections } from './fileConstellationContextLinks';
+import { makeStarGradientSurface } from './fileSpectrumGeometry';
+import {
+  spectrumSignal, spectrumStarColor, type FileSpectrumMode,
+} from '../../core/shell/fileSpectrum';
 
 interface Props {
   entries: FileEntry[];
@@ -29,6 +33,7 @@ interface Props {
   folderName: string;
   folderPath: string;
   fxMode: FileFxMode;
+  spectrumMode: FileSpectrumMode;
   contextLens: FileContextLens | null;
   contextMode: FileContextMode;
   cameraRequest?: { id: number; folderPath: string; camera: SpatialCamera } | null;
@@ -196,7 +201,7 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]): (xyz: Float32Array)
  * The 3D presentation NEVER changes underlying filesystem paths.
  */
 export function FileConstellation({
-  entries, selectedPath, folderName, folderPath, fxMode,
+  entries, selectedPath, folderName, folderPath, fxMode, spectrumMode,
   contextLens, contextMode, cameraRequest, onSaveView,
   onSelect, onOpen, onUnavailable,
 }: Props) {
@@ -217,6 +222,9 @@ export function FileConstellation({
   } | null>(null);
   const focusRef = useRef<(selected: string | null, hovered: string | null) => void>(() => {});
   const updateContextRef = useRef<() => void>(() => {});
+  const spectrumModeRef = useRef(spectrumMode);
+  spectrumModeRef.current = spectrumMode;
+  const spectrumRefreshRef = useRef<() => void>(() => {});
   const contextViewRef = useRef({ lens: contextLens, mode: contextMode });
   contextViewRef.current = { lens: contextLens, mode: contextMode };
   const zoomCommandRef = useRef<(action: FileZoomAction) => void>(() => {});
@@ -364,8 +372,10 @@ export function FileConstellation({
 
     // One instanced GPU draw for all selectable file cores.
     const sphere = new THREE.IcosahedronGeometry(1, 1);
+    const starGradientSurface = makeStarGradientSurface(sphere);
+    starGradientSurface.setActive(spectrumModeRef.current !== 'off');
     const coreMaterial = new THREE.MeshBasicMaterial({
-      color: '#ffffff', toneMapped: false,
+      color: '#ffffff', vertexColors: true, toneMapped: false,
     });
     const cores = new THREE.InstancedMesh(sphere, coreMaterial, stars.length);
     cores.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -374,6 +384,9 @@ export function FileConstellation({
     const byPath = new Map(stars.map((star, index) => [star.entry.path, index]));
     const currentXYZ = new Float32Array(stars.length * 3);
     const laterModified = new Uint8Array(stars.length);
+    const spectrumColors = stars.map((star) => star.color);
+    let spectrumElapsed = 0;
+    let spectrumMotionEnabled = !reducedMotion;
     stars.forEach((star, index) => {
       currentXYZ.set([star.x, star.y, star.z], index * 3);
       unit.position.set(star.x, star.y, star.z);
