@@ -628,6 +628,22 @@ export function FileConstellation({
       updateLinks(currentXYZ);
       contextWires.move(currentXYZ);
       applyFocus(selectedRef.current, hoverRef.current);
+      const focusedIndex = selectedRef.current ? byPath.get(selectedRef.current) : undefined;
+      const focus = focusedIndex === undefined ? null : {
+        x: currentXYZ[focusedIndex * 3],
+        y: currentXYZ[focusedIndex * 3 + 1],
+      };
+      const evidenceCount = lens?.anchor.path === selectedRef.current
+        ? lens.relations.length : 0;
+      spacetime.update(
+        timeEnabledRef.current ? progress : 0,
+        focus,
+        spacetimeFocusStrength(focusedIndex !== undefined, mode, evidenceCount),
+        spacetimeElapsed,
+        spacetimeFlowEnabled(spacetimeModeRef.current,
+          !!temporalBounds?.distinctDates && timeEnabledRef.current,
+          timePlayingRef.current, reducedMotion, spacetimeDegraded),
+      );
 
       const index = selectedRef.current ? byPath.get(selectedRef.current) : undefined;
       temporalTrail.visible = !!enabled && index !== undefined;
@@ -651,6 +667,10 @@ export function FileConstellation({
       }
     };
     projectTimeRef.current = projectTime;
+    spacetimeRefreshRef.current = (nextMode) => {
+      spacetime.setMode(nextMode);
+      projectTime();
+    };
     updateContextRef.current = () => {
       contextWires.setLens(contextViewRef.current.lens, contextViewRef.current.mode);
       projectTime();
@@ -898,6 +918,7 @@ export function FileConstellation({
         if (!startTime) startTime = now;
         const elapsed = reducedMotion ? 0 : (now - startTime) / 1000;
         spectrumElapsed = elapsed;
+        spacetimeElapsed = elapsed;
         const frameDuration = lastFrame ? now - lastFrame : 16;
         lastFrame = now;
         if (timeEnabledRef.current && timePlayingRef.current &&
@@ -967,6 +988,8 @@ export function FileConstellation({
         if (!reducedMotion && !reducedEffects && governor.feed(frameDuration)) {
           reducedEffects = true;
           spectrumMotionEnabled = false;
+          spacetimeDegraded = true;
+          projectTime();
           applyFocus(selectedRef.current, hoverRef.current);
           renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
           atmosphere.setPixelRatio(renderer.getPixelRatio());
@@ -1021,11 +1044,13 @@ export function FileConstellation({
       controls.dispose();
       focusRef.current = () => {};
       spectrumRefreshRef.current = () => {};
+      spacetimeRefreshRef.current = () => {};
       projectTimeRef.current = () => {};
       updateContextRef.current = () => {};
       hoverRef.current = null;
       pipeline?.dispose();
       atmosphere.dispose();
+      spacetime.dispose();
       contextWires.dispose();
       backdrop.dispose();
 
@@ -1061,6 +1086,10 @@ export function FileConstellation({
   useEffect(() => {
     spectrumRefreshRef.current();
   }, [spectrumMode]);
+
+  useEffect(() => {
+    spacetimeRefreshRef.current(spacetimeMode);
+  }, [spacetimeMode]);
 
   useEffect(() => {
     if (!cameraRequest || cameraRequest.folderPath !== folderPath ||
