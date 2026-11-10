@@ -1211,6 +1211,17 @@ export function FileConstellation({
             <span className="files-time-date">{dateLabel}</span>
             <span className="files-time-clock">{hourLabel}</span>
           </output>
+          <label className="files-spacetime-select"
+            title="GPU-rendered contours of the modification-time field. The curves are an abstract visualization, not historic file positions.">
+            <span>SPACETIME</span>
+            <select aria-label="Spacetime field visual quality"
+              value={spacetimeMode} disabled={fxMode === 'off'}
+              onChange={(event) => onSpacetimeModeChange(event.target.value as FileSpacetimeMode)}>
+              <option value="off">Off</option>
+              <option value="contours">Contours</option>
+              <option value="flow">Flow</option>
+            </select>
+          </label>
           <span className="files-time-sample">
             {temporalBounds ? `${temporalBounds.datedCount} OF ${stars.length} DATED` : 'NO DATED STARS'}
           </span>
@@ -1244,7 +1255,7 @@ export function FileConstellation({
         </div>
         <p className="files-time-disclaimer">
           {canNavigateTime
-            ? 'Projected modification time, not historical file versions. Dim stars were modified later than the playhead.'
+            ? 'File dates project into 3D; Spacetime contours are a visual metaphor, not historical file paths.'
             : 'Requires two distinct modification dates. No historical files or dates are invented.'}
         </p>
       </section>
