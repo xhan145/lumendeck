@@ -1,5 +1,6 @@
 import type { ViewId } from './store';
 import type { FileSpectrumMode } from '../core/shell/fileSpectrum';
+import type { FileSpacetimeMode } from '../core/shell/fileSpacetime';
 import type { TurboPresetId } from '../turboForge/types';
 import type { RenderBackendId } from '../turboForge/backends/backendSettings';
 import { isHardwareProfileId, type HardwareProfileId } from '../core/hardware/profiles';
@@ -84,6 +85,8 @@ export interface AppSettings {
    * particle FX and the fourth-dimensional file time navigation.
    */
   fileSpectrumMode?: FileSpectrumMode;
+  /** Decorative GPU spacetime visualization of the 4D file-time field. */
+  fileSpacetimeMode?: FileSpacetimeMode;
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -107,6 +110,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   showDiagnostics: false,
   fileFxMode: 'cinematic',
   fileSpectrumMode: 'drift',
+  fileSpacetimeMode: 'contours',
   apiKeys: {
     civitai: '',
     huggingface: '',
@@ -151,6 +155,10 @@ export function sanitizeAppSettings(settings?: Partial<AppSettings>): AppSetting
       settings?.fileSpectrumMode === 'gradient' ||
       settings?.fileSpectrumMode === 'drift'
       ? settings.fileSpectrumMode : 'drift',
+    fileSpacetimeMode: settings?.fileSpacetimeMode === 'off' ||
+      settings?.fileSpacetimeMode === 'contours' ||
+      settings?.fileSpacetimeMode === 'flow'
+      ? settings.fileSpacetimeMode : 'contours',
     graph3dEffects:
       settings?.graph3dEffects === 'off' ||
       settings?.graph3dEffects === 'minimal' ||
