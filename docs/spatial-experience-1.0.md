@@ -244,3 +244,61 @@ is a visualization cue only, not an indication of edits happening.
    monitor GPU responsiveness and confirm the existing WebGL→List
    fallback and Explorer recovery path remain available.
 
+
+## Spacetime: GPU-rendered fourth-dimensional field
+
+**Spacetime is a rendering of T (time), not a seventh dimension.** The
+existing 4D timeline remains the authoritative control. This optional
+GPU visualization adds faint curved contour lines beneath the real file
+stars. They respond to the last-modified-time playhead and to selection/
+5D context, but they are explicitly **abstract** rather than measured
+historical file positions or physical spacetime curvature.
+
+In **Files → Constellation → 4D TIME → Spacetime**, choose:
+
+- **Off:** no contours or extra GPU draw. This is also forced when Particle
+  FX is Off, irrespective of the stored Spacetime mode.
+- **Contours (default):** a subdued purple-slate field; the GPU vertex
+  shader projects selected-file focus wells and 4D playhead curvature
+  with no CPU-side line-position updates per frame.
+- **Flow:** the same field with slow shader-only phase motion while the
+  4D timeline is playing. It freezes on pause, Windows reduced motion,
+  or sustained slow-frame degradation. With insufficient distinct file
+  timestamps, the field remains static.
+
+The geometry is a single static `LineSegments` buffer. Balanced caps
+the field at **9 horizontal + 13 vertical contours × 36 segments**;
+Cinematic at **17 + 23 contours × 64 segments**. Both are one draw
+call when visible, with restrained alpha (0.12/0.16) and no additive
+bloom. All geometry/ShaderMaterial resources are disposed when the
+Files constellation unmounts.
+
+In Cinematic mode, file stars now use GPU-calculated faceted lighting,
+while Basic materials remain the low-cost alternative in other FX modes.
+Bloom is reduced so color/detail stays visible. A broken inverse-order
+GLSL `smoothstep` was corrected, per-frame CPU bounding-sphere rebuilds
+were replaced with a conservative fixed raycast bound, and constellation
+wires now fill a reusable typed buffer without per-frame temporary arrays.
+When the adaptive governor degrades quality, the bloom render targets
+are disposed immediately to release GPU memory.
+
+### Spacetime and performance validation
+
+1. In a real folder, compare Spacetime Off, Contours and Flow at identical
+   camera positions. Confirm subtle lines are *behind* selectable stars
+   and do not overpower names or file-type colors.
+2. With 4D Time playing, check that contours bend gradually near the
+   selected star. Pause time: Flow motion freezes. Scrub dates: the
+   field changes phase, but no file positions or timestamps change.
+3. Switch Context Focus/Reveal to see a subtle difference in the focus
+   well, without falsely asserting actual file dependencies.
+4. Switch Particle FX Off: ensure the GPU field is absent and the
+   Spacetime selector is visibly disabled. Re-enable Balanced/Cinematic.
+5. Test Windows reduced motion, hidden/minimized windows, a single
+   undated file, disconnected drives, and repeated folder switching.
+6. Compare Task Manager's GPU **3D** engine and process memory while
+   navigating or playing time. A higher utilization percentage alone
+   is not proof of improved efficiency. Track **frame time**, dropped
+   frames and sustained responsiveness under the same viewport/DPI.
+7. Validate on the user's actual Windows GPU (CI can compile WebGL
+   shaders' source but does not run a browser GPU visual inspection).
