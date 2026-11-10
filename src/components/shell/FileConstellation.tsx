@@ -357,13 +357,31 @@ export function FileConstellation({
     atmosphere.setPixelRatio(nativePixelRatio);
     const spacetime = createFileSpacetimeField(scene, fxMode, spacetimeModeRef.current);
 
+    // GPU-side faceted lighting in Cinematic, basic low-cost color in the
+    // other tiers. No extra file meshes or draw calls are introduced.
+    const litStars = fxMode === 'cinematic';
+    if (litStars) {
+      const ambient = new THREE.AmbientLight('#b5abc7', 0.82);
+      const key = new THREE.DirectionalLight('#e2d6f1', 1.23);
+      key.position.set(-6, 7, 12);
+      const fill = new THREE.DirectionalLight('#64718f', 0.46);
+      fill.position.set(7, -5, -9);
+      scene.add(ambient, key, fill);
+    }
+    const makeStarMaterial = (color: string) => litStars
+      ? new THREE.MeshPhongMaterial({
+          color, vertexColors: true, shininess: 34,
+          specular: '#403654', emissive: '#17121e',
+          emissiveIntensity: 0.17, toneMapped: false,
+        })
+      : new THREE.MeshBasicMaterial({
+          color, vertexColors: true, toneMapped: false,
+        });
+
     const rootGeometry = new THREE.IcosahedronGeometry(0.4, 1);
     const rootGradientSurface = makeStarGradientSurface(rootGeometry);
     rootGradientSurface.setActive(spectrumModeRef.current !== 'off');
-    const root = new THREE.Mesh(rootGeometry,
-      new THREE.MeshBasicMaterial({
-        color: '#dfd1ff', vertexColors: true, toneMapped: false,
-      }));
+    const root = new THREE.Mesh(rootGeometry, makeStarMaterial('#dfd1ff'));
     scene.add(root);
     const nucleusRing = new THREE.Mesh(
       new THREE.RingGeometry(0.63, 0.67, 80),
@@ -388,9 +406,7 @@ export function FileConstellation({
     const sphere = new THREE.IcosahedronGeometry(1, 1);
     const starGradientSurface = makeStarGradientSurface(sphere);
     starGradientSurface.setActive(spectrumModeRef.current !== 'off');
-    const coreMaterial = new THREE.MeshBasicMaterial({
-      color: '#ffffff', vertexColors: true, toneMapped: false,
-    });
+    const coreMaterial = makeStarMaterial('#ffffff');
     const cores = new THREE.InstancedMesh(sphere, coreMaterial, stars.length);
     cores.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const unit = new THREE.Object3D();
@@ -413,7 +429,11 @@ export function FileConstellation({
     });
     cores.instanceMatrix.needsUpdate = true;
     if (cores.instanceColor) cores.instanceColor.needsUpdate = true;
-    cores.computeBoundingSphere();
+    // A conservative fixed sphere covers 4D/5D excursions. Avoid the
+    // expensive per-frame instance-matrix sphere rebuild on the CPU.
+    // The raycaster still checks exact matrices for its final star hit.
+    cores.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 80);
+    cores.frustumCulled = false;
     scene.add(cores);
 
     // A single faceted, camera-facing folder silhouette layer communicates
@@ -570,7 +590,6 @@ export function FileConstellation({
       }
       cores.instanceMatrix.needsUpdate = true;
       if (cores.instanceColor) cores.instanceColor.needsUpdate = true;
-      cores.computeBoundingSphere();
       atmosphere.setFocus(selected, hoveredPath,
         contextual ? lens : null, contextual ? mode : 'off');
       atmosphere.setSpectrum(spectrumColors);
@@ -875,8 +894,8 @@ export function FileConstellation({
       try {
         pipeline = createPostPipeline(renderer, scene, camera, {
           strength: preset.bloomStrength,
-          threshold: 0.78,
-          radius: 0.48,
+          threshold: 0.86,
+          radius: 0.34,
         });
       } catch {
         // Unsupported GPU post-processing is cosmetic, not a fatal browser error.
@@ -991,6 +1010,8 @@ export function FileConstellation({
           spacetimeDegraded = true;
           projectTime();
           applyFocus(selectedRef.current, hoverRef.current);
+          pipeline?.dispose();
+          pipeline = null;
           renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
           atmosphere.setPixelRatio(renderer.getPixelRatio());
           resize();
