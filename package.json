@@ -2,7 +2,7 @@
   "name": "lumendeck",
   "private": true,
   "version": "0.35.0",
-  "description": "LumenDeck — local-first, node-native generative image studio",
+  "description": "Windows-first local creative workspace with spatial files, GPU constellations, and optional AI rendering",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
