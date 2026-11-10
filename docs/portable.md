@@ -2,7 +2,7 @@
 
 LumenDeck ships a relocatable Python
 ([python-build-standalone](https://github.com/astral-sh/python-build-standalone))
-so real GPU rendering works **with no system Python installed**. `scripts/fetch-python.mjs`
+so packaged LUMENDECK can offer optional AI runtime setup **without a system Python install**. Rendering still requires compatible hardware and model dependencies. `scripts/fetch-python.mjs`
 downloads it (SHA256-verified) into `src-tauri/resources/python/` at build time;
 it is gitignored, not committed.
 
@@ -40,3 +40,12 @@ torch runtime on first use. No MSI, no system Python.
 The multi-GB torch runtime is never bundled (too large) — it stays
 install-on-first-use, powered by the bundled Python. Linux/Docker portable
 (python-build-standalone has Linux builds) is a natural follow-up.
+
+## Release-readiness boundaries
+
+The portable archive is a **Windows x64, browser-served build**. Browser mode
+does not provide Tauri-native Files operations, OS shell replacement, or native
+watchdog services. An installer produced by the pinned Python fetch recipe
+still needs a clean Windows machine test, checksum verification, signed-update
+validation, first-use torch/model download, and actual GPU rendering tests.
+Do not equate green source CI with a shipped installer.

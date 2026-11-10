@@ -48,12 +48,15 @@ jobs:
       - name: Bridge Python discovery unit tests
         run: python bridge/test_python_discovery.py
 
+      - name: Bundled Python interpreter unit tests
+        run: python bridge/test_bundled_python.py
+
       - name: Rust check (development config without packaged sidecar)
         env:
-          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+          TAURI_CONFIG: '{"bundle":{"externalBin":[],"resources":[]}}'
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
       - name: Rust filesystem unit tests (real temp directories, no-clobber rename)
         env:
-          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+          TAURI_CONFIG: '{"bundle":{"externalBin":[],"resources":[]}}'
         run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
