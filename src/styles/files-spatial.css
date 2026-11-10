@@ -694,3 +694,42 @@
 @media (prefers-reduced-transparency: reduce) {
   .files-spectrum-key { backdrop-filter: none; background: #19142d; }
 }
+
+/* Spacetime shader field: restrained, legible control inside the 4D rail. */
+.files-spacetime-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #b9accd;
+  font-size: 9px;
+  font-weight: 610;
+  letter-spacing: 0.075em;
+  white-space: nowrap;
+}
+.files-spacetime-select select {
+  padding: 5px 7px;
+  min-height: 28px;
+  border: 1px solid rgba(177, 153, 210, 0.26);
+  border-radius: 7px;
+  background: rgba(50, 36, 74, 0.51);
+  color: #eee4fa;
+  font: 580 10px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+}
+.files-spacetime-select select:hover:not(:disabled) {
+  border-color: rgba(198, 169, 237, 0.55);
+}
+.files-spacetime-select select:focus-visible {
+  outline: 2px solid #dec9f3;
+  outline-offset: 2px;
+}
+.files-spacetime-select select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+@media (max-width: 880px) {
+  .files-spacetime-select > span { display: none; }
+}
+@media (max-width: 540px) {
+  .files-spacetime-select select { min-height: 26px; padding-inline: 4px; }
+}
