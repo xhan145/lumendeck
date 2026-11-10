@@ -33,3 +33,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Downloaded interpreter and generated portable bundles
+src-tauri/resources/
+dist-portable/

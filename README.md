@@ -78,7 +78,15 @@ In the app, open **Files → Constellation**, choose Particle FX **Balanced** or
 
 ### Python and the optional AI bridge
 
-**Python 3.12 (64-bit) is recommended for local Diffusers installation.** The Files/Spacetime WebGL interface itself does not need a Diffusers runtime. During development, the optional Python bridge can start alongside Vite; packaged builds use a bundled bridge executable.
+**Experimental packaged-Python path:** Installer builds can include a
+checksum-verified, portable Python 3.12 interpreter downloaded using
+`npm run fetch:python`. Windows-only `npm run build:portable` creates a
+browser-served bundle. Both workflows need clean-machine and GPU testing before
+a public installer release. See [portable build documentation](docs/portable.md).
+Browser-only builds do not expose Tauri's native Files APIs.
+
+
+**Python 3.12 (64-bit) is recommended for local source development and Diffusers installation.** The Files/Spacetime WebGL interface itself does not need a Diffusers runtime. During development, the optional Python bridge can start alongside Vite; packaged builds use a bundled bridge executable.
 
 If **Backend → Diffusers → Install runtime + model** says that no compatible Python was found, verify the interpreter and pass its full path to the bridge **before launching it**:
 
