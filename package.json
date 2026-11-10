@@ -2,7 +2,7 @@
   "name": "lumendeck",
   "private": true,
   "version": "0.36.0",
-  "description": "LumenDeck — local-first, node-native generative image studio",
+  "description": "Windows-first local creative workspace with spatial files, GPU constellations, and optional AI rendering",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -13,11 +13,13 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "release": "node scripts/release.mjs",
     "fetch:python": "node scripts/fetch-python.mjs",
     "build:portable": "node scripts/build-portable.mjs"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2",

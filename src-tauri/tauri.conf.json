@@ -5,7 +5,7 @@
   "identifier": "com.lumendeck.studio",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5178",
+    "devUrl": "http://127.0.0.1:14200",
     "beforeBuildCommand": "npm run fetch:python && npm run build",
     "frontendDist": "../dist"
   },
@@ -36,16 +36,18 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/lumendeck-bridge"],
-    "resources": {
-      "resources/python": "python"
-    },
+    "externalBin": [
+      "binaries/lumendeck-bridge"
+    ],
     "publisher": "LumenDeck",
     "category": "GraphicsAndDesign",
-    "shortDescription": "Local-first node-native generative image studio",
-    "longDescription": "LumenDeck is a local-first, node-native generative image studio with a beginner-friendly Recipe View and an expert Graph View.",
+    "shortDescription": "Local-first spatial and creative workspace",
+    "longDescription": "LumenDeck combines a node-based creative studio with a Windows-first spatial file workspace, GPU-rendered constellations, and optional local AI rendering. Spatial Files features are in active development.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -56,6 +58,9 @@
       "wix": {
         "language": "en-US"
       }
+    },
+    "resources": {
+      "resources/python": "python"
     }
   }
 }

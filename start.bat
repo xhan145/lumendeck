@@ -1,14 +1,20 @@
 @echo off
-REM LumenDeck launcher — starts the render bridge and the dev server together.
-REM Double-click this file, or run it from any directory.
-cd /d "%~dp0"
+setlocal
+REM Browser-only development launcher. Vite starts the Python bridge itself.
+REM For the native Windows shell interface, use npm.cmd run tauri:dev.
+cd /d "%~dp0" || (
+  echo [LumenDeck] Could not enter the repository directory.
+  exit /b 1
+)
 
-echo Freeing port 5178 if a stale dev server is running...
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":5178 " ^| findstr LISTENING') do taskkill /PID %%p /F >nul 2>&1
+where npm.cmd >nul 2>&1
+if errorlevel 1 (
+  echo [LumenDeck] npm.cmd not found. Install Node.js and open a new terminal.
+  exit /b 1
+)
 
-echo Starting LumenDeck render bridge (port 8787) in a new window...
-start "LumenDeck Bridge" cmd /k "cd /d "%~dp0" && python bridge\server.py --port 8787"
-
-echo Starting the LumenDeck app (dev server)...
-echo When it prints a Local URL, open it in your browser.
-npm run dev
+echo [LumenDeck] Starting Vite at http://127.0.0.1:14200/
+echo [LumenDeck] The bridge is managed by Vite on port 8787.
+echo [LumenDeck] No unrelated processes will be terminated.
+call npm.cmd run dev
+exit /b %errorlevel%

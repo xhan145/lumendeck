@@ -34,8 +34,6 @@ __pycache__/
 .env.*
 !.env.example
 
-# Bundled python-build-standalone runtime (fetched at build time, not committed)
+# Downloaded interpreter and generated portable bundles
 src-tauri/resources/
-
-# Portable bundle output (build artifact)
 dist-portable/

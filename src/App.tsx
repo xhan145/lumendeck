@@ -10,6 +10,10 @@ import { GraphWorkspace } from './components/graph/GraphWorkspace';
 import { BrandMark, Icon } from './components/icons';
 import { ModelShelf } from './components/shelf/ModelShelf';
 import { NavRail } from './components/shell/NavRail';
+import { DesktopHome } from './components/shell/DesktopHome';
+import { FilesWorkspace } from './components/shell/FilesWorkspace';
+import { ShellLauncher } from './components/shell/ShellLauncher';
+import { ShellDock } from './components/shell/ShellDock';
 import { RecipeView } from './components/recipe/RecipeView';
 import { MissionControl } from './components/creative/MissionControl';
 import { ConstellationView } from './components/constellation/ConstellationView';
@@ -30,6 +34,8 @@ import './styles/app.css';
 import './styles/glass.css';
 
 const VIEW_TITLES: Record<ViewId, string> = {
+  desktop: 'Desktop',
+  files: 'Files',
   mission: 'Mission Control',
   constellation: 'Open Constellation',
   overview: 'Studio Overview',
@@ -43,7 +49,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   graph: 'Graph',
   shelf: 'Model Shelf',
   gallery: 'Gallery',
-  controls: 'Controls',
+  controls: 'Create',
   settings: 'Settings',
   diagnostics: 'Diagnostics',
   performance: 'Performance',
@@ -59,7 +65,7 @@ function HealthChip() {
   const cls = errors > 0 ? 'errors' : warnings > 0 ? 'warnings' : 'clean';
   const label = errors > 0 ? `${errors} error${errors === 1 ? '' : 's'}` : warnings > 0 ? `${warnings} warning${warnings === 1 ? '' : 's'}` : 'Healthy';
   return (
-    <button className={`chip health-chip ${cls}`} type="button" onClick={() => setView('graph')} title="Open Graph Health">
+    <button className={`chip health-chip ${cls}`} type="button" onClick={() => setView('diagnostics')} title="Open Diagnostics">
       {errors > 0 ? Icon.error({ size: 14 }) : warnings > 0 ? Icon.warning({ size: 14 }) : Icon.ok({ size: 14 })}
       {label}
     </button>
@@ -86,8 +92,10 @@ export function App() {
   const updateAppSettings = useStudio((s) => s.updateAppSettings);
   // The launch splash plays fully on EVERY launch; the app boots behind it.
   const [splashDone, setSplashDone] = useState(false);
-  // Bars stay revealed while the splash plays (no hidden chrome on arrival).
-  const autohideArmed = chromeAutohide && splashDone;
+  const [launcherOpen, setLauncherOpen] = useState(false);
+  const desktopMode = view === 'desktop';
+  // Desktop owns its own dock; studio chrome only auto-hides in tool views.
+  const autohideArmed = chromeAutohide && splashDone && !desktopMode;
   const top = useAutoHide('top', autohideArmed);
   const left = useAutoHide('left', autohideArmed);
   // While the splash covers the app, the shell is `inert`: the overlay blocks
@@ -102,8 +110,22 @@ export function App() {
 
   useEffect(() => { void probeBridge(); }, [probeBridge]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (splashDone && event.ctrlKey && !event.altKey && !event.metaKey
+          && event.code === 'Space') {
+        event.preventDefault();
+        setLauncherOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [splashDone]);
+
   const page =
-    view === 'mission' ? <MissionControl />
+    view === 'desktop' ? <DesktopHome />
+      : view === 'files' ? <FilesWorkspace />
+      : view === 'mission' ? <MissionControl />
       : view === 'constellation' ? <ConstellationView />
       : view === 'overview' ? <StudioOverview />
       : view === 'craft' ? <CraftInsights />
@@ -122,13 +144,13 @@ export function App() {
       : view === 'performance' ? <PerformancePage />
       : view === 'support' ? <SupportPage />
       : view === 'credits' ? <CreditsPage />
-      : <MissionControl />;
+      : <DesktopHome />;
 
   return (
     <>
-      <StarfieldCanvas />
-      <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''}`}>
-        <header
+      {view !== 'files' ? <StarfieldCanvas /> : null}
+      <div ref={shellRef} className={`shell ${compactMode ? 'compact' : ''} ${chromeAutohide ? 'chrome-auto' : ''} ${desktopMode ? 'desktop-shell' : ''}`}>
+        {!desktopMode ? <header
           className={`topbar ${autohideArmed && !top.visible ? 'chrome-hidden' : ''}`}
           {...top.barProps}
         >
@@ -137,12 +159,15 @@ export function App() {
             <span className="lumen">Lumen</span><span className="deck">Deck</span>
             <span className="ver">v{APP_VERSION}</span>
           </div>
-          <span className="view-title">{VIEW_TITLES[view] ?? 'Guide'}</span>
+          <span className="view-title">{VIEW_TITLES[view] ?? 'Desktop'}</span>
           <div className="topbar-right">
             <BridgeStatus />
             <HealthChip />
-            <button className="btn controls-toggle" type="button" aria-label="Open Controls" onClick={() => setView('controls')}>
-              {Icon.gear({ size: 18 })} Controls
+            <button className="btn controls-toggle" type="button" aria-label="Open launcher" onClick={() => setLauncherOpen(true)}>
+              {Icon.target({ size: 18 })} Search
+            </button>
+            <button className="btn controls-toggle" type="button" aria-label="Open Create" onClick={() => setView('controls')}>
+              {Icon.play({ size: 18 })} Create
             </button>
             <button className="btn icon controls-toggle" type="button" aria-label="Open Settings" onClick={() => setView('settings')}>
               {Icon.gear({ size: 18 })}
@@ -158,14 +183,14 @@ export function App() {
               {Icon.layers({ size: 18 })}
             </button>
           </div>
-        </header>
-        <div className="workspace">
-          <div
+        </header> : null}
+        <div className={`workspace ${desktopMode ? 'desktop-workspace' : ''}`}>
+          {!desktopMode ? <div
             className={`chrome-left ${autohideArmed && !left.visible ? 'chrome-hidden' : ''}`}
             {...left.barProps}
           >
             <NavRail view={view} setView={setView} />
-          </div>
+          </div> : null}
           <div className="main-pane">
             <div className="view-fade" key={view}>
               {page}
@@ -175,6 +200,8 @@ export function App() {
       </div>
       {autohideArmed && !top.visible && <div className="chrome-strip top" aria-hidden="true" />}
       {autohideArmed && !left.visible && <div className="chrome-strip left" aria-hidden="true" />}
+      {desktopMode && splashDone ? <ShellDock onOpenLauncher={() => setLauncherOpen(true)} /> : null}
+      <ShellLauncher open={launcherOpen && splashDone} onClose={() => setLauncherOpen(false)} />
       {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
     </>
   );

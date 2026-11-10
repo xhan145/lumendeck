@@ -17,6 +17,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,13 @@ _TORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 _TORCH_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 _INSTALL_COMMAND = "Install runtime + model chooses CUDA PyTorch on NVIDIA GPUs, else CPU PyTorch."
 _python_cache: dict[str, Any] | None | bool = False
+_python_cache_last_miss = 0.0
+_PYTHON_RETRY_SECONDS = 20.0
+_PYTHON_REQUIRED_MESSAGE = (
+    "No compatible Python interpreter was found. Install 64-bit Python 3.12, "
+    "restart the LUMENDECK bridge, or set LUMENDECK_PYTHON to the full "
+    "path of its python.exe before starting the bridge."
+)
 
 # ControlNet capability map: family -> control type -> Hugging Face repo.
 # Single source of truth. The worker never duplicates this table: generate()/
@@ -1966,11 +1974,6 @@ def _write_worker() -> Path:
     return worker
 
 
-# On the windowless desktop app, a bare subprocess pops a black console for every
-# probe/install. CREATE_NO_WINDOW suppresses it (0 = harmless no-op off Windows).
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-
-
 def _run(cmd: list[str], timeout: int = 1200, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -1980,68 +1983,7 @@ def _run(cmd: list[str], timeout: int = 1200, input_text: str | None = None) -> 
         text=True,
         timeout=timeout,
         check=True,
-        creationflags=_NO_WINDOW,
     )
-
-
-def _bundled_python_path(base_dir, direct: bool = False) -> Path | None:
-    """Path to a bundled interpreter under `base_dir`, or None. Always checks the
-    bundled `base/python/…` subdir layout. `direct=True` ALSO accepts `base` being
-    the python dir itself (env-hint only) — the relative-search bases must NOT set
-    it, or `base/python.exe` would greedily match the running interpreter's own dir."""
-    base = Path(base_dir)
-    if os.name == "nt":
-        cands = [base / "python" / "python.exe"]
-        if direct:
-            cands.append(base / "python.exe")
-    else:
-        cands = [base / "python" / "bin" / "python3", base / "python" / "bin" / "python"]
-        if direct:
-            cands += [base / "bin" / "python3", base / "bin" / "python"]
-    for cand in cands:
-        try:
-            if cand.is_file():
-                return cand
-        except OSError:
-            pass
-    return None
-
-
-def _bundled_python() -> list[str] | None:
-    """Find the app-bundled Python (python-build-standalone). Checks an explicit
-    env hint, then locations relative to the frozen sidecar exe and this module —
-    so the desktop resource dir, a from-source checkout, and the portable bundle
-    all resolve. Returns a cmd list or None (validated later by _probe_python)."""
-    hint = os.environ.get("LUMENDECK_BUNDLED_PYTHON")
-    if hint:
-        hp = Path(hint)
-        try:
-            if hp.is_file():
-                return [str(hp)]
-        except OSError:
-            pass
-        found = _bundled_python_path(hp, direct=True)  # hint may point at the python dir itself
-        if found:
-            return [str(found)]
-    bases: list[Path] = []
-    try:
-        exe_dir = Path(sys.executable).resolve().parent
-        # Frozen sidecar / portable: the bundled python is a `python/` SUBdir of
-        # one of these — never `exe_dir` itself (that is the running interpreter).
-        bases += [exe_dir, exe_dir.parent, exe_dir.parent / "resources"]
-    except Exception:
-        pass
-    try:
-        here = Path(__file__).resolve().parent
-        # dev checkout: <repo>/src-tauri/resources/python; portable: <root>/python
-        bases += [here.parent / "src-tauri" / "resources", here.parent, here]
-    except Exception:
-        pass
-    for base in bases:
-        found = _bundled_python_path(base, direct=False)
-        if found:
-            return [str(found)]
-    return None
 
 
 _native_torch_cache: dict[str, bool] = {}
@@ -2189,33 +2131,29 @@ def _managed_runtime_python() -> dict[str, Any] | None:
     return None
 
 def _find_python() -> dict[str, Any] | None:
-    global _python_cache
-    if _python_cache is not False:
-        return _python_cache
+    global _python_cache, _python_cache_last_miss
 
-    # Absolute override must win. This is the escape hatch for broken py-launcher
-    # setups and embedded Python installs.
+    # A freshly set override must win EVEN after the last lookup failed or a
+    # different Python was cached. Do not require a bridge restart merely to
+    # recover from a prior missing-interpreter result.
     env_python = os.environ.get("LUMENDECK_PYTHON")
+    if env_python and isinstance(_python_cache, dict) and _python_cache.get("cmd") == [env_python]:
+        return _python_cache
     if env_python:
         found = _probe_python([env_python])
         if found:
             _python_cache = found
             return found
 
-    # The app-bundled Python (python-build-standalone) is the canonical
-    # interpreter: on a machine with NO system Python it is the only one, and it
-    # must win over a random system Python that may lack pip or be the wrong
-    # version. install_runtime() resets the site dir, so the managed CUDA runtime
-    # is (re)built against it consistently.
-    bundled = _bundled_python()
-    if bundled:
-        found = _probe_python(bundled)
-        if found:
-            _python_cache = found
-            return found
+    if isinstance(_python_cache, dict):
+        return _python_cache
+    if _python_cache is None and time.monotonic() - _python_cache_last_miss < _PYTHON_RETRY_SECONDS:
+        return None
 
-    # Next: the interpreter matching the managed CUDA runtime, so GPU rendering
-    # actually engages even if the bundled Python is absent (dev / system install).
+    # Absolute override must win. This is the escape hatch for broken py-launcher
+    # setups and embedded Python installs.
+    # Highest priority after explicit override: the interpreter matching the
+    # managed CUDA runtime, so GPU rendering actually engages.
     managed = _managed_runtime_python()
     if managed:
         _python_cache = managed
@@ -2235,7 +2173,10 @@ def _find_python() -> dict[str, Any] | None:
             _python_cache = found
             return found
 
+    # Cache a miss briefly to prevent probing subprocesses on every
+    # status request, but allow a newly installed Python to be discovered.
     _python_cache = None
+    _python_cache_last_miss = time.monotonic()
     return None
 
 def _worker_error(returncode: int, stderr: str, stdout: str) -> str:
@@ -2279,7 +2220,7 @@ def _worker_env(python: dict[str, Any]) -> dict[str, str]:
 def _worker(command: str, payload: dict[str, Any] | None = None, timeout: int = 1800) -> dict[str, Any]:
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
     worker = _write_worker()
     env = _worker_env(python)
     proc = subprocess.run(
@@ -2320,7 +2261,7 @@ class _PersistentWorker:
     def _spawn(self) -> None:
         python = _find_python()
         if not python:
-            raise RuntimeError("No compatible Python 3.10-3.14 install was found. Install Python 3.12, then retry.")
+            raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
         worker = _write_worker()
         log_path = _runtime_dir() / "worker.log"
         try:
@@ -2335,7 +2276,6 @@ class _PersistentWorker:
             text=True,
             bufsize=1,
             env=_worker_env(python),
-            creationflags=_NO_WINDOW,
         )
 
     def request(self, command: str, payload: dict[str, Any], timeout: int = 1800) -> dict[str, Any]:
@@ -2390,7 +2330,7 @@ def _pip_install(
 ) -> None:
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
     _site_dir().mkdir(parents=True, exist_ok=True)
     cmd = python["cmd"] + ["-m", "pip", "install", "--upgrade", "--target", str(_site_dir())]
     if index_url:
@@ -2462,7 +2402,7 @@ def install_runtime() -> dict[str, Any]:
     global _python_cache
     python = _find_python()
     if not python:
-        raise RuntimeError("No compatible Python 3.10-3.13 install was found. Install Python 3.12, then retry.")
+        raise RuntimeError(_PYTHON_REQUIRED_MESSAGE)
 
     _reset_site_dir()
     _pip_install(["torch"], index_url=_torch_index_url(), force_reinstall=True, timeout=2400)
