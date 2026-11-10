@@ -188,15 +188,28 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]): (xyz: Float32Array)
       const n = indices.length;
       centers.set(kind, [x / n, y / n, z / n]);
     }
-    const get = (end: End): readonly number[] => {
-      if (end.kind === 'root') return [0, 0, 0];
-      if (end.kind === 'center') return centers.get(end.group) ?? [0, 0, 0];
-      return [xyz[end.index * 3], xyz[end.index * 3 + 1], xyz[end.index * 3 + 2]];
+    // Write directly to the reusable typed buffer. The previous path
+    // allocated several temporary arrays per wire on every 4D frame.
+    const writeEnd = (end: End, offset: number) => {
+      if (end.kind === 'root') {
+        positions[offset] = 0;
+        positions[offset + 1] = 0;
+        positions[offset + 2] = 0;
+      } else if (end.kind === 'center') {
+        const center = centers.get(end.group);
+        positions[offset] = center?.[0] ?? 0;
+        positions[offset + 1] = center?.[1] ?? 0;
+        positions[offset + 2] = center?.[2] ?? 0;
+      } else {
+        const from = end.index * 3;
+        positions[offset] = xyz[from];
+        positions[offset + 1] = xyz[from + 1];
+        positions[offset + 2] = xyz[from + 2];
+      }
     };
-    for (const [i, segment] of segments.entries()) {
-      const from = get(segment.from);
-      const to = get(segment.to);
-      positions.set([from[0], from[1], from[2], to[0], to[1], to[2]], i * 6);
+    for (let i = 0; i < segments.length; i++) {
+      writeEnd(segments[i].from, i * 6);
+      writeEnd(segments[i].to, i * 6 + 3);
     }
     attribute.needsUpdate = true;
   };
