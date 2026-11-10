@@ -66,6 +66,32 @@ Use **Install runtime + model** in the app's Backend panel. The bridge will:
 3. Install CUDA PyTorch on NVIDIA systems, otherwise CPU PyTorch, plus Diffusers, Transformers, Accelerate, Safetensors, and Kornia.
 4. Download/load `stabilityai/sd-turbo`.
 
+**If LUMENDECK reports no compatible Python after installing Python 3.12 on Windows:**
+stop the old LUMENDECK dev bridge, open a new PowerShell session, and verify the
+interpreter rather than relying on `python` to resolve the right version:
+
+```powershell
+$python = (& py -3.12 -c 'import sys; print(sys.executable)' | Select-Object -Last 1)
+if (-not $python -or -not (Test-Path -LiteralPath $python)) {
+  throw 'Python 3.12 is not available; install it first.'
+}
+$env:LUMENDECK_PYTHON = $python
+& $env:LUMENDECK_PYTHON --version
+```
+
+Launch `npm.cmd run tauri:dev` **in that same shell**. The Vite dev bridge
+inherits this process-scoped variable. If port 8787 is occupied by an
+older bridge, stop that bridge first: a reused bridge cannot inherit the
+new shell's environment retroactively. The bridge now retries a failed
+Python discovery after a short interval, and explicitly supplied
+`LUMENDECK_PYTHON` paths bypass the cached failure immediately.
+If the Python Launcher (`py`) is not installed, specify the actual full
+`python.exe` path instead.
+
+The Files Constellation's GPU 3D/4D Spacetime shader **does not require
+Diffusers or a managed Python runtime**. This installation is optional
+for real local AI image generation.
+
 You can point the installer at a specific Python with `LUMENDECK_PYTHON`, or choose a different venv
 location with `LUMENDECK_DIFFUSERS_VENV`.
 
