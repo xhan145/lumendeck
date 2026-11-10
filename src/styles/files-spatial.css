@@ -601,3 +601,96 @@
 @media (prefers-reduced-transparency: reduce) {
   .files-context-hud { backdrop-filter: none; background: #1a142c; }
 }
+
+/* Sixth dimension: Spectrum maps observed file signals to gentle gradients. */
+.files-spectrum-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid rgba(178, 149, 218, 0.31);
+  border-radius: 10px;
+  background: rgba(54, 36, 84, 0.35);
+  color: #eadbfa;
+  white-space: nowrap;
+}
+.files-spectrum-toolbar > span:first-child {
+  font-size: 10px;
+  font-weight: 730;
+  letter-spacing: 0.10em;
+}
+.files-spectrum-toolbar select {
+  min-height: 27px;
+  padding: 4px 7px;
+  font-size: 11px;
+  border: 1px solid rgba(195, 161, 232, 0.32);
+  border-radius: 7px;
+  background: #261b3a;
+  color: #f2e7fa;
+}
+.files-spectrum-toolbar select:focus-visible {
+  outline: 2px solid #e2ccf7;
+  outline-offset: 2px;
+}
+.files-spectrum-bar {
+  width: 42px;
+  height: 9px;
+  border: 1px solid rgba(201, 165, 231, 0.28);
+  border-radius: 100px;
+  background: linear-gradient(100deg, #51669d, #8d70bd 52%, #e1c6fa);
+}
+.files-spectrum-key {
+  position: absolute;
+  top: 156px;
+  left: 20px;
+  z-index: 4;
+  width: min(267px, 44%);
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(177, 149, 213, 0.15);
+  border-radius: 9px;
+  background: rgba(15, 12, 32, 0.76);
+  backdrop-filter: blur(8px);
+  color: #d8c4ea;
+  pointer-events: none;
+}
+.files-spectrum-key-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: #d3bdf0;
+  font-size: 9px;
+  font-weight: 670;
+  letter-spacing: 0.11em;
+}
+.files-spectrum-key-heading strong {
+  color: #a99abf;
+  font-size: 9px;
+  font-weight: 590;
+}
+.files-spectrum-key-gradient {
+  width: 100%;
+  height: 7px;
+  border-radius: 100px;
+  background: linear-gradient(90deg, #47608b 0%, #745caa 42%, #bb99dc 76%, #e9defc 100%);
+}
+.files-spectrum-key small {
+  color: #b0a2c7;
+  font-size: 9px;
+  line-height: 1.45;
+}
+@media (max-width: 1160px) {
+  .files-spectrum-key { top: 160px; width: 225px; }
+}
+@media (max-width: 900px), (max-height: 560px) {
+  .files-spectrum-key { display: none; }
+}
+@media (max-width: 700px) {
+  .files-spectrum-toolbar { flex: 1 1 auto; justify-content: space-between; }
+  .files-spectrum-bar { width: 30px; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .files-spectrum-key { backdrop-filter: none; background: #19142d; }
+}
