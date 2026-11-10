@@ -131,6 +131,28 @@ confirm the new backdrop never masks a file or steals pointer events.
 Verify a hidden/minimized window stops animation and leaving the Files view
 releases the backdrop texture; image creation and file operations are unchanged.
 
+
+### GPU Spacetime and restrained cinematic lighting
+
+**Spacetime is a visualization of the existing fourth dimension, not a
+new dimensional coordinate.** The 4D Time rail offers **Spacetime:
+Off / Contours / Flow**, saved independently from Spectrum and
+Particle FX. The new GPU vertex shader subtly bends a static slate-purple
+contour grid in response to the time playhead and selected file/context.
+It never edits files or reconstructs past folder layouts. Flow moves
+only while the real timeline is playing; reduced motion, hidden tabs,
+and adaptive GPU downgrade pause it.
+
+Cinematic now shades faceted file stars with GPU lighting rather than
+flat color alone, and uses softer bloom to preserve contrast. Balanced
+keeps low-cost materials and a smaller grid. Particle FX Off removes
+the field. No new external textures, services or dependencies were added.
+
+Performance work also fixes undefined reversed GLSL `smoothstep`,
+avoids per-frame instanced bounding-sphere recomputation and transient
+wire-coordinate arrays, and explicitly disposes bloom render targets
+on an adaptive slowdown. The existing Explorer fallback remains intact.
+
 ### Visual acceptance checklist
 
 1. Check a mixed folder with images, music, documents and subfolders.
