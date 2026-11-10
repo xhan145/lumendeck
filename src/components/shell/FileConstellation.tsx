@@ -22,6 +22,10 @@ import {
   projectFileContext, type FileContextLens, type FileContextMode,
 } from '../../core/shell/fileContext';
 import { createContextConnections } from './fileConstellationContextLinks';
+import {
+  spacetimeFocusStrength, spacetimeFlowEnabled, type FileSpacetimeMode,
+} from '../../core/shell/fileSpacetime';
+import { createFileSpacetimeField } from './fileConstellationSpacetime';
 import { makeStarGradientSurface } from './fileSpectrumGeometry';
 import {
   spectrumSignal, spectrumStarColor, type FileSpectrumMode,
@@ -34,6 +38,8 @@ interface Props {
   folderPath: string;
   fxMode: FileFxMode;
   spectrumMode: FileSpectrumMode;
+  spacetimeMode: FileSpacetimeMode;
+  onSpacetimeModeChange: (mode: FileSpacetimeMode) => void;
   contextLens: FileContextLens | null;
   contextMode: FileContextMode;
   cameraRequest?: { id: number; folderPath: string; camera: SpatialCamera } | null;
@@ -202,6 +208,7 @@ function createLinks(scene: THREE.Scene, stars: FileStar[]): (xyz: Float32Array)
  */
 export function FileConstellation({
   entries, selectedPath, folderName, folderPath, fxMode, spectrumMode,
+  spacetimeMode, onSpacetimeModeChange,
   contextLens, contextMode, cameraRequest, onSaveView,
   onSelect, onOpen, onUnavailable,
 }: Props) {
@@ -222,6 +229,9 @@ export function FileConstellation({
   } | null>(null);
   const focusRef = useRef<(selected: string | null, hovered: string | null) => void>(() => {});
   const updateContextRef = useRef<() => void>(() => {});
+  const spacetimeModeRef = useRef(spacetimeMode);
+  spacetimeModeRef.current = spacetimeMode;
+  const spacetimeRefreshRef = useRef<(mode: FileSpacetimeMode) => void>(() => {});
   const spectrumModeRef = useRef(spectrumMode);
   spectrumModeRef.current = spectrumMode;
   const spectrumRefreshRef = useRef<() => void>(() => {});
@@ -345,6 +355,7 @@ export function FileConstellation({
     const backdrop = createFileNebulaBackdrop(scene, camera, fxMode);
     const atmosphere = createFileAtmosphere(scene, stars, preset);
     atmosphere.setPixelRatio(nativePixelRatio);
+    const spacetime = createFileSpacetimeField(scene, fxMode, spacetimeModeRef.current);
 
     const rootGeometry = new THREE.IcosahedronGeometry(0.4, 1);
     const rootGradientSurface = makeStarGradientSurface(rootGeometry);
@@ -389,6 +400,8 @@ export function FileConstellation({
     const laterModified = new Uint8Array(stars.length);
     const spectrumColors = stars.map((star) => star.color);
     let spectrumElapsed = 0;
+    let spacetimeElapsed = 0;
+    let spacetimeDegraded = false;
     let spectrumMotionEnabled = !reducedMotion;
     stars.forEach((star, index) => {
       currentXYZ.set([star.x, star.y, star.z], index * 3);
