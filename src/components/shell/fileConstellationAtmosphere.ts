@@ -44,7 +44,7 @@ const FRAGMENT = /* glsl */ `
     float halo = exp(-r2 * 5.4);
     float core = exp(-r2 * 62.0);
     float opacity = min(1.0, (halo * 0.28 + core * 0.98) * vEnergy * uOpacity);
-    gl_FragColor = vec4(vTint, opacity * smoothstep(1.0, 0.5, r2));
+    gl_FragColor = vec4(vTint, opacity * (1.0 - smoothstep(0.5, 1.0, r2)));
   }
 `;
 
