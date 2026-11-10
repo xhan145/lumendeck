@@ -13,7 +13,7 @@ pub struct WindowInfo {
 mod platform {
     use super::WindowInfo;
     use std::process::Command;
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, SetForegroundWindow,
@@ -49,7 +49,7 @@ mod platform {
         true
     }
 
-    unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> i32 {
         if !is_user_window(hwnd) {
             return 1;
         }
