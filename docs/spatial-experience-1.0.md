@@ -1,6 +1,6 @@
 # LUMENDECK Spatial Experience 1.0
 
-**Source milestone:** `0.36.0` · **Implementation:** [PR #53](https://github.com/xhan145/lumendeck/pull/53) · **Status:** experimental, native Windows GPU QA pending
+**Source milestone:** `0.36.0` on `main` · **Merged:** [PR #53](https://github.com/xhan145/lumendeck/pull/53) · **Status:** experimental, native Windows GPU QA pending
 **Target:** the approved 3D/4D Files Constellation mockup, implemented as a usable native Windows-first Tauri experience.
 
 ## Delivered in this milestone
