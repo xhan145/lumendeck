@@ -346,10 +346,13 @@ export function FileConstellation({
     const atmosphere = createFileAtmosphere(scene, stars, preset);
     atmosphere.setPixelRatio(nativePixelRatio);
 
-    const root = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.4, 1),
-      new THREE.MeshBasicMaterial({ color: '#dfd1ff', toneMapped: false }),
-    );
+    const rootGeometry = new THREE.IcosahedronGeometry(0.4, 1);
+    const rootGradientSurface = makeStarGradientSurface(rootGeometry);
+    rootGradientSurface.setActive(spectrumModeRef.current !== 'off');
+    const root = new THREE.Mesh(rootGeometry,
+      new THREE.MeshBasicMaterial({
+        color: '#dfd1ff', vertexColors: true, toneMapped: false,
+      }));
     scene.add(root);
     const nucleusRing = new THREE.Mesh(
       new THREE.RingGeometry(0.63, 0.67, 80),
@@ -390,7 +393,7 @@ export function FileConstellation({
     stars.forEach((star, index) => {
       currentXYZ.set([star.x, star.y, star.z], index * 3);
       unit.position.set(star.x, star.y, star.z);
-      unit.scale.setScalar(star.entry.isDirectory ? 0.32 : 0.21);
+      unit.scale.setScalar(star.entry.isDirectory ? 0.38 : 0.26);
       unit.updateMatrix();
       cores.setMatrixAt(index, unit.matrix);
       cores.setColorAt(index, tint.set(star.color));
@@ -526,12 +529,13 @@ export function FileConstellation({
       const contextual = mode !== 'off' && lens?.anchor.path === selected;
       const chromaticMode = spectrumModeRef.current;
       starGradientSurface.setActive(chromaticMode !== 'off');
+      rootGradientSurface.setActive(chromaticMode !== 'off');
       for (const [index, star] of stars.entries()) {
         const focused = star.entry.path === selected;
         const isHover = star.entry.path === hoveredPath && !focused;
         unit.position.set(currentXYZ[index * 3], currentXYZ[index * 3 + 1], currentXYZ[index * 3 + 2]);
         unit.quaternion.identity();
-        unit.scale.setScalar((star.entry.isDirectory ? 0.32 : 0.21) *
+        unit.scale.setScalar((star.entry.isDirectory ? 0.38 : 0.26) *
           (focused ? 1.36 : isHover ? 1.18 : 1));
         unit.updateMatrix();
         cores.setMatrixAt(index, unit.matrix);
