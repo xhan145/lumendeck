@@ -21,6 +21,7 @@ import { FileConstellation } from './FileConstellation';
 import { FileInspector } from './FileInspector';
 import { useStudio } from '../../state/store';
 import type { FileFxMode } from '../../state/appSettings';
+import type { FileSpectrumMode } from '../../core/shell/fileSpectrum';
 import '../../styles/files.css';
 import '../../styles/files-spatial.css';
 
@@ -73,6 +74,7 @@ function getBookmarkStorage(): Storage | null {
 export function FilesWorkspace() {
   const native = filesAvailable();
   const fxMode = useStudio((state) => state.appSettings.fileFxMode ?? 'cinematic');
+  const spectrumMode = useStudio((state) => state.appSettings.fileSpectrumMode ?? 'drift');
   const updateAppSettings = useStudio((state) => state.updateAppSettings);
   const [locations, setLocations] = useState<FileLocation[]>([]);
   const [bookmarks, setBookmarks] = useState<SpatialBookmark[]>(() =>
@@ -436,6 +438,22 @@ export function FilesWorkspace() {
                 </label>
               ) : null}
               {mode === 'constellation' ? (
+                <label className="files-spectrum-toolbar"
+                  title="Sixth dimension: file type, time and context represented by gradients">
+                  <span>Ⅵ SPECTRUM</span>
+                  <select aria-label="Sixth dimension spectrum gradient mode"
+                    value={spectrumMode}
+                    onChange={(event) => updateAppSettings({
+                      fileSpectrumMode: event.target.value as FileSpectrumMode,
+                    })}>
+                    <option value="off">Off</option>
+                    <option value="gradient">Gradient</option>
+                    <option value="drift">Drift</option>
+                  </select>
+                  <span className="files-spectrum-bar" aria-hidden="true" />
+                </label>
+              ) : null}
+              {mode === 'constellation' ? (
                 <div className="files-context-toolbar" role="group"
                   aria-label="Fifth dimension: explainable file context">
                   <label className="files-context-mode">
@@ -507,6 +525,7 @@ export function FilesWorkspace() {
                 <div className="files-space-layout">
                   <FileConstellation entries={shown} selectedPath={selectedPath}
                     fxMode={fxMode}
+                     spectrumMode={spectrumMode}
                     folderPath={listing.path}
                     folderName={folderLabel(listing.path)}
                     cameraRequest={cameraRequest}
